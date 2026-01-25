@@ -1,0 +1,98 @@
+텍스트 기반 설명: 전체적인 프로그램의 작동 순서를 단계별로 요약.
+Mermaid 코드: 다이어그램 도구에서 바로 시각화할 수 있는 코드 (이걸 복사해서 Mermaid Live Editor 등에 붙여넣으면 그림으로 변환됩니다).
+
+Model
+ThinkingThoughts
+Expand to view model thoughts
+
+chevron_right
+네, 올려주신 코드들을 모두 분석했습니다! 😎
+이 프로그램은 키움증권 API를 사용하여 조건검색식에 포착된 종목을 실시간으로 매수하고, 설정된 수익률/손절률에 따라 자동으로 매도하며, 텔레그램으로 제어 및 알림을 받는 구조입니다.
+전체적인 로직의 흐름을 파악하기 쉽게 3가지 핵심 파트로 나누어 설명해 드리고, 바로 아래에 Mermaid 플로우차트를 그려드릴게요.
+🔍 프로그램 작동 원리 요약
+메인 루프 (Kipo_main.py):
+프로그램이 켜지면 계속 돌면서 두 가지를 감시합니다.
+텔레그램 메시지: 사용자가 'start', 'stop' 등을 보냈는지 확인.
+장 운영 시간: 장 시작 시간(09:00)이 되면 자동으로 'start', 장 마감(15:30)되면 'stop' 및 'report'.
+매수 로직 (실시간 반응형):
+start 명령이 떨어지면 웹소켓(rt_search.py)을 연결합니다.
+키움증권 서버에서 조건식에 종목이 떴다는 신호(CNSR)를 보내주면, 즉시 check_n_buy_1ju.py가 실행됩니다.
+보유 종목 수, 잔고 등을 체크한 후 시장가로 1주 매수합니다.
+매도 로직 (반복 확인형):
+start와 동시에 별도의 내부 타이머(_check_n_sell_loop)가 돌아갑니다.
+계속해서 내 계좌의 잔고(check_n_sell.py)를 확인합니다.
+설정된 익절률(12%)이나 손절률(-1%)에 도달한 종목이 있으면 즉시 시장가로 매도합니다.
+📊 프로그램 로직 플로우차트 (Mermaid)
+아래 코드는 다이어그램을 그리는 코드입니다. 흐름을 시각적으로 확인해 보세요.
+code
+Mermaid
+graph TD
+    %% 스타일 정의
+    classDef main fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef buy fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef sell fill:#fbb,stroke:#333,stroke-width:2px;
+    classDef api fill:#bbf,stroke:#333,stroke-width:2px,stroke-dasharray: 5 5;
+
+    Start((프로그램 시작)) --> Init[초기화 및 설정 로드]
+    Init --> MainLoop{메인 루프 감시}
+    class Start,Init,MainLoop main;
+
+    %% 메인 루프 (Kipo_main.py)
+    subgraph "메인 컨트롤러 (Kipo_main.py)"
+        MainLoop --"텔레그램 명령 수신"--> CheckCmd{명령어 확인}
+        MainLoop --"시간 체크 (09:00 / 15:30)"--> CheckTime{장 시간 확인}
+        
+        CheckCmd --"start"--> StartLogic
+        CheckCmd --"stop"--> StopLogic
+        CheckTime --"장 시작"--> StartLogic[시스템 시작]
+        CheckTime --"장 마감"--> StopLogic[시스템 종료 & 리포트]
+    end
+
+    %% 시스템 시작 로직 (ChatCommand)
+    StartLogic --> Login[키움 API 로그인 / 토큰발급]
+    Login --> WsConnect[웹소켓 연결 (rt_search.py)]
+    WsConnect --> RegSearch[조건검색식 등록 요청]
+    RegSearch --> Tasks[병렬 작업 실행]
+    
+    %% 병렬 작업 분기
+    Tasks --> |Task 1| RealTimeListener(실시간 조건검색 감시)
+    Tasks --> |Task 2| SellLoop(자동 매도 감시 루프)
+    Tasks --> |Task 3| AccountSync(계좌 잔고 동기화)
+
+    %% 매수 로직 (Real-Time)
+    subgraph "매수 엔진 (check_n_buy_1ju.py)"
+        RealTimeListener --"종목 포착 신호(CNSR)"--> CheckBuyCond{매수 조건 확인}
+        class CheckBuyCond buy;
+        
+        CheckBuyCond --"보유중? 잔고부족? 종목꽉참?"--> BuyFail[진입 차단]
+        CheckBuyCond --"조건 통과"--> OrderBuy[시장가 1주 매수 주문]
+        OrderBuy --> TelBuy[텔레그램 매수 알림]
+        OrderBuy -.-> API_Buy[(키움 주문 API)]
+        class API_Buy api;
+    end
+
+    %% 매도 로직 (Loop)
+    subgraph "매도 엔진 (check_n_sell.py)"
+        SellLoop --"주기적 실행"--> GetStocks[보유 종목 리스트 갱신]
+        GetStocks --> CheckProfit{수익률 확인}
+        class CheckProfit sell;
+
+        CheckProfit --"익절가 도달 (12%)"--> SellAction[매도 주문]
+        CheckProfit --"손절가 도달 (-1%)"--> SellAction
+        CheckProfit --"해당 없음"--> Wait[대기]
+        
+        SellAction --> TelSell[텔레그램 매도 알림]
+        SellAction -.-> API_Sell[(키움 주문 API)]
+        class API_Sell api;
+    end
+
+    %% 종료 및 기타
+    StopLogic --> Disconnect[웹소켓 종료 및 루프 중단]
+    Disconnect --> Report[계좌 리포트 전송]
+    Report --> MainLoop
+💡 흐름도 보는 법
+분홍색 (메인 컨트롤러): 프로그램의 뇌입니다. 텔레그램 명령이나 시간을 체크해서 시스템을 켜고 끕니다.
+초록색 (매수 엔진): **실시간(Real-time)**으로 동작합니다. 조건식에 종목이 뜨자마자(Push 방식) 반응하여 매수합니다.
+빨간색 (매도 엔진): **반복문(Loop)**으로 동작합니다. 계속해서 내 계좌를 쳐다보다가(Polling 방식) 조건이 맞으면 팝니다.
+파란 점선 (API): 실제 키움증권 서버로 주문을 날리는 단계입니다.
+이 구조대로라면 장 시작 때 켜두기만 하면 알아서 매매하고 텔레그램으로 보고까지 해주는 아주 편리한 봇이네요! 코드가 아주 깔끔하게 모듈화되어 있습니다. 😊

@@ -1,0 +1,5 @@
+[2026-01-21 12:44:08.572288] Starting debug session
+[2026-01-21 12:44:09.076314] Import SUCCESS
+[2026-01-21 12:44:09.117737] QApplication initialized
+[2026-01-21 12:44:09.150282] KipoWindow instance created
+[2026-01-21 12:44:10.142939] Window shown

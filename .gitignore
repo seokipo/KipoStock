@@ -1,0 +1,22 @@
+# Secrets
+config.py
+
+# Python 관련
+__pycache__/
+.venv/
+*.pyc
+
+# 빌드 및 배포
+build/
+dist/
+*.spec
+*.exe
+
+# 로그 및 데이터
+*.csv
+*.log
+trade_log_*.csv
+
+# IDE 설정
+.idea/
+.vscode/

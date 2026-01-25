@@ -1,0 +1,24 @@
+
+파이썬 프로그램을 실행 파일(.exe)로 만드는 것은 PyInstaller 라는 라이브러리를 사용하면 아주 간단합니다.
+이걸 만들면 파이썬이 안 깔린 컴퓨터에서도 실행할 수 있고, 매번 코드를 열 필요 없이 더블 클릭만으로 프로그램이 켜집니다.
+순서대로 따라해 보세요!
+
+1단계: PyInstaller 설치
+콘솔창(터미널)에 아래 명령어를 입력해서 변환 도구를 설치합니다.
+code
+Bash
+pip install pyinstaller
+
+2단계: 실행 파일 만들기
+님의 프로그램 메인 파일은 Kipo_main.py 입니다. 아래 명령어를 입력하세요.
+(콘솔창 로그를 봐야 하므로 --noconsole 옵션은 빼야 합니다.)
+code
+Bash
+pyinstaller --onefile --name "KipoStock_V1.x" Kipo_main.py
+--onefile: 잡다한 파일 없이 깔끔하게 **파일 하나(.exe)**로 뭉쳐줍니다.
+--name "이름": 실행 파일 이름을 정합니다. (원하는 대로 바꾸세요)
+Kipo_main.py: 메인 실행 파일명입니다.
+
+3단계: 파일 확인하기
+변환이 끝나면 폴더 안에 dist 라는 새 폴더가 생깁니다.
+그 안에 들어가 보시면 SuperStockBot.exe 파일이 생성되어 있을 겁니다.

@@ -1,0 +1,295 @@
+import time
+import os
+import sys
+import json
+from datetime import datetime
+from check_bal import fn_kt00001 as get_balance
+from buy_stock import fn_kt10000 as buy_stock
+from stock_info import fn_ka10001 as stock_info, get_current_price
+from acc_val import fn_kt00004 as get_my_stocks
+from tel_send import tel_send
+from get_setting import cached_setting
+from login import fn_au10001 as get_token
+
+# 전역 변수로 계좌 정보를 메모리에 들고 있음
+ACCOUNT_CACHE = {
+    'balance': 0,
+    'holdings': set(),
+    'names': {},
+    'last_update': 0
+}
+
+RECENT_ORDER_CACHE = {}
+
+def update_account_cache(token):
+    try:
+        balance_raw = get_balance(token=token, quiet=True)
+        if balance_raw:
+            ACCOUNT_CACHE['balance'] = int(str(balance_raw).replace(',', ''))
+        
+        holdings = set()
+        names = {}
+        my_stocks = get_my_stocks(token=token)
+        
+        if my_stocks:
+            for stock in my_stocks:
+                code = stock['stk_cd'].replace('A', '')
+                name = stock['stk_nm']
+                holdings.add(code)
+                names[code] = name
+        
+        ACCOUNT_CACHE['holdings'] = holdings
+        ACCOUNT_CACHE['names'].update(names)
+        ACCOUNT_CACHE['last_update'] = time.time()
+        
+        print(f"\n💰 [계좌갱신] 잔고: {ACCOUNT_CACHE['balance']:,}원 | 보유: {len(holdings)}종목")
+        print("-" * 60)
+        
+    except Exception as e:
+        print(f"⚠️ 계좌 정보 갱신 실패: {e}")
+
+def get_stock_name_safe(code, token):
+    if code in ACCOUNT_CACHE['names']:
+        return ACCOUNT_CACHE['names'][code]
+    try:
+        name = stock_info(code, token=token)
+        if name:
+            ACCOUNT_CACHE['names'][code] = name
+            return name
+    except:
+        pass
+
+    return code
+
+
+
+# [신규] 매수 시간 로컬 저장 함수
+def save_buy_time(code):
+    try:
+        # [수정] 경로 로직 개선 및 로그 추가
+        base_path = os.getcwd() # 현재 작업 디렉토리 기준 (run_command 시점)
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        json_path = os.path.join(base_path, 'daily_buy_times.json')
+        
+        # [추가] 만약 위 경로에 권한이 없거나 문제가 있다면 현재 폴더로 폴백
+        if not os.access(base_path, os.W_OK) if os.path.exists(base_path) else False:
+             json_path = os.path.join(os.getcwd(), 'daily_buy_times.json')
+        # print(f"💾 매수 시간 저장 시도: {json_path}")
+        
+        data = {}
+        if os.path.exists(json_path):
+            try:
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except: pass
+            
+        # 날짜가 바뀌었으면 초기화
+        today_str = datetime.now().strftime("%Y%m%d")
+        if data.get('last_update_date') != today_str:
+            data = {'last_update_date': today_str}
+            
+        # 해당 종목 기록이 없을 때만 저장 (최초 매수 시간)
+        code = code.replace('A', '')
+        if code not in data:
+            current_time = datetime.now().strftime("%H:%M:%S")
+            data[code] = current_time
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            # print(f"✅ [DEBUG] 매수 시간 기록 완료: {code} -> {current_time} (경로: {json_path})")
+            
+    except Exception as e:
+        print(f"⚠️ [DEBUG] 매수 시간 저장 실패: {e}")
+
+# [신규] 로그를 예쁘게 출력하는 함수
+def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
+    display_name = stock_name
+    if len(display_name) > 8:
+        display_name = display_name[:7] + ".."
+    
+    # [수정] 중복 타임스탬프 제거 (GUI에서 자동 추가함)
+    log_line = f"{status_icon} {status_msg:<6} │ {display_name}"
+    
+    if is_error:
+        log_line += " ❌"
+    print(log_line)
+
+def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
+    stk_cd = stk_cd.replace('A', '') 
+    
+    # [Debug] 매수 진입로깅
+    # print(f"🔍 [BUY_DEBUG] chk_n_buy 진입: {stk_cd}, seq={seq} (type={type(seq)})")
+
+    current_time = time.time()
+    last_entry = RECENT_ORDER_CACHE.get(stk_cd, 0)
+
+   
+    
+    
+    RECENT_ORDER_CACHE[stk_cd] = current_time 
+
+    try:
+        max_stocks = cached_setting('max_stocks', 20) 
+        if current_time - last_entry < 10:
+        # 10초 컷은 너무 자주 뜨므로 로그를 생략하거나 아주 심플하게 출력
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("⏰", "시간제한", s_name, stk_cd) # 2024/0115
+            return 
+
+        # A. 보유 종목 확인
+        if stk_cd in ACCOUNT_CACHE['holdings']:
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("💼", "이미보유", s_name, stk_cd)
+            return
+
+        # B. 최대 종목 수 확인
+        current_count = len(ACCOUNT_CACHE['holdings'])
+        if current_count >= max_stocks:
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("⛔", f"풀방({current_count})", s_name, stk_cd)
+            return
+
+        # C. 잔고 체크
+        if ACCOUNT_CACHE['balance'] < 1000: 
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("💸", "잔고부족", s_name, stk_cd)
+            RECENT_ORDER_CACHE.pop(stk_cd, None)
+            return
+
+        # =========================================================
+        # 3. 매수 주문 전송
+        # =========================================================
+        
+        # [신규] 조건식별 개별 매수 전략 적용 (V3.8.1)
+        try:
+            strat_map = cached_setting('condition_strategies', {})
+            # seq가 없거나 맵에 없으면 기본 qty 모드
+            mode = strat_map.get(str(seq), 'qty')
+            
+            if mode == 'qty':
+                val_str = cached_setting('qty_val', '1')
+            elif mode == 'amount':
+                val_str = cached_setting('amt_val', '100,000')
+            elif mode == 'percent':
+                val_str = cached_setting('pct_val', '10')
+            else:
+                mode = 'qty'
+                val_str = '1'
+        except:
+            mode = 'qty'
+            val_str = '1'
+            
+        # 기본 수량
+        qty = 1
+        
+        try:
+            if mode == 'qty':
+                # 고정 수량
+                qty = int(val_str.replace(',', ''))
+            
+            elif mode in ['amount', 'percent']:
+                # 가격 확인 (실시간 -> API)
+                current_price = 0
+                if trade_price:
+                    current_price = int(trade_price)
+                
+                if current_price == 0:
+                    _, current_price = get_current_price(stk_cd, token=token)
+                    
+                if current_price > 0:
+                    if mode == 'amount':
+                        target_amt = int(val_str.replace(',', ''))
+                        qty = target_amt // current_price
+                        pretty_log("💰", f"금액({target_amt:,})", f"{qty}주", stk_cd)
+                    elif mode == 'percent':
+                        pct = float(val_str)
+                        current_balance = ACCOUNT_CACHE['balance']
+                        target_amt = current_balance * (pct / 100)
+                        qty = int(target_amt // current_price)
+                        pretty_log("💰", f"비율({pct}%)", f"{qty}주", stk_cd)
+                else:
+                    print(f"⚠️ [매수전략] 가격 조회 실패로 1주 매수 진행")
+                    qty = 1
+                    
+            if qty < 1: qty = 1
+            
+        except Exception as e:
+            print(f"⚠️ [매수전략] 계산 오류 (기본 1주): {e}")
+            qty = 1
+
+        result = buy_stock(stk_cd, qty, '0', token=token)
+        
+        # [추가] 매수 성공 시 세션 로그에 기록하기 위해 가격 정보 준비
+        try:
+            _, final_price = get_current_price(stk_cd, token=token)
+        except:
+            final_price = current_price if 'current_price' in locals() else 0
+        
+        if isinstance(result, tuple) or isinstance(result, list):
+            ret_code = result[0]
+            ret_msg = result[1] if len(result) > 1 else ""
+        else:
+            ret_code = result
+            ret_msg = ""
+
+        is_success = str(ret_code) == '0' or ret_code == 0
+        
+        if is_success:
+            from trade_logger import session_logger
+            ACCOUNT_CACHE['holdings'].add(stk_cd)
+            s_name = get_stock_name_safe(stk_cd, token)
+            
+            # 세션 매수 기록
+            session_logger.record_buy(stk_cd, s_name, qty, final_price)
+            
+            # [신규] 종목별 검색 조건명 및 전략 저장 (당일매매일지용 색상 구분)
+            if seq_name:
+                try:
+                    mapping_file = 'stock_conditions.json'
+                    mapping = {}
+                    if os.path.exists(mapping_file):
+                        with open(mapping_file, 'r', encoding='utf-8') as f:
+                            mapping = json.load(f)
+                    
+                    # [수정] 이름과 전략을 함께 저장
+                    mapping[stk_cd] = {
+                        'name': seq_name,
+                        'strat': mode
+                    }
+                    with open(mapping_file, 'w', encoding='utf-8') as f:
+                        json.dump(mapping, f, ensure_ascii=False, indent=2)
+                except Exception as ex:
+                    print(f"⚠️ 조건식 매핑 저장 실패: {ex}")
+
+            # [신규] 매수 시간 저장
+            save_buy_time(stk_cd)
+
+            # [신규] 전략별 색상 결정
+            color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
+            log_color = color_map.get(mode, '#00ff00')
+            
+            log_msg = f"<font color='{log_color}'>"
+            log_msg += "\n" + "="*50 + "\n"
+            log_msg += "⚡  매 수 체 결  성 공  ⚡\n"
+            log_msg += f"📦 종목: {s_name}\n"
+            log_msg += f"💰 가격: {final_price:,}원 ({qty}주)\n"
+            if seq_name:
+                log_msg += f"🔍 검색: {seq}. {seq_name}\n"
+            log_msg += "="*50 + "\n"
+            log_msg += f"⚡[{qty}주 매수체결]⚡ {s_name} ({final_price:,}원)"
+            log_msg += "</font>"
+            print(log_msg)
+            
+        else:
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("❌", "주문실패", s_name, stk_cd, is_error=True)
+            print(f"   ㄴ 사유: {ret_msg}") # [수정] 코드 제거
+            
+    except Exception as e:
+        s_name = get_stock_name_safe(stk_cd, token)
+        pretty_log("⚠️", "로직에러", s_name, stk_cd, is_error=True)
+        print(f"   ㄴ 내용: {e}")
+        RECENT_ORDER_CACHE.pop(stk_cd, None)

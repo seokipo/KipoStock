@@ -1,0 +1,130 @@
+{
+  "process_name": "😍1주 8개- V1.0A",
+  "auto_start": false,
+  "search_seq": [
+    "0",
+    "1",
+    "2",
+    "3",
+    "6",
+    "7",
+    "8",
+    "9"
+  ],
+  "take_profit_rate": 12.0,
+  "stop_loss_rate": -1.2,
+  "buy_ratio": 20.0,
+  "max_stocks": 20,
+  "MoneyZeroMax": 300000,
+  "start_time": "09:10",
+  "end_time": "12:00",
+  "global_strategy_mode": "qty",
+  "global_strategy_value": "1",
+  "global_strategy_scope": "all",
+  "profiles": {
+    "1": {
+      "take_profit_rate": 12.0,
+      "stop_loss_rate": -1.2,
+      "max_stocks": 20,
+      "start_time": "09:10",
+      "end_time": "12:00",
+      "qty_val": "1",
+      "amt_val": "100,000",
+      "pct_val": "10",
+      "condition_strategies": {
+        "0": "qty",
+        "1": "qty",
+        "2": "qty",
+        "3": "qty",
+        "6": "qty",
+        "7": "qty",
+        "8": "qty",
+        "9": "qty"
+      },
+      "search_seq": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "6",
+        "7",
+        "8",
+        "9"
+      ],
+      "sequence_auto": false
+    },
+    "2": {
+      "take_profit_rate": 12.0,
+      "stop_loss_rate": -1.2,
+      "max_stocks": 20,
+      "start_time": "09:10",
+      "end_time": "12:00",
+      "qty_val": "1",
+      "amt_val": "100,000",
+      "pct_val": "10",
+      "condition_strategies": {
+        "0": "qty",
+        "1": "qty",
+        "2": "qty",
+        "3": "qty",
+        "6": "qty",
+        "7": "qty",
+        "8": "qty",
+        "9": "qty"
+      },
+      "search_seq": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "6",
+        "7",
+        "8",
+        "9"
+      ]
+    },
+    "3": {
+      "take_profit_rate": 12.0,
+      "stop_loss_rate": -1.2,
+      "max_stocks": 20,
+      "start_time": "14:20",
+      "end_time": "13:20",
+      "qty_val": "1",
+      "amt_val": "100,000",
+      "pct_val": "10",
+      "condition_strategies": {
+        "0": "qty",
+        "1": "qty",
+        "2": "qty",
+        "3": "qty",
+        "6": "qty",
+        "7": "amount",
+        "8": "qty",
+        "9": "amount"
+      },
+      "search_seq": [
+        "0",
+        "1",
+        "2",
+        "3",
+        "6",
+        "7",
+        "8",
+        "9"
+      ]
+    }
+  },
+  "qty_val": "1",
+  "amt_val": "100,000",
+  "pct_val": "10",
+  "condition_strategies": {
+    "0": "qty",
+    "1": "qty",
+    "2": "qty",
+    "3": "qty",
+    "6": "qty",
+    "7": "qty",
+    "8": "qty",
+    "9": "qty"
+  }
+}
