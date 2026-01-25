@@ -1,5 +1,7 @@
 # 📊 KipoStock 전체 시스템 흐름도 (Flowchart)
 
+![KipoStock 시스템 시각화 흐름도](file:///C:/Users/seokipo/.gemini/antigravity/brain/bdd77882-46ce-47d5-8eeb-d1d2fdcd10b4/kipostock_visual_flowchart_1769384974613.png)
+
 이 문서는 `KipoStock` 자동 매매 시스템의 전체적인 동작 흐름을 시각적으로 설명합니다.
 
 ## 1. 메인 프로세스 흐름
