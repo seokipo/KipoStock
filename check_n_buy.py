@@ -293,7 +293,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             print(log_msg)
             
             # [신규] 전략별 음성 안내 추가
-            voice_map = {'qty': '일주', 'amount': '금액', 'percent': '비율'}
+            voice_map = {'qty': '한주', 'amount': '금액', 'percent': '비율'}
             say_text(voice_map.get(mode, '매수'))
             
         else:
