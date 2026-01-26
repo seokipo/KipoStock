@@ -14,6 +14,7 @@ class RealTimeSearch:
         self.keep_running = True
         self.receive_task = None
         self.on_connection_closed = on_connection_closed
+        self.on_condition_loaded = None # [신규] 목록 로드 완료 콜백
         self.token = None
         
         # [추가] 조건식 이름을 저장할 딕셔너리와 이벤트
@@ -74,6 +75,8 @@ class RealTimeSearch:
                         count = len(self.condition_map)
                         # print(f"📋 조건식명 {count}개 로드 완료")
                         self.list_loaded_event.set() # 목록 수신 완료 신호
+                        if self.on_condition_loaded:
+                            self.on_condition_loaded()
 
                 # --- 3. [핵심] 조건검색 실시간 신호 (인터럽트 처리) ---
                 elif trnm == 'CNSR':
@@ -321,5 +324,5 @@ class RealTimeSearch:
         if self.receive_task:
             self.receive_task.cancel()
         await self.disconnect()
-        print('🛑 중지됨.')
+        # print('🛑 중지됨.') # [제거] 불필요한 로그 노이즈 제거
         return True

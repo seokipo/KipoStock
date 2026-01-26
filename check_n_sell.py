@@ -77,7 +77,12 @@ def chk_n_sell(token=None):
                 # [신규] 매수 전략 색상 연동 (빨강:1주, 초록:금액, 파랑:비율)
                 log_color = '#ffdf00' # 기본값 (금색)
                 try:
-                    mapping_file = 'stock_conditions.json'
+                    # [수정] LogData 폴더 경로 사용
+                    base_path = os.path.dirname(os.path.abspath(__file__))
+                    if getattr(sys, 'frozen', False):
+                        base_path = os.path.dirname(sys.executable)
+                    
+                    mapping_file = os.path.join(base_path, 'LogData', 'stock_conditions.json')
                     if os.path.exists(mapping_file):
                         with open(mapping_file, 'r', encoding='utf-8') as f:
                             mapping = json.load(f)

@@ -13,10 +13,14 @@ from login import fn_au10001 as get_token
 import subprocess
 
 def say_text(text):
-    """Windows SAPI.SpVoice를 사용하여 음성 출력 (PowerShell 경유)"""
+    """Windows SAPI.SpVoice를 사용하여 음성 출력 (PowerShell 경유, 창 숨김)"""
     try:
         ps_command = f'(New-Object -ComObject SAPI.SpVoice).Speak("{text}")'
-        subprocess.Popen(['powershell', '-Command', ps_command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # [수정] CREATE_NO_WINDOW(0x08000000) 플래그를 사용하여 터미널 창 숨김
+        subprocess.Popen(['powershell', '-Command', ps_command], 
+                         stdout=subprocess.DEVNULL, 
+                         stderr=subprocess.DEVNULL, 
+                         creationflags=0x08000000)
     except Exception as e:
         print(f"⚠️ 음성 출력 오류: {e}")
 
@@ -82,11 +86,12 @@ def save_buy_time(code):
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
             
-        json_path = os.path.join(base_path, 'daily_buy_times.json')
-        
-        # [추가] 만약 위 경로에 권한이 없거나 문제가 있다면 현재 폴더로 폴백
-        if not os.access(base_path, os.W_OK) if os.path.exists(base_path) else False:
-             json_path = os.path.join(os.getcwd(), 'daily_buy_times.json')
+        data_dir = os.path.join(base_path, 'LogData')
+        if not os.path.exists(data_dir):
+            try: os.makedirs(data_dir)
+            except: pass
+            
+        json_path = os.path.join(data_dir, 'daily_buy_times.json')
         # print(f"💾 매수 시간 저장 시도: {json_path}")
         
         data = {}
@@ -257,7 +262,15 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             # [신규] 종목별 검색 조건명 및 전략 저장 (당일매매일지용 색상 구분)
             if seq_name:
                 try:
-                    mapping_file = 'stock_conditions.json'
+                    # [수정] LogData 폴더 경로 사용
+                    base_path = os.path.dirname(os.path.abspath(__file__))
+                    if getattr(sys, 'frozen', False):
+                        base_path = os.path.dirname(sys.executable)
+                    
+                    data_dir = os.path.join(base_path, 'LogData')
+                    if not os.path.exists(data_dir): os.makedirs(data_dir, exist_ok=True)
+                    
+                    mapping_file = os.path.join(data_dir, 'stock_conditions.json')
                     mapping = {}
                     if os.path.exists(mapping_file):
                         with open(mapping_file, 'r', encoding='utf-8') as f:
@@ -292,9 +305,17 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             log_msg += "</font>"
             print(log_msg)
             
-            # [신규] 전략별 음성 안내 추가
-            voice_map = {'qty': '한주', 'amount': '금액', 'percent': '비율'}
-            say_text(voice_map.get(mode, '매수'))
+            # [신규] 텔레그램 전송 추가
+            tel_send(f"⚡[{qty}주 매수가동]⚡ {s_name} ({final_price:,}원)")
+
+            # [신규] 전략별 음성 안내 추가 (조건식 이름 포함)
+            # [수정] voice_guidance 설정값 확인 (기본값 True)
+            from get_setting import get_setting
+            if get_setting('voice_guidance', True):
+                voice_map = {'qty': '한주', 'amount': '금액', 'percent': '비율'}
+                strategy_voice = voice_map.get(mode, '매수')
+                voice_msg = f"{seq_name} {strategy_voice}" if seq_name else strategy_voice
+                say_text(voice_msg)
             
         else:
             s_name = get_stock_name_safe(stk_cd, token)

@@ -5,7 +5,15 @@ import asyncio
 import time
 from datetime import datetime
 from rt_search import RealTimeSearch
-from tel_send import tel_send
+from tel_send import tel_send as real_tel_send
+# 기본 tel_send는 GUI에서 패치될 수 있으므로 별도 정의 (GUI 로그용)
+def tel_send(msg):
+    real_tel_send(msg)
+
+def log_and_tel(msg, parse_mode=None):
+    """GUI 로그와 텔레그램 모두에 전송 (중요 이벤트용)"""
+    tel_send(msg) # GUI 로그 (패치됨)
+    real_tel_send(msg, parse_mode=parse_mode) # 진짜 텔레그램
 from check_n_sell import chk_n_sell
 from acc_val import fn_kt00004
 from market_hour import MarketHour
@@ -31,6 +39,10 @@ class ChatCommand:
             self.script_dir = os.path.dirname(os.path.abspath(__file__))
             
         self.settings_path = os.path.join(self.script_dir, 'settings.json')
+        self.data_dir = os.path.join(self.script_dir, 'LogData')
+        if not os.path.exists(self.data_dir):
+            try: os.makedirs(self.data_dir)
+            except: pass
         
         self.check_n_sell_task = None
         self.account_sync_task = None
@@ -39,6 +51,14 @@ class ChatCommand:
         self.on_clear_logs = None # [신규] GUI 로그 초기화 콜백
         self.on_request_log_file = None # [신규] 로그 파일 저장 요청 콜백
         self.on_auto_sequence = None # [신규] 시퀀스 자동 시작 콜백
+        self.on_condition_loaded = None # [신규] 목록 로드 완료 콜백
+        
+        # [신규] rt_search의 콜백을 wrapper로 연결
+        self.rt_search.on_condition_loaded = self._on_condition_loaded_wrapper
+
+    def _on_condition_loaded_wrapper(self):
+        if self.on_condition_loaded:
+            self.on_condition_loaded()
 
     def get_token(self):
         """새로운 토큰을 발급받고 모든 모듈에 강제 동기화합니다."""
@@ -125,7 +145,7 @@ class ChatCommand:
 
             token = self.get_token()
             if not token:
-                tel_send("❌ 토큰 발급 실패")
+                log_and_tel("❌ 토큰 발급 실패")
                 return False
             
             self.update_setting('auto_start', True)
@@ -151,13 +171,13 @@ class ChatCommand:
             if success:
                 self.check_n_sell_task = asyncio.create_task(self._check_n_sell_loop())
                 self.account_sync_task = asyncio.create_task(self._account_sync_loop())
-                tel_send("🚀 초고속 엔진 가동! 감시 시작.")
+                log_and_tel("🚀 초고속 엔진 가동! 감시 시작.")
                 if profile_info:
-                    tel_send(f"🚀 {profile_info}로 감시를 시작합니다.")
+                    log_and_tel(f"🚀 {profile_info}로 감시를 시작합니다.")
                 return True
             return False
         except Exception as e:
-            tel_send(f"❌ start 오류: {e}")
+            log_and_tel(f"❌ start 오류: {e}")
             return False
         finally:
             self.is_starting = False
@@ -169,10 +189,10 @@ class ChatCommand:
                 self.update_setting('auto_start', False)
             await self._cancel_tasks()
             await self.rt_search.stop()
-            if not quiet: tel_send("✅ 시스템 중지됨")
+            if not quiet: log_and_tel("✅ 시스템 중지됨")
             return True
         except Exception as e:
-            if not quiet: tel_send(f"❌ stop 오류: {e}")
+            if not quiet: log_and_tel(f"❌ stop 오류: {e}")
             return False
 
     async def _cancel_tasks(self):
@@ -253,17 +273,14 @@ class ChatCommand:
         except Exception as e:
             tel_send(f"❌ report 오류: {e}")
 
-    async def today(self, sort_mode=None, is_reverse=False, summary_only=False):
+    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False):
         """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금)"""
-        print(f"▶ Today 명령어 수신 (요약모드: {summary_only}): 처리 시작")
+        print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
         try:
             if not self.token: 
-                print("▶ 토큰 없음, 발급 시도")
                 self.get_token()
                 
             loop = asyncio.get_event_loop()
-            
-            # 1. 전체 매매 목록 조회 (ka10170)
             res_list = await loop.run_in_executor(None, get_trade_diary, self.token)
             diary_list = res_list.get('list', [])
             
@@ -271,9 +288,9 @@ class ChatCommand:
                 tel_send("📭 오늘 매매 내역이 없습니다.")
                 return
 
-            # [수정] 요약 모드라도 합계 계산을 위해 데이터 처리는 진행
+            # 데이터 매핑 로드
             cond_mapping = {}
-            mapping_file = os.path.join(self.script_dir, 'stock_conditions.json')
+            mapping_file = os.path.join(self.data_dir, 'stock_conditions.json')
             if os.path.exists(mapping_file):
                 try:
                     with open(mapping_file, 'r', encoding='utf-8') as f:
@@ -282,138 +299,141 @@ class ChatCommand:
 
             bt_data = {}
             try:
-                bt_path = os.path.join(self.script_dir, 'daily_buy_times.json')
+                bt_path = os.path.join(self.data_dir, 'daily_buy_times.json')
                 if os.path.exists(bt_path):
                     with open(bt_path, 'r', encoding='utf-8') as f:
                         bt_data = json.load(f)
             except: pass
 
-            total_b_amt = 0
-            total_s_amt = 0
-            total_tax = 0
-            total_pnl = 0
-            pnl_rt_sum = 0
-            count = 0
-
-            display_rows = []
-            if not summary_only:
-                header = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                header += " [매수시간] [매수전략] [조건식] 종목명     |  매수(평균/수량/금액)  |  매도(평균/수량/금액)  |  세금  | 손익(수익률) \n"
-                header += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                display_rows.append(header)
-
-            table_rows = []
+            processed_data = []
             for item in diary_list:
                 try:
                     code = item['stk_cd'].replace('A', '')
-                    name = item['stk_nm']
-                    
                     def val(keys):
                         for k in keys:
                             v = item.get(k)
                             if v is not None and str(v).strip() != "": return v
                         return 0
 
-                    b_avg = int(float(val(['buy_avg_pric', 'buy_avg_prc', 'buy_avg_price'])))
-                    b_qty = int(float(val(['buy_qty', 'tot_buy_qty', 'buy_q'])))
-                    b_amt = int(float(val(['buy_amt', 'tot_buy_amt', 'buy_a'])))
-                    s_avg = int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric', 'sell_avg_price'])))
-                    s_qty = int(float(val(['sell_qty', 'sel_qty', 'tot_sel_qty', 'sell_q'])))
-                    s_amt = int(float(val(['sell_amt', 'sel_amt', 'tot_sel_amt', 'sell_a'])))
-                    tax = int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax', 'tot_tax'])))
-                    pnl = int(float(val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl'])))
-                    pnl_rt = float(val(['prft_rt', 'pl_rt', 'profit_rate']))
+                    row = {
+                        'code': code,
+                        'name': item['stk_nm'],
+                        'buy_time': bt_data.get(code, '99:99:99'),
+                        'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc', 'buy_avg_price']))),
+                        'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty', 'buy_q']))),
+                        'buy_amt': int(float(val(['buy_amt', 'tot_buy_amt', 'buy_a']))),
+                        'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric', 'sell_avg_price']))),
+                        'sel_qty': int(float(val(['sell_qty', 'sel_qty', 'tot_sel_qty', 'sell_q']))),
+                        'sel_amt': int(float(val(['sell_amt', 'sel_amt', 'tot_sel_amt', 'sell_a']))),
+                        'tax': int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax', 'tot_tax']))),
+                        'pnl': int(float(val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl']))),
+                        'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate']))
+                    }
                     
-                    total_b_amt += b_amt
-                    total_s_amt += s_amt
-                    total_tax += tax
-                    total_pnl += pnl
-                    pnl_rt_sum += pnl_rt
-                    count += 1
+                    mapping_val = cond_mapping.get(code, "직접매매")
+                    if isinstance(mapping_val, dict):
+                        row['cond_name'] = mapping_val.get('name', "직접매매")
+                        row['strat_key'] = mapping_val.get('strat', 'none')
+                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율'}
+                        row['strat_nm'] = strat_map.get(row['strat_key'], '--')
+                    else:
+                        row['cond_name'] = mapping_val
+                        row['strat_key'] = 'none'
+                        row['strat_nm'] = '--'
                     
-                    if not summary_only:
-                        # [복구] 조건식 및 전략 색상 추출
-                        mapping_val = cond_mapping.get(code, "직접매매")
-                        strat_display = "[--]"
-                        if isinstance(mapping_val, dict):
-                            cond_name = mapping_val.get('name', "직접매매")
-                            strat = mapping_val.get('strat', 'none')
-                            strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율'}
-                            strat_nm = strat_map.get(strat, '--')
-                            colors = {'qty': '#ff4444', 'amount': '#00c851', 'percent': '#33b5e5'}
-                            row_color = colors.get(strat, '#00ff00')
-                            strat_display = f"[{strat_nm}]"
-                            cond_display = f"{cond_name}"
-                        else:
-                            cond_name = mapping_val
-                            cond_display = cond_name
-                            strat_nm = "--"
-                            strat_display = "[--]"
-                            row_color = "#00ff00"
-                        
-                        buy_time_str = f"[{bt_data.get(code, '--:--:--')}]"
-                        row_content = f"{buy_time_str:<10} {strat_display} {cond_display} {name:<10} | {b_avg:>7,}/{b_qty:>3}/{b_amt:>8,} | {s_avg:>7,}/{s_qty:>3}/{s_amt:>8,} | {tax:>5,} | {pnl:>+8,} ({pnl_rt:>+6.2f}%)\n"
-                        display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
-                        
-                        table_rows.append({
-                            '매수시간': bt_data.get(code, '--:--:--'), '매수전략': strat_nm,
-                            '조건식': cond_name, '종목명': name, '종목코드': code,
-                            '매수평균가': b_avg, '매수수량': b_qty, '매수금액': b_amt,
-                            '매도평균가': s_avg, '매도수량': s_qty, '매도금액': s_amt,
-                            '세금': tax, '손익금액': pnl, '수익률(%)': pnl_rt
-                        })
+                    processed_data.append(row)
+                except: continue
 
-                except Exception as row_err:
-                    print(f"▶ [DEBUG] 행 처리 중 오류: {row_err}")
+            # 정렬 적용
+            if sort_mode == 'jun':
+                processed_data.sort(key=lambda x: x['strat_nm'], reverse=is_reverse)
+            elif sort_mode == 'sic':
+                processed_data.sort(key=lambda x: x['cond_name'], reverse=is_reverse)
+            else:
+                processed_data.sort(key=lambda x: x['buy_time'], reverse=is_reverse)
+
+            total_b_amt = sum(r['buy_amt'] for r in processed_data)
+            total_s_amt = sum(r['sel_amt'] for r in processed_data)
+            total_tax = sum(r['tax'] for r in processed_data)
+            total_pnl = sum(r['pnl'] for r in processed_data)
+            count = len(processed_data)
+            avg_pnl_rt = (total_pnl / total_b_amt * 100) if total_b_amt > 0 else 0
 
             if summary_only:
-                avg_pnl_rt = (pnl_rt_sum / count) if count > 0 else 0
-                summary_msg = "📝 [ 당일 매매 요약 리포트 ]\n"
+                summary_msg = "<b>📝 [ 당일 매매 요약 리포트 ]</b>\n"
                 summary_msg += "━━━━━━━━━━━━━━━\n"
                 summary_msg += f"🔹 거래종목: {count}건\n"
                 summary_msg += f"🔹 총 매수: {total_b_amt:,}원\n"
                 summary_msg += f"🔹 총 매도: {total_s_amt:,}원\n"
                 summary_msg += "────────────────\n"
                 summary_msg += f"💸 제세공과: {total_tax:,}원\n"
-                summary_msg += f"✨ 실현손익: {total_pnl:+,}원\n"
-                summary_msg += f"📈 최종수익률: {avg_pnl_rt:+.2f}%\n"
+                summary_msg += f"✨ 실현손익: <b>{total_pnl:+,}원</b>\n"
+                summary_msg += f"📈 최종수익률: <b>{avg_pnl_rt:+.2f}%</b>\n"
                 summary_msg += "━━━━━━━━━━━━━━━"
-                tel_send(summary_msg)
+                
+                # 진짜 텔레그램으로 전송 (HTML 모드 활용, send_telegram이 True일 때만)
+                if send_telegram:
+                    real_tel_send(summary_msg, parse_mode='HTML')
+                    print("📢 텔레그램으로 요약 보고서를 전송했습니다.")
+                
+                # GUI 로그창에는 요약 표시
+                tel_send(summary_msg.replace('<b>', '').replace('</b>', ''))
                 return True
 
-            # [복구] 상세 리포트 마무리
-            if count > 0:
-                avg_pnl_rt = pnl_rt_sum / count
-                display_rows.append("--------------------------------------------------------------------------------------------------------------------\n")
-                summary_str = f"{'TOTAL':<21} {'  ':<6} {'합계':<10} | {'-':>7}/{'-':>3}/{total_b_amt:>8,} | {'-':>7}/{'-':>3}/{total_s_amt:>8,} | {total_tax:>5,} | {total_pnl:>+8,} ({avg_pnl_rt:>+6.2f}%)\n"
-                display_rows.append(summary_str)
+            # 상세 리포트 생성
+            display_rows = [] # GUI용 (HTML)
+            tel_rows = []     # 텔레그램용 (Plain Text)
+            
+            h_line = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            header = " [매수시간] [매수전략] [조건식] 종목명     |  매수(평균/수량/금액)  |  매도(평균/수량/금액)  |  세금  | 손익(수익률) \n"
+            
+            display_rows.append(h_line + header + h_line)
+            tel_rows.append(h_line + header + h_line)
 
-            footer = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            display_rows.append(footer)
-            tel_send("".join(display_rows))
-
-            try:
-                df = pd.DataFrame(table_rows)
-                # [수정] 엑셀에도 합정 행 추가
-                if count > 0:
-                    summary_row = pd.Series({\
-                        '조건식': '합계', '종목명': f'{count}종목', '종목코드': '-',\
-                        '매수평균가': 0, '매수수량': 0, '매수금액': total_b_amt,\
-                        '매도평균가': 0, '매도수량': 0, '매도금액': total_s_amt,\
-                        '세금': total_tax, '손익금액': total_pnl, '수익률(%)': pnl_rt_sum / count\
-                    })
-                    df = pd.concat([df, summary_row.to_frame().T], ignore_index=True)
+            colors = {'qty': '#ff4444', 'amount': '#00c851', 'percent': '#33b5e5', 'none': '#00ff00'}
+            for r in processed_data:
+                row_color = colors.get(r['strat_key'], '#00ff00')
+                bt_str = f"[{r['buy_time']}]"
+                st_str = f"[{r['strat_nm']}]"
+                row_content = f"{bt_str:<10} {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {r['buy_avg']:>7,}/{r['buy_qty']:>3}/{r['buy_amt']:>8,} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
+                display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
+                tel_rows.append(row_content)
+
+            d_ft = "--------------------------------------------------------------------------------------------------------------------\n"
+            display_rows.append(d_ft)
+            tel_rows.append(d_ft)
+            
+            summary_str = f"{'TOTAL':<21} {'  ':<6} {'합계':<10} | {'-':>7}/{'-':>3}/{total_b_amt:>8,} | {'-':>7}/{'-':>3}/{total_s_amt:>8,} | {total_tax:>5,} | {total_pnl:>+8,} ({avg_pnl_rt:>+6.2f}%)\n"
+            display_rows.append(summary_str)
+            tel_rows.append(summary_str)
+            
+            display_rows.append(h_line)
+            tel_rows.append(h_line)
+            
+            # GUI에는 HTML 버전 전송 (패치된 tel_send 사용 가능)
+            tel_send("".join(display_rows))
+            
+            # 텔레그램에는 진짜 전송 (HTML 태그 없는 버전, send_telegram이 True일 때만)
+            if send_telegram:
+                real_tel_send("".join(tel_rows))
+                print("📢 텔레그램으로 상세 보고서를 전송했습니다.")
+            
+            try:
+                df = pd.DataFrame([{
+                    '매수시간': r['buy_time'], '매수전략': r['strat_nm'], '조건식': r['cond_name'], 
+                    '종목명': r['name'], '종목코드': r['code'], '매수평균가': r['buy_avg'], 
+                    '매수수량': r['buy_qty'], '매수금액': r['buy_amt'], '매도평균가': r['sel_avg'], 
+                    '매도수량': r['sel_qty'], '매도금액': r['sel_amt'], '세금': r['tax'], 
+                    '손익금액': r['pnl'], '수익률(%)': r['pnl_rt']
+                } for r in processed_data])
                 date_str = datetime.now().strftime("%Y%m%d")
-                csv_name = f"trade_log_{date_str}.csv"
-                csv_path = os.path.join(self.script_dir, csv_name)
+                csv_path = os.path.join(self.data_dir, f"trade_log_{date_str}.csv")
                 df.to_csv(csv_path, index=False, encoding='utf-8-sig')
-                tel_send(f"💾 엑셀 파일 저장 완료: {csv_name}")
-            except Exception as e:
-                tel_send(f"⚠️ 엑셀 저장 실패: {e}")
+            except: pass
+
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            print(f"❌ today 오류: {e}")
             tel_send(f"❌ today 오류: {e}")
 
     async def tpr(self, number):
@@ -448,10 +468,10 @@ class ChatCommand:
                 if not quiet:
                     msg = "📋 [조건식 목록]\n"
                     for c in cond_list: msg += f"• {c[0]}: {c[1]}\n"
-                    tel_send(msg)
+                    log_and_tel(msg)
             return True
         except: 
-            if not quiet: tel_send("❌ 목록 조회 실패")
+            if not quiet: log_and_tel("❌ 목록 조회 실패")
 
     def update_setting(self, key, value):
         return self.update_settings_batch({key: value})
@@ -480,12 +500,15 @@ class ChatCommand:
 • auto {번호} : {번호}번 부터 시퀀스 가동 (0은 중지)
 • condition {번호} : 조건식 변경
 • tpr / slr / brt : 익절/손절/비중 설정
-• today : 당일 매매 일지 조회 (기본: 매수시간순)
-• tel today : 텔레그램용 당일 매매 요약 리포트
-• (팁: auto 1~3은 시작, auto 0은 시퀀스 자동 중지입니다)
+• today 옵션 : 당일 매매 일지 조회
+  - today : 시간순
+  - today jun : 전략순 (매수전략)
+  - today sic : 조건식순 (검색식명)
+  - (팁: 뒤에 -를 붙이면 역순 출력, 예: today jun-)
+• tel today : 텔레그램으로 매매 요약 리포트 전송
 • clr : 로그 화면 초기화 (GUI 전용)
 • log : 현재 로그를 .txt 파일로 저장 (GUI 전용)
-• print {메세지} (또는 msg) : 텔레그램 메세지 전송"""
+• msg {메세지} : 텔레그램 메세지 직접 전송"""
         tel_send(help_msg)
 
     async def process_command(self, text):
@@ -515,29 +538,66 @@ class ChatCommand:
         elif cmd == 'clr':
             if self.on_clear_logs: self.on_clear_logs()
             else: tel_send("ℹ️ clr 명령어는 GUI 환경에서만 작동합니다.")
+        elif cmd == 'voice on':
+            self.update_setting('voice_guidance', True)
+            log_and_tel("🔊 음성 안내가 활성화되었습니다.")
+        elif cmd == 'voice off':
+            self.update_setting('voice_guidance', False)
+            log_and_tel("🔇 음성 안내가 비활성화되었습니다.")
         elif cmd == 'log':
             if self.on_request_log_file: self.on_request_log_file()
             else: tel_send("ℹ️ log 명령어는 GUI 환경에서만 작동합니다.")
         elif cmd == 'print' or cmd == 'msg':
             tel_send(f"❓ {cmd} 뒤에 메세지를 입력해주세요. (예: {cmd} 안녕하세요)")
         elif cmd.startswith('print '):
-            await asyncio.get_event_loop().run_in_executor(None, tel_send, cmd_full[6:].strip())
+            await asyncio.get_event_loop().run_in_executor(None, log_and_tel, cmd_full[6:].strip())
         elif cmd.startswith('msg '):
-            await asyncio.get_event_loop().run_in_executor(None, tel_send, cmd_full[4:].strip())
+            await asyncio.get_event_loop().run_in_executor(None, log_and_tel, cmd_full[4:].strip())
         elif cmd.startswith('tel_send '):
-            await asyncio.get_event_loop().run_in_executor(None, tel_send, cmd_full[9:].strip())
+            await asyncio.get_event_loop().run_in_executor(None, log_and_tel, cmd_full[9:].strip())
         elif cmd == 'refresh_conditions': 
             await self.rt_search.refresh_conditions(self.token)
         elif cmd == 'help': await self.help()
-        elif cmd == 'tel today': await self.today(summary_only=True)
-        elif cmd.startswith('today'):
-            is_rev = cmd.endswith('-')
-            # 하이픈 제거 후 옵션 파악
-            clean_cmd = cmd[:-1] if is_rev else cmd
+        elif cmd.startswith('tel today'):
+            # tel today jun- 등 처리
+            sub_raw = cmd_full[4:].strip() # "today jun-"
+            is_rev = sub_raw.endswith('-')
             
-            if clean_cmd == 'today': await self.today(is_reverse=is_rev)
-            elif clean_cmd == 'today/sic': await self.today(sort_mode='sic', is_reverse=is_rev)
-            elif clean_cmd == 'today/jun': await self.today(sort_mode='jun', is_reverse=is_rev)
-            elif clean_cmd == 'today/son': await self.today(sort_mode='son', is_reverse=is_rev)
-            else: tel_send(f"❓ 알 수 없는 today 옵션: {text}")
+            parts = sub_raw.lower().split()
+            sub_cmd = 'default'
+            if len(parts) > 1:
+                sub_part = parts[1].replace('-', '')
+                if sub_part: sub_cmd = sub_part
+            
+            # 요약 보고서 여부 확인 (tel today 만 쳤을 때)
+            is_summary = (sub_raw.lower() == 'today')
+            
+            if sub_cmd == 'sic': await self.today(sort_mode='sic', is_reverse=is_rev, send_telegram=True)
+            elif sub_cmd == 'jun': await self.today(sort_mode='jun', is_reverse=is_rev, send_telegram=True)
+            elif sub_cmd == 'son': await self.today(sort_mode='son', is_reverse=is_rev, send_telegram=True)
+            else: await self.today(summary_only=is_summary, is_reverse=is_rev, send_telegram=True)
+
+        elif cmd.startswith('today'):
+            # 명령어 파싱: today jun- 등 공백 및 하이픈 처리
+            parts = cmd.split()
+            sub_cmd = 'default'
+            is_rev = False
+            
+            # today jun- 처럼 공백이 없는 경우와 있는 경우 모두 대응
+            full_text = cmd
+            is_rev = full_text.endswith('-')
+            
+            if len(parts) > 1:
+                sub_part = parts[1].replace('-', '')
+                if sub_part: sub_cmd = sub_part
+            elif ' ' not in full_text and len(full_text) > 5:
+                # todayjun- 같은 형태 대비
+                sub_part = full_text[5:].replace('-', '')
+                if sub_part: sub_cmd = sub_part
+                
+            if sub_cmd in ['default', 'today']: await self.today(is_reverse=is_rev, send_telegram=False)
+            elif sub_cmd == 'sic': await self.today(sort_mode='sic', is_reverse=is_rev, send_telegram=False)
+            elif sub_cmd == 'jun': await self.today(sort_mode='jun', is_reverse=is_rev, send_telegram=False)
+            elif sub_cmd == 'son': await self.today(sort_mode='son', is_reverse=is_rev, send_telegram=False)
+            else: await self.today(is_reverse=is_rev, send_telegram=False) # 기본값
         else: tel_send(f"❓ 알 수 없는 명령어: {text}")

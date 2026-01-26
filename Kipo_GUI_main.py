@@ -20,6 +20,7 @@ import winsound
 
 # 기존 모듈 임포트
 from config import telegram_token
+from tel_send import tel_send as real_tel_send
 from chat_command import ChatCommand
 from get_setting import get_setting, cached_setting
 from market_hour import MarketHour
@@ -31,6 +32,7 @@ class WorkerSignals(QObject):
     clr_signal = pyqtSignal()       # [신규] 로그 초기화용
     request_log_signal = pyqtSignal() # [신규] 로그 파일 출력 요청
     auto_seq_signal = pyqtSignal(int) # [신규] 원격 시퀀스 시작 신호 (프로필 번호)
+    condition_loaded_signal = pyqtSignal() # [신규] 조건식 목록 로드 완료 신호
 
 class AsyncWorker(QThread):
     def __init__(self, main_window):
@@ -76,6 +78,7 @@ class AsyncWorker(QThread):
         self.chat_command.on_clear_logs = lambda: self.signals.clr_signal.emit()
         self.chat_command.on_request_log_file = lambda: self.signals.request_log_signal.emit()
         self.chat_command.on_auto_sequence = lambda idx: self.signals.auto_seq_signal.emit(idx)
+        self.chat_command.on_condition_loaded = lambda: self.signals.condition_loaded_signal.emit()
         self.chat_command.rt_search.on_connection_closed = self._on_connection_closed_wrapper
         
         self.loop.run_until_complete(self.main_loop())
@@ -288,9 +291,19 @@ class AsyncWorker(QThread):
 
 # ----------------- Main Window -----------------
 class KipoWindow(QMainWindow):
+    async def wait_for_ready(self):
+        """Worker가 준비(chat_command 객체 생성)될 때까지 대기"""
+        while not self.worker.chat_command:
+            await asyncio.sleep(0.1)
+
+    def log_and_tel(self, msg):
+        """GUI 로그와 텔레그램 모두에 전송 (중요 이벤트용)"""
+        self.append_log(msg)
+        real_tel_send(msg)
+
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.3.9 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.2 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -302,6 +315,12 @@ class KipoWindow(QMainWindow):
             self.resource_dir = self.script_dir
             
         self.settings_file = os.path.join(self.script_dir, 'settings.json')
+        
+        # [신규] 로그 및 데이터 저장 폴더 (LogData)
+        self.data_dir = os.path.join(self.script_dir, 'LogData')
+        if not os.path.exists(self.data_dir):
+            try: os.makedirs(self.data_dir)
+            except: pass
 
         # 아이콘 설정 (리소스 경로에서 로드)
         icon_path = os.path.join(self.resource_dir, 'icon.png')
@@ -756,6 +775,7 @@ class KipoWindow(QMainWindow):
         self.worker.signals.clr_signal.connect(self.log_text.clear)
         self.worker.signals.request_log_signal.connect(self.save_logs_to_file)
         self.worker.signals.auto_seq_signal.connect(self.on_remote_auto_sequence)
+        self.worker.signals.condition_loaded_signal.connect(self.refresh_condition_list_ui)
         self.worker.start()
 
     def on_remote_auto_sequence(self, idx):
@@ -869,27 +889,25 @@ class KipoWindow(QMainWindow):
             filtered_msg = ""
             lines = text.split('\n')
             
-            # 현재 UI에서 체크된 번호들 가져오기
-            checked_indices = [str(i) for i, btn in enumerate(self.cond_buttons) if btn.isChecked()]
+            # 현재 UI에서 체크된 번호들 가져오기 (cond_states가 0보다 크면 활성)
+            checked_indices = [str(i) for i, state in enumerate(self.cond_states) if state > 0]
             
             found_any = False
             for line in lines:
-                if line.startswith('•'):
-                    # 포맷: "• 0: 조건식이름" -> ":" 기준으로 분리
+                # ... (rest of the logic)
+                if line.strip().startswith('•'):
                     try:
-                        parts = line.split(':')
-                        idx = parts[0].replace('•', '').strip()
-                        
-                        if idx in checked_indices:
-                            filtered_msg += line + "\n"
+                        # "• 0: 조건식이름" 또는 "• 0: 이름" 형태 파싱
+                        idx_part = line.split(':')[0].replace('•', '').strip()
+                        if idx_part in checked_indices:
+                            filtered_msg += line + "<br>"
                             found_any = True
-                    except:
-                        pass
+                    except: pass
             
             if not found_any:
-                filtered_msg += "(선택된 조건식이 목록에 없습니다)"
+                filtered_msg = "<br><center>(선택된 조건식이 목록에 없습니다)</center>"
                 
-            self.rt_list.setText(filtered_msg)
+            self.rt_list.setHtml(filtered_msg)
             
         # Auto scroll
         sb = self.log_text.verticalScrollBar()
@@ -906,7 +924,7 @@ class KipoWindow(QMainWindow):
             y = 1
             while True:
                 filename = f"Log_{today_str}_{y}.txt"
-                filepath = os.path.join(self.script_dir, filename)
+                filepath = os.path.join(self.data_dir, filename)
                 if not os.path.exists(filepath):
                     break
                 y += 1
@@ -1335,7 +1353,8 @@ class KipoWindow(QMainWindow):
                     MarketHour.set_market_hours(sh, sm, eh, em)
                 except: pass
                 
-                self.worker.schedule_command('condition_list', quiet)
+                # [제거] 저장 시마다 리스트를 새로 요청할 필요 없음 (UI 갱신으로 충분)
+                # self.worker.schedule_command('condition_list', quiet) 
                 if hasattr(cached_setting, "_cache"): cached_setting._cache = {}
                 
                 # [수정] 엔진 재시작 여부 제어 (조건식 단순 변경 시에는 재시작 안 함)
@@ -1601,7 +1620,7 @@ class KipoWindow(QMainWindow):
             # 만약 현재 실행 중이 아니라면 (예약 대기 상태였다면) 시작
             status = self.lbl_status.text()
             if "READY" in status or "WAITING" in status:
-                self.append_log("🔔 [장 시작 예약] 오전 9시 정각입니다. 시퀀스를 자동으로 시작합니다!")
+                self.log_and_tel("🔔 [장 시작 예약] 오전 9시 정각입니다. 시퀀스를 자동으로 시작합니다!")
                 self.on_start_clicked(force=True)
                 return
 
@@ -1620,7 +1639,7 @@ class KipoWindow(QMainWindow):
                         with open(self.settings_file, 'r', encoding='utf-8') as f:
                             settings = json.load(f)
                             if 'profiles' in settings and str(next_idx) in settings['profiles']:
-                                self.append_log(f"🔄 시퀀스 자동: 프로필 {current_idx}번 종료 -> {next_idx}번으로 전환합니다.")
+                                self.log_and_tel(f"🔄 시퀀스 자동: 프로필 {current_idx}번 종료 -> {next_idx}번으로 전환합니다.")
                                 
                                 # 1) 현재 설정 저장
                                 self.save_settings(profile_idx=current_idx, restart_if_running=False) # 전환 중 중복 시작 방지
@@ -1633,7 +1652,7 @@ class KipoWindow(QMainWindow):
                                 
                                 # 4) 설정 적용 및 엔진 재가동 (API 재등록 강제 수행)
                                 self.append_log("="*40)
-                                self.append_log(f"🛰️ [시퀀스] {next_idx}번 프로필로 전환: API 검색식 재등록을 시작합니다...")
+                                self.log_and_tel(f"🛰️ [시퀀스] {next_idx}번 프로필로 전환: API 검색식 재등록을 시작합니다...")
                                 self.append_log("="*40)
                                 
                                 # [수정] 전환 중 중복 알람/이벤트 방지를 위해 즉시 시간 기록
@@ -1647,7 +1666,7 @@ class KipoWindow(QMainWindow):
                     self.append_log(f"⚠️ 시퀀스 전환 중 오류: {e}")
 
             # 다음 프로필이 없거나 데이터가 없으면 (최종 시퀀스 종료)
-            self.append_log("🏁 시퀀스 종료: 모든 프로필 단계가 완료되었습니다.")
+            self.log_and_tel("🏁 시퀀스 종료: 모든 프로필 단계가 완료되었습니다.")
             
             # 시퀀스 종료 시 버튼 끄기 및 UI 잠금 해제
             self.btn_seq_auto.setChecked(False)
@@ -1760,7 +1779,16 @@ if __name__ == '__main__':
         
     except BaseException as e:
         # BaseException을 통해 SystemExit까지 모두 캡처
-        with open("crash_report.txt", "a", encoding="utf-8") as f:
+        # [수정] 크래시 리포트도 LogData 폴더로 이동 시도
+        crash_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            crash_dir = os.path.dirname(sys.executable)
+        
+        data_dir = os.path.join(crash_dir, 'LogData')
+        if not os.path.exists(data_dir): os.makedirs(data_dir, exist_ok=True)
+        
+        crash_path = os.path.join(data_dir, "crash_report.txt")
+        with open(crash_path, "a", encoding="utf-8") as f:
             f.write(f"\n[{datetime.datetime.now()}] CRASH/EXIT LOGGED:\n")
             f.write(traceback.format_exc())
             f.write(f"Error Type: {type(e)}\n")
