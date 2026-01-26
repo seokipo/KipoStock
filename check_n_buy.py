@@ -10,6 +10,15 @@ from acc_val import fn_kt00004 as get_my_stocks
 from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
+import subprocess
+
+def say_text(text):
+    """Windows PowerShell의 SpeechSynthesizer를 사용하여 음성 출력"""
+    try:
+        ps_command = f'Add-Type -AssemblyName System.speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.Speak("{text}")'
+        subprocess.Popen(['powershell', '-Command', ps_command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        print(f"⚠️ 음성 출력 오류: {e}")
 
 # 전역 변수로 계좌 정보를 메모리에 들고 있음
 ACCOUNT_CACHE = {
@@ -282,6 +291,10 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             log_msg += f"⚡[{qty}주 매수체결]⚡ {s_name} ({final_price:,}원)"
             log_msg += "</font>"
             print(log_msg)
+            
+            # [신규] 전략별 음성 안내 추가
+            voice_map = {'qty': '일주', 'amount': '금액', 'percent': '비율'}
+            say_text(voice_map.get(mode, '매수'))
             
         else:
             s_name = get_stock_name_safe(stk_cd, token)
