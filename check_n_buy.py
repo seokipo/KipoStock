@@ -13,9 +13,9 @@ from login import fn_au10001 as get_token
 import subprocess
 
 def say_text(text):
-    """Windows PowerShell의 SpeechSynthesizer를 사용하여 음성 출력"""
+    """Windows SAPI.SpVoice를 사용하여 음성 출력 (PowerShell 경유)"""
     try:
-        ps_command = f'Add-Type -AssemblyName System.speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.Speak("{text}")'
+        ps_command = f'(New-Object -ComObject SAPI.SpVoice).Speak("{text}")'
         subprocess.Popen(['powershell', '-Command', ps_command], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception as e:
         print(f"⚠️ 음성 출력 오류: {e}")
