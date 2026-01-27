@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.7 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.8 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)

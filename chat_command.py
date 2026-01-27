@@ -429,17 +429,47 @@ class ChatCommand:
                 print("📢 텔레그램으로 상세 보고서를 전송했습니다.")
             
             try:
-                df = pd.DataFrame([{
+                df_data = [{
                     '매수시간': r['buy_time'], '매수전략': r['strat_nm'], '조건식': r['cond_name'], 
                     '종목명': r['name'], '종목코드': r['code'], '매수평균가': r['buy_avg'], 
                     '매수수량': r['buy_qty'], '매수금액': r['buy_amt'], '매도평균가': r['sel_avg'], 
                     '매도수량': r['sel_qty'], '매도금액': r['sel_amt'], '세금': r['tax'], 
                     '손익금액': r['pnl'], '수익률(%)': r['pnl_rt']
-                } for r in processed_data])
+                } for r in processed_data]
+                
+                # [신규] 합계 행 추가
+                df_data.append({
+                    '매수시간': '합계', '매수전략': '-', '조건식': '-', 
+                    '종목명': '-', '종목코드': '-', '매수평균가': 0, 
+                    '매수수량': 0, '매수금액': total_b_amt, '매도평균가': 0, 
+                    '매도수량': 0, '매도금액': total_s_amt, '세금': total_tax, 
+                    '손익금액': total_pnl, '수익률(%)': avg_pnl_rt
+                })
+                
+                df = pd.DataFrame(df_data)
                 date_str = datetime.now().strftime("%Y%m%d")
-                csv_path = os.path.join(self.data_dir, f"trade_log_{date_str}.csv")
+                
+                # [신규] 중복 파일명 체크 (a, b, c...)
+                import string
+                suffix_list = list(string.ascii_lowercase) # a-z
+                
+                final_filename = f"trade_log_{date_str}.csv"
+                csv_path = os.path.join(self.data_dir, final_filename)
+                
+                # 기본 파일이 존재하면 알파벳 접미사 붙여서 비어있는 이름 찾기
+                if os.path.exists(csv_path):
+                    for char in suffix_list:
+                        temp_name = f"trade_log_{date_str}_{char}.csv"
+                        if not os.path.exists(os.path.join(self.data_dir, temp_name)):
+                            final_filename = temp_name
+                            csv_path = os.path.join(self.data_dir, final_filename)
+                            break
+                
                 df.to_csv(csv_path, index=False, encoding='utf-8-sig')
-            except: pass
+                tel_send(f"<font color='#28a745'>📂 매매 일지가 저장되었습니다: {final_filename}</font>")
+                
+            except Exception as save_err: 
+                print(f"❌ csv 저장 오류: {save_err}")
 
         except Exception as e:
             print(f"❌ today 오류: {e}")
