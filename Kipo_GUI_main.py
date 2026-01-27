@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.2 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.3 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -575,39 +575,70 @@ class KipoWindow(QMainWindow):
         strat_vbox = QVBoxLayout()
         strat_vbox.setSpacing(8)
 
+        # Helper function to create TP/SL inputs
+        def create_tpsl_inputs(color):
+            tp = QLineEdit("12.0")
+            tp.setFixedWidth(35)
+            tp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            tp.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 10px; color: #dc3545;")
+            
+            sl = QLineEdit("-1.2")
+            sl.setFixedWidth(35)
+            sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 10px; color: #007bff;")
+            return tp, sl
+
         # 1. Qty Mode (Red Border)
         qty_layout = QHBoxLayout()
         lbl_qty = QLabel("🔴 1주")
-        lbl_qty.setFixedWidth(50)
+        lbl_qty.setFixedWidth(40)
         self.input_qty_val = QLineEdit("1")
-        self.input_qty_val.setReadOnly(True) # [수정] 1주 고정 사양 반영 (수정 불가)
-        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 4px; font-weight: bold; color: #555;")
+        self.input_qty_val.setReadOnly(True)
+        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; color: #555;")
+        self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
+        
         qty_layout.addWidget(lbl_qty)
         qty_layout.addWidget(self.input_qty_val)
-        qty_layout.addWidget(QLabel("주"))
+        qty_layout.addSpacing(5)
+        qty_layout.addWidget(QLabel("익"))
+        qty_layout.addWidget(self.input_qty_tp)
+        qty_layout.addWidget(QLabel("손"))
+        qty_layout.addWidget(self.input_qty_sl)
         strat_vbox.addLayout(qty_layout)
 
         # 2. Amount Mode (Green Border)
         amt_layout = QHBoxLayout()
         lbl_amt = QLabel("🟢 금액")
-        lbl_amt.setFixedWidth(50)
+        lbl_amt.setFixedWidth(40)
         self.input_amt_val = QLineEdit("100,000")
-        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 4px; font-weight: bold;")
+        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
+        self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
+        
         amt_layout.addWidget(lbl_amt)
         amt_layout.addWidget(self.input_amt_val)
-        amt_layout.addWidget(QLabel("원"))
+        amt_layout.addSpacing(5)
+        amt_layout.addWidget(QLabel("익"))
+        amt_layout.addWidget(self.input_amt_tp)
+        amt_layout.addWidget(QLabel("손"))
+        amt_layout.addWidget(self.input_amt_sl)
         strat_vbox.addLayout(amt_layout)
 
         # 3. Percent Mode (Blue Border)
         pct_layout = QHBoxLayout()
         lbl_pct = QLabel("🔵 비율")
-        lbl_pct.setFixedWidth(50)
+        lbl_pct.setFixedWidth(40)
         self.input_pct_val = QLineEdit("10")
-        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 4px; font-weight: bold;")
+        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold;")
+        self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
+        
         pct_layout.addWidget(lbl_pct)
         pct_layout.addWidget(self.input_pct_val)
-        pct_layout.addWidget(QLabel("%"))
+        pct_layout.addSpacing(5)
+        pct_layout.addWidget(QLabel("익"))
+        pct_layout.addWidget(self.input_pct_tp)
+        pct_layout.addWidget(QLabel("손"))
+        pct_layout.addWidget(self.input_pct_sl)
         strat_vbox.addLayout(pct_layout)
 
         strategy_group.setLayout(strat_vbox)
@@ -1211,6 +1242,18 @@ class KipoWindow(QMainWindow):
             self.input_amt_val.setText(amt_val)
             self.input_pct_val.setText(str(target.get('pct_val', '10')))
             
+            # [신규] 전략별 익절/손절 로드
+            st_data = target.get('strategy_tp_sl', {})
+            
+            def load_strategy_tpsl(key, tp_widget, sl_widget):
+                val = st_data.get(key, {})
+                tp_widget.setText(str(val.get('tp', '12.0')))
+                sl_widget.setText(str(val.get('sl', '-1.2')))
+            
+            load_strategy_tpsl('qty', self.input_qty_tp, self.input_qty_sl)
+            load_strategy_tpsl('amount', self.input_amt_tp, self.input_amt_sl)
+            load_strategy_tpsl('percent', self.input_pct_tp, self.input_pct_sl)
+
             # [수정] 시퀀스 버튼 로드 및 UI 반영 (전환 시에는 현재 상태 유지)
             if not keep_seq_auto:
                 is_seq = target.get('sequence_auto', False)
@@ -1302,6 +1345,11 @@ class KipoWindow(QMainWindow):
                 'qty_val': qty_val,
                 'amt_val': amt_val,
                 'pct_val': pct_val,
+                'strategy_tp_sl': {
+                    'qty': {'tp': float(self.input_qty_tp.text()), 'sl': float(self.input_qty_sl.text())},
+                    'amount': {'tp': float(self.input_amt_tp.text()), 'sl': float(self.input_amt_sl.text())},
+                    'percent': {'tp': float(self.input_pct_tp.text()), 'sl': float(self.input_pct_sl.text())}
+                },
                 'condition_strategies': cond_strategies,
                 'search_seq': selected_seq,
                 'sequence_auto': self.btn_seq_auto.isChecked() # [수정] 시퀀스 버튼 상태 저장

@@ -13,6 +13,18 @@ def chk_n_sell(token=None):
     # 손절 수익율(%)
     SL_RATE = cached_setting('stop_loss_rate', -10.0)
 
+    # [신규] 매핑 정보 사전 로드
+    mapping = {}
+    try:
+        base_path = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        mapping_file = os.path.join(base_path, 'LogData', 'stock_conditions.json')
+        if os.path.exists(mapping_file):
+            with open(mapping_file, 'r', encoding='utf-8') as f:
+                mapping = json.load(f)
+    except: pass
+
     try:
         my_stocks = get_my_stocks(token=token)
         if not my_stocks:
@@ -34,7 +46,18 @@ def chk_n_sell(token=None):
             except:
                 pl_rt = 0.0
 
-            if pl_rt > TP_RATE or pl_rt < SL_RATE:
+            # [신규] 종목별 개별 익절/손절 설정 적용
+            stk_cd = stock['stk_cd'].replace('A', '')
+            specific_tp = TP_RATE
+            specific_sl = SL_RATE
+            
+            # 매칭 정보 읽기
+            if mapping and stk_cd in mapping:
+                info = mapping[stk_cd]
+                if info.get('tp') is not None: specific_tp = float(info['tp'])
+                if info.get('sl') is not None: specific_sl = float(info['sl'])
+
+            if pl_rt > specific_tp or pl_rt < specific_sl:
                 # 매도 실행
                 sell_result = sell_stock(stock['stk_cd'].replace('A', ''), str(qty), token=token)
                 
@@ -67,8 +90,8 @@ def chk_n_sell(token=None):
                 except Exception as ex:
                     print(f"⚠️ 세션 매도 기록 실패: {ex}")
 
-                result_type = "익절" if pl_rt > TP_RATE else "손절"
-                result_emoji = "😃" if pl_rt > TP_RATE else "😰"
+                result_type = "익절" if pl_rt > specific_tp else "손절"
+                result_emoji = "😃" if pl_rt > specific_tp else "😰"
                 
                 # 수익률 소수점 2자리까지만 예쁘게 출력
                 message = f'{result_emoji} {stock["stk_nm"]} {qty}주 {result_type} 완료 (수익율: {pl_rt:.2f}%)'
@@ -76,21 +99,13 @@ def chk_n_sell(token=None):
                 
                 # [신규] 매수 전략 색상 연동 (빨강:1주, 초록:금액, 파랑:비율)
                 log_color = '#ffdf00' # 기본값 (금색)
+                # [수정] 이미 위에서 로드한 mapping 사용
                 try:
-                    # [수정] LogData 폴더 경로 사용
-                    base_path = os.path.dirname(os.path.abspath(__file__))
-                    if getattr(sys, 'frozen', False):
-                        base_path = os.path.dirname(sys.executable)
-                    
-                    mapping_file = os.path.join(base_path, 'LogData', 'stock_conditions.json')
-                    if os.path.exists(mapping_file):
-                        with open(mapping_file, 'r', encoding='utf-8') as f:
-                            mapping = json.load(f)
-                        stk_info = mapping.get(stock['stk_cd'].replace('A', ''))
-                        if stk_info:
-                            mode = stk_info.get('strat', 'qty')
-                            color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
-                            log_color = color_map.get(mode, '#ffdf00')
+                    stk_info = mapping.get(stk_cd)
+                    if stk_info:
+                        mode = stk_info.get('strat', 'qty')
+                        color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
+                        log_color = color_map.get(mode, '#ffdf00')
                 except: pass
 
                 # [신규] GUI 로그 컬러링 (전략별 색상 적용)

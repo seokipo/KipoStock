@@ -276,10 +276,16 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
                         with open(mapping_file, 'r', encoding='utf-8') as f:
                             mapping = json.load(f)
                     
-                    # [수정] 이름과 전략을 함께 저장
+                    # [수정] 이름, 전략, 그리고 개별 익절/손절 값을 함께 저장
+                    from get_setting import get_setting
+                    st_data = get_setting('strategy_tp_sl', {})
+                    specific_setting = st_data.get(mode, {})
+                    
                     mapping[stk_cd] = {
                         'name': seq_name,
-                        'strat': mode
+                        'strat': mode,
+                        'tp': specific_setting.get('tp'),
+                        'sl': specific_setting.get('sl')
                     }
                     with open(mapping_file, 'w', encoding='utf-8') as f:
                         json.dump(mapping, f, ensure_ascii=False, indent=2)
