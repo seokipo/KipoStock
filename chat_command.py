@@ -358,6 +358,9 @@ class ChatCommand:
                 processed_data.sort(key=lambda x: x['strat_nm'], reverse=is_reverse)
             elif sort_mode == 'sic':
                 processed_data.sort(key=lambda x: x['cond_name'], reverse=is_reverse)
+            elif sort_mode == 'son':
+                # [신규] 손익금 기준 정렬 (기본: 내림차순 - 수익 큰 순)
+                processed_data.sort(key=lambda x: x['pnl'], reverse=not is_reverse) 
             else:
                 processed_data.sort(key=lambda x: x['buy_time'], reverse=is_reverse)
 
@@ -543,6 +546,7 @@ class ChatCommand:
   - today : 시간순
   - today jun : 전략순 (매수전략)
   - today sic : 조건식순 (검색식명)
+  - today son : 손익순 (손익금액)
   - (팁: 뒤에 -를 붙이면 역순 출력, 예: today jun-)
 • tel today : 텔레그램으로 매매 요약 리포트 전송
 • clr : 로그 화면 초기화 (GUI 전용)

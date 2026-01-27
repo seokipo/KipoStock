@@ -1333,10 +1333,19 @@ class KipoWindow(QMainWindow):
             amt_val = self.input_amt_val.text()
             pct_val = self.input_pct_val.text()
             
-            # [수정] 성향별 대표값 변수 정의 (로그용)
-            q_tp = self.input_qty_tp.text(); q_sl = self.input_qty_sl.text()
-            a_tp = self.input_amt_tp.text(); a_sl = self.input_amt_sl.text()
-            p_tp = self.input_pct_tp.text(); p_sl = self.input_pct_sl.text()
+            # [수정] 성향별 대표값 변수 정의 및 자동 보정
+            # 익절(TP)은 양수, 손절(SL)은 음수로 강제 변환
+            def sanitize_tp(v): return abs(float(v))
+            def sanitize_sl(v): return -abs(float(v))
+
+            q_tp = f"{sanitize_tp(self.input_qty_tp.text())}"; q_sl = f"{sanitize_sl(self.input_qty_sl.text())}"
+            a_tp = f"{sanitize_tp(self.input_amt_tp.text())}"; a_sl = f"{sanitize_sl(self.input_amt_sl.text())}"
+            p_tp = f"{sanitize_tp(self.input_pct_tp.text())}"; p_sl = f"{sanitize_sl(self.input_pct_sl.text())}"
+
+            # UI에 보정된 값 즉시 반영
+            self.input_qty_tp.setText(q_tp); self.input_qty_sl.setText(q_sl)
+            self.input_amt_tp.setText(a_tp); self.input_amt_sl.setText(a_sl)
+            self.input_pct_tp.setText(p_tp); self.input_pct_sl.setText(p_sl)
 
             # 현재 설정을 딕셔너리로 구성
             current_data = {
@@ -1349,9 +1358,9 @@ class KipoWindow(QMainWindow):
                 'amt_val': amt_val,
                 'pct_val': pct_val,
                 'strategy_tp_sl': {
-                    'qty': {'tp': float(self.input_qty_tp.text()), 'sl': float(self.input_qty_sl.text())},
-                    'amount': {'tp': float(self.input_amt_tp.text()), 'sl': float(self.input_amt_sl.text())},
-                    'percent': {'tp': float(self.input_pct_tp.text()), 'sl': float(self.input_pct_sl.text())}
+                    'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
+                    'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
+                    'percent': {'tp': float(p_tp), 'sl': float(p_sl)}
                 },
                 'condition_strategies': cond_strategies,
                 'search_seq': selected_seq,
@@ -1388,14 +1397,14 @@ class KipoWindow(QMainWindow):
                     'amt_val': amt_val,
                     'pct_val': pct_val,
                     'strategy_tp_sl': {
-                        'qty': {'tp': float(self.input_qty_tp.text()), 'sl': float(self.input_qty_sl.text())},
-                        'amount': {'tp': float(self.input_amt_tp.text()), 'sl': float(self.input_amt_sl.text())},
-                        'percent': {'tp': float(self.input_pct_tp.text()), 'sl': float(self.input_pct_sl.text())}
+                        'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
+                        'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
+                        'percent': {'tp': float(p_tp), 'sl': float(p_sl)}
                     },
                     'condition_strategies': cond_strategies,
                     'search_seq': selected_seq,
-                    'take_profit_rate': float(self.input_qty_tp.text()),
-                    'stop_loss_rate': float(self.input_qty_sl.text()),
+                    'take_profit_rate': float(q_tp),
+                    'stop_loss_rate': float(q_sl),
                     'max_stocks': int(max_s),
                     'start_time': st,
                     'end_time': et
