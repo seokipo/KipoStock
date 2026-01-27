@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.3 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.4 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -492,27 +492,9 @@ class KipoWindow(QMainWindow):
         settings_layout.addWidget(cond_label)
         settings_layout.addLayout(self.cond_btn_layout)
 
-        # Profit, Loss & Max Stocks (Horizontal)
+        # Max Stocks (Horizontal)
         top_settings_layout = QHBoxLayout()
         
-        # Profit
-        top_settings_layout.addWidget(QLabel("익절"))
-        self.input_profit = QLineEdit()
-        self.input_profit.setFixedWidth(45)
-        self.input_profit.setStyleSheet("border: 2px solid #dc3545; border-radius: 4px; padding: 3px; font-weight: bold;")
-        top_settings_layout.addWidget(self.input_profit)
-        
-        top_settings_layout.addSpacing(5)
-        
-        # Loss
-        top_settings_layout.addWidget(QLabel("손절"))
-        self.input_loss = QLineEdit()
-        self.input_loss.setFixedWidth(45)
-        self.input_loss.setStyleSheet("border: 2px solid #007bff; border-radius: 4px; padding: 3px; font-weight: bold;")
-        top_settings_layout.addWidget(self.input_loss)
-
-        top_settings_layout.addSpacing(5)
-
         # Max Stocks (Shortened label for horizontal fit)
         top_settings_layout.addWidget(QLabel("종목수"))
         self.input_max = QLineEdit()
@@ -588,21 +570,35 @@ class KipoWindow(QMainWindow):
             sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 10px; color: #007bff;")
             return tp, sl
 
+        # Strategy UI Header
+        header_layout = QHBoxLayout()
+        header_layout.addSpacing(105) # "🔴 1주" + 값 입력칸 간격 고려
+        lbl_tp_hdr = QLabel("익절(%)")
+        lbl_tp_hdr.setFixedWidth(40)
+        lbl_tp_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_tp_hdr.setStyleSheet("color: #dc3545; font-size: 10px; font-weight: bold;")
+        lbl_sl_hdr = QLabel("손절(%)")
+        lbl_sl_hdr.setFixedWidth(40)
+        lbl_sl_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_sl_hdr.setStyleSheet("color: #007bff; font-size: 10px; font-weight: bold;")
+        header_layout.addWidget(lbl_tp_hdr)
+        header_layout.addWidget(lbl_sl_hdr)
+        strat_vbox.addLayout(header_layout)
+
         # 1. Qty Mode (Red Border)
         qty_layout = QHBoxLayout()
         lbl_qty = QLabel("🔴 1주")
         lbl_qty.setFixedWidth(40)
         self.input_qty_val = QLineEdit("1")
         self.input_qty_val.setReadOnly(True)
+        self.input_qty_val.setFixedWidth(50)
         self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; color: #555;")
         self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
         
         qty_layout.addWidget(lbl_qty)
         qty_layout.addWidget(self.input_qty_val)
-        qty_layout.addSpacing(5)
-        qty_layout.addWidget(QLabel("익"))
+        qty_layout.addStretch()
         qty_layout.addWidget(self.input_qty_tp)
-        qty_layout.addWidget(QLabel("손"))
         qty_layout.addWidget(self.input_qty_sl)
         strat_vbox.addLayout(qty_layout)
 
@@ -611,16 +607,15 @@ class KipoWindow(QMainWindow):
         lbl_amt = QLabel("🟢 금액")
         lbl_amt.setFixedWidth(40)
         self.input_amt_val = QLineEdit("100,000")
+        self.input_amt_val.setFixedWidth(70) # 너비 확장
         self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
         
         amt_layout.addWidget(lbl_amt)
         amt_layout.addWidget(self.input_amt_val)
-        amt_layout.addSpacing(5)
-        amt_layout.addWidget(QLabel("익"))
+        amt_layout.addStretch()
         amt_layout.addWidget(self.input_amt_tp)
-        amt_layout.addWidget(QLabel("손"))
         amt_layout.addWidget(self.input_amt_sl)
         strat_vbox.addLayout(amt_layout)
 
@@ -629,15 +624,14 @@ class KipoWindow(QMainWindow):
         lbl_pct = QLabel("🔵 비율")
         lbl_pct.setFixedWidth(40)
         self.input_pct_val = QLineEdit("10")
+        self.input_pct_val.setFixedWidth(50)
         self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
         
         pct_layout.addWidget(lbl_pct)
         pct_layout.addWidget(self.input_pct_val)
-        pct_layout.addSpacing(5)
-        pct_layout.addWidget(QLabel("익"))
+        pct_layout.addStretch()
         pct_layout.addWidget(self.input_pct_tp)
-        pct_layout.addWidget(QLabel("손"))
         pct_layout.addWidget(self.input_pct_sl)
         strat_vbox.addLayout(pct_layout)
 
@@ -1215,8 +1209,6 @@ class KipoWindow(QMainWindow):
                     return
                 self.append_log(f"📂 프로필 {profile_idx}번 설정을 불러왔습니다.")
 
-            self.input_profit.setText(str(target.get('take_profit_rate', '12.0')))
-            self.input_loss.setText(str(target.get('stop_loss_rate', '-1.2')))
             self.input_max.setText(str(target.get('max_stocks', '20')))
             
             # Condition Button Set
@@ -1292,9 +1284,6 @@ class KipoWindow(QMainWindow):
 
     def save_settings(self, profile_idx=None, show_limit_warning=True, restart_if_running=True, quiet=False):
         try:
-            # UI 값 읽기
-            tpr = self.input_profit.text()
-            slr = self.input_loss.text()
             max_s = self.input_max.text()
             st = self.input_start_time.text()
             et = self.input_end_time.text()
@@ -1337,8 +1326,8 @@ class KipoWindow(QMainWindow):
             
             # 현재 설정을 딕셔너리로 구성
             current_data = {
-                'take_profit_rate': float(tpr),
-                'stop_loss_rate': float(slr),
+                'take_profit_rate': float(self.input_qty_tp.text()), # 1주 전략값을 기본값으로 사용
+                'stop_loss_rate': float(self.input_qty_sl.text()),   # 1주 전략값을 기본값으로 사용
                 'max_stocks': int(max_s),
                 'start_time': st,
                 'end_time': et,
