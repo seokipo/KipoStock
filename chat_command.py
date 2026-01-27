@@ -315,32 +315,41 @@ class ChatCommand:
                             if v is not None and str(v).strip() != "": return v
                         return 0
 
+                    # [수정] 매칭 데이터 최우선 참조 (구조화된 데이터 지원)
+                    mapping_val = cond_mapping.get(code, "직접매매")
+                    cond_name = "직접매매"
+                    strat_key = "none"
+                    strat_nm = "--"
+                    found_buy_time = bt_data.get(code)
+                    
+                    if isinstance(mapping_val, dict):
+                        cond_name = mapping_val.get('name', "직접매매")
+                        strat_key = mapping_val.get('strat', 'none')
+                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율'}
+                        strat_nm = strat_map.get(strat_key, '--')
+                        # [신규] 매핑 데이터 내의 백업 시간 활용
+                        if not found_buy_time:
+                            found_buy_time = mapping_val.get('time')
+                    else:
+                        cond_name = str(mapping_val)
+                    
                     row = {
                         'code': code,
                         'name': item['stk_nm'],
-                        'buy_time': bt_data.get(code, '99:99:99'),
+                        'buy_time': found_buy_time if found_buy_time else '99:99:99',
                         'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc', 'buy_avg_price']))),
                         'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty', 'buy_q']))),
                         'buy_amt': int(float(val(['buy_amt', 'tot_buy_amt', 'buy_a']))),
                         'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric', 'sell_avg_price']))),
                         'sel_qty': int(float(val(['sell_qty', 'sel_qty', 'tot_sel_qty', 'sell_q']))),
-                        'sel_amt': int(float(val(['sell_amt', 'sel_amt', 'tot_sel_amt', 'sell_a']))),
+                        'sel_amt': int(float(val(['sel_amt', 'sel_amt', 'tot_sel_amt', 'sell_a']))),
                         'tax': int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax', 'tot_tax']))),
                         'pnl': int(float(val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl']))),
-                        'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate']))
+                        'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate'])),
+                        'cond_name': cond_name,
+                        'strat_key': strat_key,
+                        'strat_nm': strat_nm
                     }
-                    
-                    mapping_val = cond_mapping.get(code, "직접매매")
-                    if isinstance(mapping_val, dict):
-                        row['cond_name'] = mapping_val.get('name', "직접매매")
-                        row['strat_key'] = mapping_val.get('strat', 'none')
-                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율'}
-                        row['strat_nm'] = strat_map.get(row['strat_key'], '--')
-                    else:
-                        row['cond_name'] = mapping_val
-                        row['strat_key'] = 'none'
-                        row['strat_nm'] = '--'
-                    
                     processed_data.append(row)
                 except: continue
 

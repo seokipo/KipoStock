@@ -79,8 +79,7 @@ def get_stock_name_safe(code, token):
 # [신규] 매수 시간 로컬 저장 함수
 def save_buy_time(code):
     try:
-        # [수정] 경로 로직 개선 및 로그 추가
-        base_path = os.getcwd() # 현재 작업 디렉토리 기준 (run_command 시점)
+        # [수정] 경로 로직 통합 (ChatCommand와 동일하게)
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
@@ -88,32 +87,30 @@ def save_buy_time(code):
             
         data_dir = os.path.join(base_path, 'LogData')
         if not os.path.exists(data_dir):
-            try: os.makedirs(data_dir)
+            try: os.makedirs(data_dir, exist_ok=True)
             except: pass
             
         json_path = os.path.join(data_dir, 'daily_buy_times.json')
-        # print(f"💾 매수 시간 저장 시도: {json_path}")
         
         data = {}
         if os.path.exists(json_path):
             try:
                 with open(json_path, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-            except: pass
+            except: data = {}
             
-        # 날짜가 바뀌었으면 초기화
+        # 날짜 확인 및 초기화
         today_str = datetime.now().strftime("%Y%m%d")
         if data.get('last_update_date') != today_str:
             data = {'last_update_date': today_str}
             
-        # 해당 종목 기록이 없을 때만 저장 (최초 매수 시간)
         code = code.replace('A', '')
+        # [수정] 해당 종목 기록이 없을 때만 저장 (최초 매수 시간)
         if code not in data:
             current_time = datetime.now().strftime("%H:%M:%S")
             data[code] = current_time
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
-            # print(f"✅ [DEBUG] 매수 시간 기록 완료: {code} -> {current_time} (경로: {json_path})")
             
     except Exception as e:
         print(f"⚠️ [DEBUG] 매수 시간 저장 실패: {e}")
@@ -262,19 +259,24 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             # [신규] 종목별 검색 조건명 및 전략 저장 (당일매매일지용 색상 구분)
             if seq_name:
                 try:
-                    # [수정] LogData 폴더 경로 사용
-                    base_path = os.path.dirname(os.path.abspath(__file__))
+                    # [수정] 경로 로직 통합 (ChatCommand와 동일하게)
                     if getattr(sys, 'frozen', False):
                         base_path = os.path.dirname(sys.executable)
+                    else:
+                        base_path = os.path.dirname(os.path.abspath(__file__))
                     
                     data_dir = os.path.join(base_path, 'LogData')
-                    if not os.path.exists(data_dir): os.makedirs(data_dir, exist_ok=True)
+                    if not os.path.exists(data_dir):
+                        try: os.makedirs(data_dir, exist_ok=True)
+                        except: pass
                     
                     mapping_file = os.path.join(data_dir, 'stock_conditions.json')
                     mapping = {}
                     if os.path.exists(mapping_file):
-                        with open(mapping_file, 'r', encoding='utf-8') as f:
-                            mapping = json.load(f)
+                        try:
+                            with open(mapping_file, 'r', encoding='utf-8') as f:
+                                mapping = json.load(f)
+                        except: mapping = {}
                     
                     # [수정] 이름, 전략, 그리고 개별 익절/손절 값을 함께 저장
                     from get_setting import get_setting
@@ -285,7 +287,8 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
                         'name': seq_name,
                         'strat': mode,
                         'tp': specific_setting.get('tp'),
-                        'sl': specific_setting.get('sl')
+                        'sl': specific_setting.get('sl'),
+                        'time': datetime.now().strftime("%H:%M:%S") # 백업용 시간
                     }
                     with open(mapping_file, 'w', encoding='utf-8') as f:
                         json.dump(mapping, f, ensure_ascii=False, indent=2)

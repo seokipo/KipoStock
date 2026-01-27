@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.6 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.7 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -594,13 +594,13 @@ class KipoWindow(QMainWindow):
         # 1. Qty Mode (Red Border)
         qty_layout = QHBoxLayout()
         lbl_qty = QLabel("🔴 1주")
-        lbl_qty.setFixedWidth(35)
+        lbl_qty.setFixedWidth(45) # [수정] 텍스트 잘림 방지 (35->45)
         self.input_qty_val = QLineEdit("1")
         self.input_qty_val.setReadOnly(True)
-        self.input_qty_val.setFixedWidth(60) # 너비 확장
+        self.input_qty_val.setFixedWidth(60)
         self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; color: #555;")
         self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
-        self.input_qty_tp.setFixedWidth(40); self.input_qty_sl.setFixedWidth(40) # 입력필드 소폭 확대
+        self.input_qty_tp.setFixedWidth(40); self.input_qty_sl.setFixedWidth(40)
         
         qty_layout.addWidget(lbl_qty)
         qty_layout.addWidget(self.input_qty_val)
@@ -612,9 +612,9 @@ class KipoWindow(QMainWindow):
         # 2. Amount Mode (Green Border)
         amt_layout = QHBoxLayout()
         lbl_amt = QLabel("🟢 금액")
-        lbl_amt.setFixedWidth(35)
+        lbl_amt.setFixedWidth(45) # [수정] 45px로 확장
         self.input_amt_val = QLineEdit("100,000")
-        self.input_amt_val.setFixedWidth(85) # 너비 더 확장
+        self.input_amt_val.setFixedWidth(90) # [수정] 너비 더 확장 (85->90)
         self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
@@ -630,9 +630,9 @@ class KipoWindow(QMainWindow):
         # 3. Percent Mode (Blue Border)
         pct_layout = QHBoxLayout()
         lbl_pct = QLabel("🔵 비율")
-        lbl_pct.setFixedWidth(35)
+        lbl_pct.setFixedWidth(45) # [수정] 45px로 확장
         self.input_pct_val = QLineEdit("10")
-        self.input_pct_val.setFixedWidth(60) # 너비 확장
+        self.input_pct_val.setFixedWidth(60)
         self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
         self.input_pct_tp.setFixedWidth(40); self.input_pct_sl.setFixedWidth(40)
@@ -1373,10 +1373,12 @@ class KipoWindow(QMainWindow):
 
                 if not quiet:
                     self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
-                    # [수정] 성향별 대표값 출력 (1주 기준)
-                    tp_val = self.input_qty_tp.text()
-                    sl_val = self.input_qty_sl.text()
-                    summary = f"📋 [저장] 익:{tp_val}% | 손:{sl_val}% | 종목수:{max_s} | 시간:{st}~{et}"
+                    # [수정] 모든 전략값 로그 출력
+                    q_tp = self.input_qty_tp.text(); q_sl = self.input_qty_sl.text()
+                    a_tp = self.input_amt_tp.text(); a_sl = self.input_amt_sl.text()
+                    p_tp = self.input_pct_tp.text(); p_sl = self.input_pct_sl.text()
+                    
+                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
             else:
                 # [수정] 레이스 컨디션 방지를 위해 일괄 업데이트(update_settings) 사용
