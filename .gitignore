@@ -1,5 +1,6 @@
 # Secrets
 config.py
+settings.json
 
 # Python 관련
 __pycache__/

@@ -79,6 +79,17 @@ class AsyncWorker(QThread):
         self.chat_command.on_request_log_file = lambda: self.signals.request_log_signal.emit()
         self.chat_command.on_auto_sequence = lambda idx: self.signals.auto_seq_signal.emit(idx)
         self.chat_command.on_condition_loaded = lambda: self.signals.condition_loaded_signal.emit()
+        self.chat_command.on_start = lambda: self.signals.status_signal.emit("RUNNING")
+        
+        # [신규] 외부(텔레그램, 명령창)에서 시작/중지 요청 시 GUI 신호로 전달
+        self.chat_command.on_start_request = lambda: self.signals.log_signal.emit("🤖 외부 시작 명령 수신") or self.schedule_command('start')
+        self.chat_command.on_stop_request = lambda: self.signals.log_signal.emit("🤖 외부 중지 명령 수신") or self.schedule_command('stop')
+        
+        def on_stop_cb():
+            self.pending_start = False # [신규] 명령어로 중지 시에도 예약 상태 해제
+            self.signals.status_signal.emit("READY")
+            
+        self.chat_command.on_stop = on_stop_cb
         self.chat_command.rt_search.on_connection_closed = self._on_connection_closed_wrapper
         
         self.loop.run_until_complete(self.main_loop())
@@ -243,6 +254,8 @@ class AsyncWorker(QThread):
             elif cmd_type == 'stop':
                 self.pending_start = False # 예약 취소
                 await self.chat_command.stop(True)
+                # chat_command.stop 내부에서 on_stop() 콜백을 부르면 여기서 READY로 바뀜
+                # 혹시 모를 누락 방지를 위해 강제 emit 추가 (중복되더라도 안전)
                 self.signals.status_signal.emit("READY")
             elif cmd_type == 'report':
                 await self.chat_command.report()
@@ -303,7 +316,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.9 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.5.2 (Final Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -467,18 +480,21 @@ class KipoWindow(QMainWindow):
         
         # 1. Settings Group
         settings_group = QGroupBox("⚙️ Settings")
+        # [수정] 타이틀 폰트 크기 확대 (13px -> 15px) 및 스타일 강화
+        settings_group.setStyleSheet("QGroupBox::title { font-size: 15px; font-weight: bold; color: #333; subcontrol-origin: margin; left: 10px; }")
         settings_layout = QVBoxLayout()
         settings_layout.setSpacing(12)
 
         # Condition Select (0-19) & Max Stocks
         cond_row_layout = QHBoxLayout()
-        cond_label = QLabel("조건식 선택 (0-19)")
+        # [수정] 라벨 볼드 처리
+        cond_label = QLabel("<b>조건식 선택 (0-19)</b>")
         cond_row_layout.addWidget(cond_label)
         
         cond_row_layout.addStretch()
         
-        # [이동] 종목수 (Max Stocks)
-        cond_row_layout.addWidget(QLabel("종목수"))
+        # [이동] 종목수 (Max Stocks) / [수정] 라벨 볼드 처리
+        cond_row_layout.addWidget(QLabel("<b>종목수</b>"))
         self.input_max = QLineEdit()
         self.input_max.setFixedWidth(35)
         self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -510,19 +526,25 @@ class KipoWindow(QMainWindow):
         time_layout = QHBoxLayout()
         
         # Start
-        time_layout.addWidget(QLabel("시작"))
+        # [수정] 라벨 볼드 처리
+        time_layout.addWidget(QLabel("<b>시작</b>"))
         self.input_start_time = QLineEdit()
-        self.input_start_time.setFixedWidth(50)
+        self.input_start_time.setFixedWidth(60) # [수정] 너비 확장 (50 -> 60)
         self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # [수정] 폰트 크기 확대 (15px) 및 볼드
+        self.input_start_time.setStyleSheet("border: 1px solid #ccc; border-radius: 4px; font-weight: bold; font-size: 15px; padding: 1px;")
         time_layout.addWidget(self.input_start_time)
         
         time_layout.addSpacing(5)
         
         # End
-        time_layout.addWidget(QLabel("종료"))
+        # [수정] 라벨 볼드 처리
+        time_layout.addWidget(QLabel("<b>종료</b>"))
         self.input_end_time = QLineEdit()
-        self.input_end_time.setFixedWidth(50)
+        self.input_end_time.setFixedWidth(60) # [수정] 너비 확장 (50 -> 60)
         self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        # [수정] 폰트 크기 확대 (15px) 및 볼드
+        self.input_end_time.setStyleSheet("border: 1px solid #ccc; border-radius: 4px; font-weight: bold; font-size: 15px; padding: 1px;")
         time_layout.addWidget(self.input_end_time)
         
         # 🔔 알람 해제 버튼
@@ -553,7 +575,8 @@ class KipoWindow(QMainWindow):
 
         # 💎 Buying Strategy Group (Revised for Color Matching)
         strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
-        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 5px; padding: 5px; font-weight: bold; }")
+        # [수정] 타이틀 폰트 크기 확대 (기존 대비 키움) 및 패딩 조정
+        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 5px; padding: 5px; font-weight: bold; } QGroupBox::title { font-size: 14px; font-weight: bold; color: #000; }")
         strat_vbox = QVBoxLayout()
         strat_vbox.setContentsMargins(5, 10, 5, 5) # [수정] 좌측 여백 축소
         strat_vbox.setSpacing(6)
@@ -561,14 +584,16 @@ class KipoWindow(QMainWindow):
         # Helper function to create TP/SL inputs
         def create_tpsl_inputs(color):
             tp = QLineEdit("12.0")
-            tp.setFixedWidth(35)
+            tp.setFixedWidth(45) # [수정] 너비 확장 (35 -> 45)
             tp.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            tp.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 10px; color: #dc3545;")
+            # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
+            tp.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #dc3545; padding: 1px;")
             
             sl = QLineEdit("-1.2")
-            sl.setFixedWidth(35)
+            sl.setFixedWidth(45) # [수정] 너비 확장 (35 -> 45)
             sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 10px; color: #007bff;")
+            # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
+            sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #007bff; padding: 1px;")
             return tp, sl
 
         # Strategy UI Header
@@ -598,9 +623,9 @@ class KipoWindow(QMainWindow):
         self.input_qty_val = QLineEdit("1")
         self.input_qty_val.setReadOnly(True)
         self.input_qty_val.setFixedWidth(60)
-        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; color: #555;")
+        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #555;")
         self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
-        self.input_qty_tp.setFixedWidth(40); self.input_qty_sl.setFixedWidth(40)
+        self.input_qty_tp.setFixedWidth(45); self.input_qty_sl.setFixedWidth(45)
         
         qty_layout.addWidget(lbl_qty)
         qty_layout.addWidget(self.input_qty_val)
@@ -615,10 +640,10 @@ class KipoWindow(QMainWindow):
         lbl_amt.setFixedWidth(45) # [수정] 45px로 확장
         self.input_amt_val = QLineEdit("100,000")
         self.input_amt_val.setFixedWidth(90) # [수정] 너비 더 확장 (85->90)
-        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold;")
+        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
-        self.input_amt_tp.setFixedWidth(40); self.input_amt_sl.setFixedWidth(40)
+        self.input_amt_tp.setFixedWidth(45); self.input_amt_sl.setFixedWidth(45)
         
         amt_layout.addWidget(lbl_amt)
         amt_layout.addWidget(self.input_amt_val)
@@ -633,9 +658,9 @@ class KipoWindow(QMainWindow):
         lbl_pct.setFixedWidth(45) # [수정] 45px로 확장
         self.input_pct_val = QLineEdit("10")
         self.input_pct_val.setFixedWidth(60)
-        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold;")
+        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
         self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
-        self.input_pct_tp.setFixedWidth(40); self.input_pct_sl.setFixedWidth(40)
+        self.input_pct_tp.setFixedWidth(45); self.input_pct_sl.setFixedWidth(45)
         
         pct_layout.addWidget(lbl_pct)
         pct_layout.addWidget(self.input_pct_val)
@@ -725,10 +750,7 @@ class KipoWindow(QMainWindow):
         
         self.btn_stop = QPushButton("⏹ STOP")
         self.btn_stop.setStyleSheet("background-color: #dc3545; height: 35px; font-size: 14px;")
-        def on_stop():
-            self.animate_button_click(self.btn_stop)
-            self.worker.schedule_command('stop')
-        self.btn_stop.clicked.connect(on_stop)
+        self.btn_stop.clicked.connect(self.on_stop_clicked)
         
         self.btn_report = QPushButton("📊 REPORT")
         self.btn_report.setStyleSheet("background-color: #17a2b8; height: 35px; font-size: 14px;")
@@ -802,6 +824,13 @@ class KipoWindow(QMainWindow):
         # 2. 시작 명령 전달 (target_profile을 인자로 전달하여 엔진 가동 후 출력되게 함)
         QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile))
 
+    def on_stop_clicked(self):
+        """STOP 버튼 클릭 핸들러 (메서드로 분리)"""
+        self.animate_button_click(self.btn_stop)
+        self.worker.schedule_command('stop')
+        # [신규] 중지 시 UI 잠금 공식 다시 계산 (READY 상태가 될 것이므로)
+        QTimer.singleShot(500, lambda: self.lock_ui_for_sequence(self.btn_seq_auto.isChecked()))
+
     def setup_worker(self):
         self.worker = AsyncWorker(self)
         self.worker.signals.log_signal.connect(self.append_log)
@@ -814,6 +843,7 @@ class KipoWindow(QMainWindow):
 
     def on_remote_auto_sequence(self, idx):
         """원격 명령어(auto) 수신 시 특정 프로필부터 시퀀스 시작 또는 중지"""
+        # [수정] 끄는 명령(idx=0)인 경우는 매매 중이라도 허용
         if idx == 0:
             self.append_log("🤖 원격 명령어 수신: 시퀀스 자동 모드를 중지합니다.")
             if self.btn_seq_auto.isChecked():
@@ -821,15 +851,23 @@ class KipoWindow(QMainWindow):
                 self.on_seq_auto_toggled()
             return
 
+        # [신규] 매매 진행 중(RUNNING)일 때 켜는 명령(idx>=1)은 거부
+        current_status = self.lbl_status.text()
+        if "RUNNING" in current_status:
+            self.log_and_tel("⚠️ 매매 진행 중(RUNNING)에는 자동 시퀀스를 시작할 수 없습니다. 중지(STOP) 후 다시 시도하세요.")
+            return
+
         if not (1 <= idx <= 3):
             self.append_log(f"⚠️ 올바르지 않은 프로필 번호입니다: {idx}")
             return
 
         self.append_log(f"🤖 원격 명령어 수신: {idx}번 프로필부터 시퀀스를 시작합니다.")
-        self.on_profile_clicked(idx)
+        # [수정] 버튼 상태를 먼저 변경하고 토글 이벤트를 발생시켜야 on_profile_clicked에서 자동 시작이 작동함
         if not self.btn_seq_auto.isChecked():
             self.btn_seq_auto.setChecked(True)
-        self.on_seq_auto_toggled()
+            self.on_seq_auto_toggled()
+            
+        self.on_profile_clicked(idx)
 
     def update_status_ui(self, status):
         if status == "RUNNING":
@@ -847,6 +885,9 @@ class KipoWindow(QMainWindow):
             self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
             self.btn_start.setEnabled(True)
             self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        
+        # [신규] 상태 변경 시 UI 잠금 상태 동적 업데이트 (READY 시 잠금 해제 목적)
+        self.lock_ui_for_sequence(self.btn_seq_auto.isChecked())
 
     def show_timed_message(self, title, text, timeout=2000):
         """2초(기본값) 후 자동으로 사라지는 플로팅 오버레이 알림"""
@@ -989,6 +1030,12 @@ class KipoWindow(QMainWindow):
             elif cmd.lower() == 'clr':
                 self.log_text.clear()
                 self.append_log("🧹 로그가 초기화되었습니다.")
+            elif cmd.lower() == 'start':
+                # [신규] 타이핑 명령도 GUI 버튼과 동일한 로직(애니메이션 등) 수행
+                self.on_start_clicked()
+            elif cmd.lower() == 'stop':
+                # [신규] 타이핑 명령도 GUI 버튼과 동일한 로직(애니메이션 등) 수행
+                self.on_stop_clicked()
             else:
                 self.worker.schedule_command('custom', cmd)
             self.cmd_input.clear()
@@ -1425,6 +1472,16 @@ class KipoWindow(QMainWindow):
                 # [수정] 엔진 재시작 여부 제어 (조건식 단순 변경 시에는 재시작 안 함)
                 if restart_if_running and "RUNNING" in self.lbl_status.text():
                     self.worker.schedule_command('start')
+                    self.on_start_clicked() # UI 동기화
+                elif "READY" in self.lbl_status.text() and not restart_if_running:
+                    # If engine is READY and not restarting, but settings changed,
+                    # ensure UI reflects the new state without starting the engine.
+                    # This might be a no-op for UI sync if no start/stop is involved.
+                    pass
+                elif "STOPPED" in self.lbl_status.text() and not restart_if_running:
+                    # If engine is STOPPED and not restarting, ensure UI reflects new state.
+                    # This might be a no-op for UI sync if no start/stop is involved.
+                    pass
                 
                 if not quiet:
                     self.append_log("💾 기본 설정이 저장되었습니다.")
@@ -1457,8 +1514,9 @@ class KipoWindow(QMainWindow):
             # [수정] 시퀀스 자동 모드 조건 강화 (기존에 이미 켜져 있었을 때만 로드 후 자동 시작)
             # 로드된 설정(target)에 의해 켜지는 경우에는 바로 시작하지 않음 (사용자 확인 용도)
             if is_seq_before_load and self.btn_seq_auto.isChecked():
-                self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 시작합니다.")
-                QTimer.singleShot(1000, self.on_start_clicked)
+                self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 재기동합니다.")
+                # [수정] 이미 실행 중일 수도 있으므로 force=True로 재시작 강제 (원격에서 온 경우 이미 READY 체크됨)
+                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True))
 
     # [미씽 메서드 복구] 저장 모드 종료
     def stop_save_mode(self):
@@ -1519,6 +1577,13 @@ class KipoWindow(QMainWindow):
         is_on = self.btn_seq_auto.isChecked()
         
         if is_on:
+            # [신규] 매매 진행 중(RUNNING)일 때는 시퀀스 켜기 차단
+            current_status = self.lbl_status.text()
+            if "RUNNING" in current_status:
+                self.log_and_tel("⚠️ 매매 진행 중(RUNNING)에는 자동 시퀀스를 시작할 수 없습니다. 중지(STOP) 후 다시 시도하세요.")
+                self.btn_seq_auto.setChecked(False) # 다시 끔
+                return
+            
             # [신규] 장외 시간 및 예약 시간 체크
             now = datetime.datetime.now()
             
@@ -1549,6 +1614,11 @@ class KipoWindow(QMainWindow):
             # 4. 정규 장 시간 (정상 작동)
             self.seq_blink_timer.start()
             self.append_log("🔄 시퀀스 자동 모드 ON: 종료 시간 도달 시 다음 프로필로 전환합니다.")
+            
+            # [신규] READY 상태에서 시퀀스를 켰다면 엔진도 함께 자동 시작
+            if "READY" in self.lbl_status.text():
+                self.log_and_tel("🚀 시퀀스 모드 활성화: 엔진을 자동으로 시작합니다.")
+                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True))
             
             # [신규] 현재 이후의 시퀀스 정보 출력
             try:
@@ -1630,35 +1700,40 @@ class KipoWindow(QMainWindow):
 
     def lock_ui_for_sequence(self, locked):
         """시퀀스 자동 모드 활성화 시 오조작 방지를 위해 UI 잠금"""
-        # ... (생략) ...
-        # [수정] READY 상태일 때는 START 버튼을 잠그지 않음 (사용자가 시작할 수 있도록)
-        is_ready = "READY" in self.lbl_status.text()
+        # [수정] READY 상태일 때는 시퀀스가 켜져 있어도 잠그지 않음 (사용자가 수정 가능하게)
+        # 단, 장전 예약 시간(08:00~09:00)에는 수정을 막기 위해 WAITING 상태도 고려
+        current_status = self.lbl_status.text()
+        is_ready = "READY" in current_status
         
-        # 입력 필드 및 버튼 잠금
-        self.input_profit.setEnabled(not locked)
-        self.input_loss.setEnabled(not locked)
-        self.input_max.setEnabled(not locked)
-        self.input_start_time.setEnabled(not locked)
-        self.input_end_time.setEnabled(not locked)
-        self.input_qty_val.setEnabled(not locked)
-        self.input_amt_val.setEnabled(not locked)
-        self.input_pct_val.setEnabled(not locked)
+        # 진짜 잠글지 결정: 시퀀스가 On이고, READY 상태가 아닐 때만 잠금
+        effective_lock = locked and not is_ready
         
-        for btn in self.cond_buttons: btn.setEnabled(not locked)
-        for btn in self.profile_buttons: btn.setEnabled(not locked)
-        self.btn_save.setEnabled(not locked)
+        # 입력 필드 및 버튼 잠금 (신규 필드 반영)
+        self.input_qty_tp.setEnabled(not effective_lock)
+        self.input_qty_sl.setEnabled(not effective_lock)
+        self.input_amt_tp.setEnabled(not effective_lock)
+        self.input_amt_sl.setEnabled(not effective_lock)
+        self.input_pct_tp.setEnabled(not effective_lock)
+        self.input_pct_sl.setEnabled(not effective_lock)
+        self.input_max.setEnabled(not effective_lock)
+        self.input_start_time.setEnabled(not effective_lock)
+        self.input_end_time.setEnabled(not effective_lock)
+        self.input_qty_val.setEnabled(not effective_lock)
+        self.input_amt_val.setEnabled(not effective_lock)
+        self.input_pct_val.setEnabled(not effective_lock)
         
-        # START 버튼은 READY 상태면 잠그지 않음
-        self.btn_start.setEnabled(not locked or is_ready)
-        self.btn_stop.setEnabled(not locked) 
+        for btn in self.cond_buttons: btn.setEnabled(not effective_lock)
+        for btn in self.profile_buttons: btn.setEnabled(not effective_lock)
+        self.btn_save.setEnabled(not effective_lock)
         
-        if locked:
-            self.append_log("🔒 UI 잠금: 시퀀스 작동 중에는 설정을 변경할 수 없습니다.")
-        else:
-            self.append_log("🔓 UI 잠금 해제: 설정을 변경할 수 있습니다.")
-            # [수정] 잠금 해제 시 현재 상태(RUNNING/READY)에 맞춰 버튼 활성화 상태 복구
-            current_status = self.lbl_status.text().replace("● ", "").strip()
-            self.update_status_ui(current_status)
+        # START 버튼은 READY 상태면 항상 활성화 (시작 가능하게)
+        self.btn_start.setEnabled(not effective_lock or is_ready)
+        self.btn_stop.setEnabled(not effective_lock or not is_ready) 
+        
+        if effective_lock:
+            self.append_log("🔒 UI 잠구기: 시퀀스 작동 중에는 설정을 변경할 수 없습니다.")
+        elif locked and is_ready:
+            self.append_log("🔓 UI 대기: 시퀀스 대기 중에는 설정을 변경할 수 있습니다.")
 
     def blink_seq_button(self):
         """시퀀스 버튼 점멸 효과 (1초 단위)"""

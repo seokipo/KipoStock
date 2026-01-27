@@ -38,7 +38,9 @@ class ChatCommand:
             # 파이썬 실행 시
             self.script_dir = os.path.dirname(os.path.abspath(__file__))
             
-        self.settings_path = os.path.join(self.script_dir, 'settings.json')
+        self.settings_file = os.path.join(self.script_dir, 'settings.json')
+        self.stock_conditions_file = os.path.join(self.script_dir, 'stock_conditions.json')
+        self.config_file = os.path.join(self.script_dir, 'config.py')
         self.data_dir = os.path.join(self.script_dir, 'LogData')
         if not os.path.exists(self.data_dir):
             try: os.makedirs(self.data_dir)
@@ -48,10 +50,18 @@ class ChatCommand:
         self.account_sync_task = None
         self.token = None
         self.is_starting = False # [신규] 중복 시작(R10001) 방지용 플래그
+        
+        # [신규] 원격/명령어 인터페이스를 위한 콜백
         self.on_clear_logs = None # [신규] GUI 로그 초기화 콜백
         self.on_request_log_file = None # [신규] 로그 파일 저장 요청 콜백
         self.on_auto_sequence = None # [신규] 시퀀스 자동 시작 콜백
         self.on_condition_loaded = None # [신규] 목록 로드 완료 콜백
+        self.on_start = None # [신규] 엔진 시작 성공 콜백
+        self.on_stop = None # [신규] 엔진 정지 콜백
+        
+        # [신규] 시작/중지 요청 콜백 (GUI를 거쳐 실행되도록)
+        self.on_start_request = None
+        self.on_stop_request = None
         
         # [신규] rt_search의 콜백을 wrapper로 연결
         self.rt_search.on_condition_loaded = self._on_condition_loaded_wrapper
@@ -146,12 +156,14 @@ class ChatCommand:
             token = self.get_token()
             if not token:
                 log_and_tel("❌ 토큰 발급 실패")
+                self.is_starting = False # Ensure flag is reset on failure
                 return False
             
             self.update_setting('auto_start', True)
             if not MarketHour.is_market_open_time():
                 now_str = datetime.now().strftime('%H:%M:%S')
                 print(f"⚠️ [거부] 장외 시간입니다. 시간을 다시 설정하세요. (현재: {now_str})")
+                self.is_starting = False # Ensure flag is reset on failure
                 return False
             
             loop = asyncio.get_event_loop()
@@ -171,11 +183,12 @@ class ChatCommand:
             if success:
                 self.check_n_sell_task = asyncio.create_task(self._check_n_sell_loop())
                 self.account_sync_task = asyncio.create_task(self._account_sync_loop())
-                log_and_tel("🚀 초고속 엔진 가동! 감시 시작.")
-                if profile_info:
-                    log_and_tel(f"🚀 {profile_info}로 감시를 시작합니다.")
+                log_and_tel(f"🚀 실시간 감시 엔진 {profile_info if profile_info else '기본'} 모드 시작 완료")
+                if self.on_start: self.on_start() # [신규] GUI 상태 동기화
                 return True
-            return False
+            else:
+                self.is_starting = False # Ensure flag is reset on failure
+                return False
         except Exception as e:
             log_and_tel(f"❌ start 오류: {e}")
             return False
@@ -189,20 +202,27 @@ class ChatCommand:
                 self.update_setting('auto_start', False)
             await self._cancel_tasks()
             await self.rt_search.stop()
-            if not quiet: log_and_tel("✅ 시스템 중지됨")
+            if not quiet:
+                log_and_tel("⏹ 실시간 감시 엔진이 정지되었습니다.")
+                if self.on_stop: self.on_stop() # [신규] GUI 상태 동기화
             return True
         except Exception as e:
             if not quiet: log_and_tel(f"❌ stop 오류: {e}")
             return False
 
     async def _cancel_tasks(self):
-        """실행 중인 태스크 취소"""
-        tasks = [self.check_n_sell_task, self.account_sync_task]
-        for task in tasks:
+        """실행 중인 태스크 취소 및 대기"""
+        tasks = [('매도', self.check_n_sell_task), ('계좌', self.account_sync_task)]
+        for name, task in tasks:
             if task and not task.done():
                 task.cancel()
-                try: await task
-                except asyncio.CancelledError: pass
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    print(f"⚠️ {name} 태스크 종료 중 에러: {e}")
+        
         self.check_n_sell_task = None
         self.account_sync_task = None
 
@@ -335,15 +355,15 @@ class ChatCommand:
                     
                     row = {
                         'code': code,
-                        'name': item['stk_nm'],
+                        'name': item.get('stk_nm', '--'),
                         'buy_time': found_buy_time if found_buy_time else '99:99:99',
-                        'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc', 'buy_avg_price']))),
-                        'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty', 'buy_q']))),
-                        'buy_amt': int(float(val(['buy_amt', 'tot_buy_amt', 'buy_a']))),
-                        'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric', 'sell_avg_price']))),
-                        'sel_qty': int(float(val(['sell_qty', 'sel_qty', 'tot_sel_qty', 'sell_q']))),
-                        'sel_amt': int(float(val(['sel_amt', 'sel_amt', 'tot_sel_amt', 'sell_a']))),
-                        'tax': int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax', 'tot_tax']))),
+                        'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc']))),
+                        'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty']))),
+                        'buy_amt': int(float(val(['buy_amt', 'tot_buy_amt']))),
+                        'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric']))),
+                        'sel_qty': int(float(val(['sell_qty', 'tot_sel_qty', 'sel_qty']))),
+                        'sel_amt': int(float(val(['sell_amt', 'tot_sel_amt', 'sel_amt']))),
+                        'tax': int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax']))),
                         'pnl': int(float(val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl']))),
                         'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate'])),
                         'cond_name': cond_name,
@@ -369,7 +389,8 @@ class ChatCommand:
             total_tax = sum(r['tax'] for r in processed_data)
             total_pnl = sum(r['pnl'] for r in processed_data)
             count = len(processed_data)
-            avg_pnl_rt = (total_pnl / total_b_amt * 100) if total_b_amt > 0 else 0
+            # [수정] 음수 매수금액이 합산될 경우를 대비해 abs() 사용 및 0 체크 강화
+            avg_pnl_rt = (total_pnl / abs(total_b_amt) * 100) if abs(total_b_amt) > 100 else 0
 
             if summary_only:
                 summary_msg = "<b>📝 [ 당일 매매 요약 리포트 ]</b>\n"
@@ -521,15 +542,18 @@ class ChatCommand:
     def update_settings_batch(self, updates_dict):
         """여러 설정을 한 번에 안전하게 업데이트 (레이스 컨디션 방지)"""
         try:
+            # 1. 파일에서 현재 설정 읽기
             settings = {}
-            if os.path.exists(self.settings_path):
-                with open(self.settings_path, 'r', encoding='utf-8') as f:
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
             
+            # 2. 모든 요청된 필드 업데이트
             settings.update(updates_dict)
-            
-            with open(self.settings_path, 'w', encoding='utf-8') as f:
-                json.dump(settings, f, ensure_ascii=False, indent=2)
+                
+            # 3. 파일에 다시 쓰기
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(settings, f, indent=4, ensure_ascii=False)
             return True
         except Exception as e:
             print(f"❌ 설정 저장 실패: {e}")
@@ -558,8 +582,12 @@ class ChatCommand:
         cmd_full = text.strip()
         cmd = cmd_full.lower()
         
-        if cmd == 'start': await self.start()
-        elif cmd == 'stop': await self.stop(True)
+        if cmd == 'start':
+            if self.on_start_request: self.on_start_request()
+            else: await self.start()
+        elif cmd == 'stop':
+            if self.on_stop_request: self.on_stop_request()
+            else: await self.stop(True)
         elif cmd in ['report', 'r']: await self.report()
         elif cmd.startswith('auto'):
             parts = cmd_full.split()

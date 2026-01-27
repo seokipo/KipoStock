@@ -93,6 +93,14 @@ def fn_ka10077(token, stk_cd="", cont_yn='N', next_key='', session=None):
         return {'list': [], 'total': "0", 'next-key': '', 'cont-yn': 'N'}
 
 if __name__ == '__main__':
-    # 테스트용 데이터
-    res = fn_ka10077(get_token(), stk_cd="")
-    print(json.dumps(res, indent=4, ensure_ascii=False))
+    print("🚀 Starting acc_diary debug test...")
+    token = get_token()
+    print(f"Token: {token[:10]}...")
+    res = fn_ka10170(token)
+    print("\n--- TOTAL SECTION ---")
+    print(json.dumps(res.get('total', {}), indent=4, ensure_ascii=False))
+    print("\n--- LIST SECTION (Length: {}) ---".format(len(res.get('list', []))))
+    for i, item in enumerate(res.get('list', [])[:5]):
+        print(f"\nItem {i}:")
+        print(json.dumps(item, indent=4, ensure_ascii=False))
+    print("\n--- End of test ---")
