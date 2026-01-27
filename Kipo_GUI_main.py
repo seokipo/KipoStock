@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.5 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.6 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -470,8 +470,21 @@ class KipoWindow(QMainWindow):
         settings_layout = QVBoxLayout()
         settings_layout.setSpacing(12)
 
-        # Condition Select (0-19) - 4 State Buttons
+        # Condition Select (0-19) & Max Stocks
+        cond_row_layout = QHBoxLayout()
         cond_label = QLabel("조건식 선택 (0-19)")
+        cond_row_layout.addWidget(cond_label)
+        
+        cond_row_layout.addStretch()
+        
+        # [이동] 종목수 (Max Stocks)
+        cond_row_layout.addWidget(QLabel("종목수"))
+        self.input_max = QLineEdit()
+        self.input_max.setFixedWidth(35)
+        self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 2px; font-weight: bold;")
+        cond_row_layout.addWidget(self.input_max)
+        
         self.cond_btn_layout = QGridLayout() # [수정] Grid Layout 사용
         self.cond_btn_layout.setSpacing(2)
         self.cond_buttons = []
@@ -480,8 +493,8 @@ class KipoWindow(QMainWindow):
         
         for i in range(20):
             btn = QPushButton(str(i))
-            btn.setFixedSize(22, 22)
-            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 4px;")
+            btn.setFixedSize(24, 22) # [수정] 너비 소폭 확장 (글자 잘림 방지)
+            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 4px; padding: 0px;") # [수정] 패딩 제거
             btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
             self.cond_buttons.append(btn)
             # 2줄로 배치 (0~9: 1열, 10~19: 2열) -> 10개씩 끊어서 배치
@@ -489,22 +502,9 @@ class KipoWindow(QMainWindow):
             col = i % 10
             self.cond_btn_layout.addWidget(btn, row, col)
         
-        settings_layout.addWidget(cond_label)
+        settings_layout.addLayout(cond_row_layout)
         settings_layout.addLayout(self.cond_btn_layout)
 
-        # Max Stocks (Horizontal)
-        top_settings_layout = QHBoxLayout()
-        
-        # Max Stocks (Shortened label for horizontal fit)
-        top_settings_layout.addWidget(QLabel("종목수"))
-        self.input_max = QLineEdit()
-        self.input_max.setFixedWidth(35)
-        self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 3px; font-weight: bold;")
-        top_settings_layout.addWidget(self.input_max)
-        
-        top_settings_layout.addStretch()
-        settings_layout.addLayout(top_settings_layout)
 
         # Time Settings (Horizontal)
         time_layout = QHBoxLayout()
@@ -553,9 +553,10 @@ class KipoWindow(QMainWindow):
 
         # 💎 Buying Strategy Group (Revised for Color Matching)
         strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
-        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding: 10px; font-weight: bold; }")
+        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 5px; padding: 5px; font-weight: bold; }")
         strat_vbox = QVBoxLayout()
-        strat_vbox.setSpacing(8)
+        strat_vbox.setContentsMargins(5, 10, 5, 5) # [수정] 좌측 여백 축소
+        strat_vbox.setSpacing(6)
 
         # Helper function to create TP/SL inputs
         def create_tpsl_inputs(color):
@@ -572,19 +573,19 @@ class KipoWindow(QMainWindow):
 
         # Strategy UI Header
         header_layout = QHBoxLayout()
-        header_layout.addSpacing(40)  # Icon/Label width
-        header_layout.addSpacing(70)  # Value input max width
+        header_layout.addSpacing(35)  # Icon/Label width
+        header_layout.addSpacing(85)  # Value input max width (확장된 금액 입력칸 고려)
         header_layout.addStretch()
         
         lbl_tp_hdr = QLabel("익절(%)")
-        lbl_tp_hdr.setFixedWidth(35)
+        lbl_tp_hdr.setFixedWidth(45)
         lbl_tp_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_tp_hdr.setStyleSheet("color: #dc3545; font-size: 9px; font-weight: bold;")
+        lbl_tp_hdr.setStyleSheet("color: #dc3545; font-size: 11px; font-weight: bold;") # [수정] 텍스트 크기 확대
         
         lbl_sl_hdr = QLabel("손절(%)")
-        lbl_sl_hdr.setFixedWidth(35)
+        lbl_sl_hdr.setFixedWidth(45)
         lbl_sl_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_sl_hdr.setStyleSheet("color: #007bff; font-size: 9px; font-weight: bold;")
+        lbl_sl_hdr.setStyleSheet("color: #007bff; font-size: 11px; font-weight: bold;") # [수정] 텍스트 크기 확대
         
         header_layout.addWidget(lbl_tp_hdr)
         header_layout.addWidget(lbl_sl_hdr)
@@ -593,12 +594,13 @@ class KipoWindow(QMainWindow):
         # 1. Qty Mode (Red Border)
         qty_layout = QHBoxLayout()
         lbl_qty = QLabel("🔴 1주")
-        lbl_qty.setFixedWidth(40)
+        lbl_qty.setFixedWidth(35)
         self.input_qty_val = QLineEdit("1")
         self.input_qty_val.setReadOnly(True)
-        self.input_qty_val.setFixedWidth(50)
+        self.input_qty_val.setFixedWidth(60) # 너비 확장
         self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; color: #555;")
         self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
+        self.input_qty_tp.setFixedWidth(40); self.input_qty_sl.setFixedWidth(40) # 입력필드 소폭 확대
         
         qty_layout.addWidget(lbl_qty)
         qty_layout.addWidget(self.input_qty_val)
@@ -610,12 +612,13 @@ class KipoWindow(QMainWindow):
         # 2. Amount Mode (Green Border)
         amt_layout = QHBoxLayout()
         lbl_amt = QLabel("🟢 금액")
-        lbl_amt.setFixedWidth(40)
+        lbl_amt.setFixedWidth(35)
         self.input_amt_val = QLineEdit("100,000")
-        self.input_amt_val.setFixedWidth(70) # 너비 확장
+        self.input_amt_val.setFixedWidth(85) # 너비 더 확장
         self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
+        self.input_amt_tp.setFixedWidth(40); self.input_amt_sl.setFixedWidth(40)
         
         amt_layout.addWidget(lbl_amt)
         amt_layout.addWidget(self.input_amt_val)
@@ -627,11 +630,12 @@ class KipoWindow(QMainWindow):
         # 3. Percent Mode (Blue Border)
         pct_layout = QHBoxLayout()
         lbl_pct = QLabel("🔵 비율")
-        lbl_pct.setFixedWidth(40)
+        lbl_pct.setFixedWidth(35)
         self.input_pct_val = QLineEdit("10")
-        self.input_pct_val.setFixedWidth(50)
+        self.input_pct_val.setFixedWidth(60) # 너비 확장
         self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold;")
         self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
+        self.input_pct_tp.setFixedWidth(40); self.input_pct_sl.setFixedWidth(40)
         
         pct_layout.addWidget(lbl_pct)
         pct_layout.addWidget(self.input_pct_val)
