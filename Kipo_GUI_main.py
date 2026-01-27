@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.8 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.9 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -1333,10 +1333,15 @@ class KipoWindow(QMainWindow):
             amt_val = self.input_amt_val.text()
             pct_val = self.input_pct_val.text()
             
+            # [수정] 성향별 대표값 변수 정의 (로그용)
+            q_tp = self.input_qty_tp.text(); q_sl = self.input_qty_sl.text()
+            a_tp = self.input_amt_tp.text(); a_sl = self.input_amt_sl.text()
+            p_tp = self.input_pct_tp.text(); p_sl = self.input_pct_sl.text()
+
             # 현재 설정을 딕셔너리로 구성
             current_data = {
-                'take_profit_rate': float(self.input_qty_tp.text()), # 1주 전략값을 기본값으로 사용
-                'stop_loss_rate': float(self.input_qty_sl.text()),   # 1주 전략값을 기본값으로 사용
+                'take_profit_rate': float(q_tp), # 1주 전략값을 기본값으로 사용
+                'stop_loss_rate': float(q_sl),   # 1주 전략값을 기본값으로 사용
                 'max_stocks': int(max_s),
                 'start_time': st,
                 'end_time': et,
@@ -1373,11 +1378,7 @@ class KipoWindow(QMainWindow):
 
                 if not quiet:
                     self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
-                    # [수정] 모든 전략값 로그 출력
-                    q_tp = self.input_qty_tp.text(); q_sl = self.input_qty_sl.text()
-                    a_tp = self.input_amt_tp.text(); a_sl = self.input_amt_sl.text()
-                    p_tp = self.input_pct_tp.text(); p_sl = self.input_pct_sl.text()
-                    
+                    # [수정] 일관된 서식으로 로그 출력
                     summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
             else:
@@ -1418,7 +1419,8 @@ class KipoWindow(QMainWindow):
                 
                 if not quiet:
                     self.append_log("💾 기본 설정이 저장되었습니다.")
-                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    # [수정] NameError(tpr, slr) 해결 및 상세 로그 출력
+                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
 
             self.refresh_condition_list_ui()
