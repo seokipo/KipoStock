@@ -303,7 +303,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.4 (Automation Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.4.5 (Automation Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -572,15 +572,20 @@ class KipoWindow(QMainWindow):
 
         # Strategy UI Header
         header_layout = QHBoxLayout()
-        header_layout.addSpacing(105) # "🔴 1주" + 값 입력칸 간격 고려
+        header_layout.addSpacing(40)  # Icon/Label width
+        header_layout.addSpacing(70)  # Value input max width
+        header_layout.addStretch()
+        
         lbl_tp_hdr = QLabel("익절(%)")
-        lbl_tp_hdr.setFixedWidth(40)
+        lbl_tp_hdr.setFixedWidth(35)
         lbl_tp_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_tp_hdr.setStyleSheet("color: #dc3545; font-size: 10px; font-weight: bold;")
+        lbl_tp_hdr.setStyleSheet("color: #dc3545; font-size: 9px; font-weight: bold;")
+        
         lbl_sl_hdr = QLabel("손절(%)")
-        lbl_sl_hdr.setFixedWidth(40)
+        lbl_sl_hdr.setFixedWidth(35)
         lbl_sl_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_sl_hdr.setStyleSheet("color: #007bff; font-size: 10px; font-weight: bold;")
+        lbl_sl_hdr.setStyleSheet("color: #007bff; font-size: 9px; font-weight: bold;")
+        
         header_layout.addWidget(lbl_tp_hdr)
         header_layout.addWidget(lbl_sl_hdr)
         strat_vbox.addLayout(header_layout)
@@ -1364,8 +1369,10 @@ class KipoWindow(QMainWindow):
 
                 if not quiet:
                     self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
-                    # [신규] 저장된 상세 설정값 출력
-                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    # [수정] 성향별 대표값 출력 (1주 기준)
+                    tp_val = self.input_qty_tp.text()
+                    sl_val = self.input_qty_sl.text()
+                    summary = f"📋 [저장] 익:{tp_val}% | 손:{sl_val}% | 종목수:{max_s} | 시간:{st}~{et}"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
             else:
                 # [수정] 레이스 컨디션 방지를 위해 일괄 업데이트(update_settings) 사용
@@ -1373,10 +1380,15 @@ class KipoWindow(QMainWindow):
                     'qty_val': qty_val,
                     'amt_val': amt_val,
                     'pct_val': pct_val,
+                    'strategy_tp_sl': {
+                        'qty': {'tp': float(self.input_qty_tp.text()), 'sl': float(self.input_qty_sl.text())},
+                        'amount': {'tp': float(self.input_amt_tp.text()), 'sl': float(self.input_amt_sl.text())},
+                        'percent': {'tp': float(self.input_pct_tp.text()), 'sl': float(self.input_pct_sl.text())}
+                    },
                     'condition_strategies': cond_strategies,
                     'search_seq': selected_seq,
-                    'take_profit_rate': float(tpr),
-                    'stop_loss_rate': float(slr),
+                    'take_profit_rate': float(self.input_qty_tp.text()),
+                    'stop_loss_rate': float(self.input_qty_sl.text()),
                     'max_stocks': int(max_s),
                     'start_time': st,
                     'end_time': et
