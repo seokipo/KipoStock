@@ -1,0 +1,16 @@
+.git
+.gitignore
+.gcloudignore
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+LogData/
+*.exe
+*.ico
+*.png
+.gemini/
+dist/
+build/
+*.spec

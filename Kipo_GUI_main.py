@@ -339,8 +339,8 @@ class KipoWindow(QMainWindow):
             except: pass
 
         # 아이콘 설정 (리소스 경로에서 로드)
-        icon_path = os.path.join(self.resource_dir, 'icon.png')
-        icon_path_ico = os.path.join(self.resource_dir, 'icon.ico')
+        icon_path = os.path.join(self.resource_dir, 'kipo_yellow.png')
+        icon_path_ico = os.path.join(self.resource_dir, 'kipo_yellow.ico')
         
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
@@ -349,7 +349,7 @@ class KipoWindow(QMainWindow):
         else:
             # Fallback checks in script directory
             for ext in ['png', 'ico']:
-                p = os.path.join(self.script_dir, f'icon.{ext}')
+                p = os.path.join(self.script_dir, f'kipo_yellow.{ext}')
                 if os.path.exists(p):
                     self.setWindowIcon(QIcon(p))
                     break
@@ -437,7 +437,7 @@ class KipoWindow(QMainWindow):
         left_spacer = QWidget()
         left_spacer.setFixedWidth(40) 
         
-        self.lbl_main_title = QLabel("🚀 KipoStock V5.1 (Stable)")
+        self.lbl_main_title = QLabel("🚀 KipoBuy Auto Trading System")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_main_title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
@@ -496,7 +496,7 @@ class KipoWindow(QMainWindow):
         # Condition Select (0-19) & Max Stocks
         cond_row_layout = QHBoxLayout()
         # [수정] 라벨 볼드 처리
-        cond_label = QLabel("<b>조건식 선택 (0-19)</b>")
+        cond_label = QLabel("<b>조건식 선택 (0-9)</b>")
         cond_row_layout.addWidget(cond_label)
         
         cond_row_layout.addStretch()
@@ -509,21 +509,27 @@ class KipoWindow(QMainWindow):
         self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 2px; font-weight: bold;")
         cond_row_layout.addWidget(self.input_max)
         
-        self.cond_btn_layout = QGridLayout() # [수정] Grid Layout 사용
-        self.cond_btn_layout.setSpacing(2)
+        self.cond_btn_layout = QGridLayout() # [Lite V1.0] 10개 원형 레이아웃
+        self.cond_btn_layout.setSpacing(5)
         self.cond_buttons = []
         # State: 0 (Gray/Off), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
-        self.cond_states = [0] * 20 # [수정] 20개로 확장
+        self.cond_states = [0] * 10 # [Lite] 10개로 축소
         
-        for i in range(20):
+        for i in range(10):
             btn = QPushButton(str(i))
-            btn.setFixedSize(24, 22) # [수정] 너비 소폭 확장 (글자 잘림 방지)
-            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 4px; padding: 0px;") # [수정] 패딩 제거
+            # [Lite] 원형 버튼 디자인: 지름 36px, Border-radius 18px (완전한 원형)
+            btn.setFixedSize(36, 36) 
+            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 18px; padding: 0px; font-size: 14px;")
             btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
             self.cond_buttons.append(btn)
-            # 2줄로 배치 (0~9: 1열, 10~19: 2열) -> 10개씩 끊어서 배치
-            row = i // 10
-            col = i % 10
+            
+            # [Lite] 배분: 상단(짝수: 0, 2, 4, 6, 8) / 하단(홀수: 1, 3, 5, 7, 9)
+            if i % 2 == 0:
+                row = 0
+                col = i // 2
+            else:
+                row = 1
+                col = i // 2
             self.cond_btn_layout.addWidget(btn, row, col)
         
         settings_layout.addLayout(cond_row_layout)
@@ -998,7 +1004,6 @@ class KipoWindow(QMainWindow):
             
             found_any = False
             for line in lines:
-                # ... (rest of the logic)
                 if line.strip().startswith('•'):
                     try:
                         # "• 0: 조건식이름" 또는 "• 0: 이름" 형태 파싱
@@ -1020,114 +1025,87 @@ class KipoWindow(QMainWindow):
     def save_logs_to_file(self):
         """현재 로그창의 내용을 Log_YYYYMMDD_y.txt 형식으로 저장합니다."""
         try:
-            # 1. 일반 텍스트 추출 (HTML 제거된 퓨어 텍스트)
             raw_text = self.log_text.toPlainText()
-            
-            # 2. 날짜 및 일렬번호 결정
             today_str = datetime.datetime.now().strftime("%Y%m%d")
             y = 1
             while True:
                 filename = f"Log_{today_str}_{y}.txt"
                 filepath = os.path.join(self.data_dir, filename)
-                if not os.path.exists(filepath):
-                    break
+                if not os.path.exists(filepath): break
                 y += 1
-            
-            # 3. 파일 저장
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(raw_text)
-            
             msg = f"💾 로그 파일 저장 완료: {filename}"
             self.append_log(msg)
-            
-            # 텔레그램으로도 알림 (tel_send 모듈 직접 사용)
             from tel_send import tel_send
             tel_send(msg)
-            
         except Exception as e:
             err_msg = f"❌ 로그 저장 실패: {e}"
             self.append_log(err_msg)
             from tel_send import tel_send
             tel_send(err_msg)
 
-
     def send_command(self):
         cmd = self.cmd_input.text().strip()
         if cmd:
-            if cmd.upper() == 'PRINT':
-                self.export_log()
+            if cmd.upper() == 'PRINT': self.export_log()
             elif cmd.lower() == 'clr':
                 self.log_text.clear()
                 self.append_log("🧹 로그가 초기화되었습니다.")
-            elif cmd.lower() == 'start':
-                # [신규] 타이핑 명령도 GUI 버튼과 동일한 로직(애니메이션 등) 수행
-                self.on_start_clicked()
-            elif cmd.lower() == 'stop':
-                # [신규] 타이핑 명령도 GUI 버튼과 동일한 로직(애니메이션 등) 수행
-                self.on_stop_clicked()
-            else:
-                self.worker.schedule_command('custom', cmd)
+            elif cmd.lower() == 'start': self.on_start_clicked()
+            elif cmd.lower() == 'stop': self.on_stop_clicked()
+            else: self.worker.schedule_command('custom', cmd)
             self.cmd_input.clear()
 
     def export_log(self):
         try:
             now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"KIPOSTOCK_LOG_{now_str}.txt"
-            
-            # 현재 실행 파일 위치에 저장
             log_path = os.path.join(self.script_dir, filename)
-            
             content = self.log_text.toPlainText()
-            
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write(content)
-                
-            # [수정] 로그 저장 메시지 스타일링: 들여쓰기, 이탤릭, 밑줄 적용
-            # HTML 태그는 append_log(html=True) 처리가 필요할 수 있으나 
-            # 현재 append_log가 모든 입력을 html_text로 감싸므로 수동으로 포맷팅
             save_msg = f"💾 로그가 저장되었습니다:<br>" + "&nbsp;"*11 + f"<u><i>{filename}</i></u>"
             self.append_log(save_msg)
-            
-            # 사용자에게 알림 (선택 사항)
-            # QMessageBox.information(self, "로그 저장", f"로그가 파일로 저장되었습니다.\n{filename}")
-            
         except Exception as e:
             self.append_log(f"❌ 로그 저장 실패: {e}")
 
     def on_cond_clicked(self, idx):
-        # State: 0 (Off/Gray), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
         self.cond_states[idx] = (self.cond_states[idx] + 1) % 4
         self.update_button_style(idx)
-        # [신규] 리스트 즉시 갱신
         self.refresh_condition_list_ui()
-        
-        # [신규] 동적 반영 (설정 저장 후 엔진에 알림)
         self.save_settings(show_limit_warning=False, restart_if_running=False, quiet=True)
         if self.lbl_status.text() == "● RUNNING":
-            # worker에 refresh_conditions 명령 전달 (settings.json을 다시 읽어서 반영)
             self.worker.schedule_command('refresh_conditions')
 
     def update_button_style(self, idx):
-        # [신규] 번호가 안 보이는 문제 해결을 위해 텍스트 강제 설정
-        self.cond_buttons[idx].setText(str(idx))
+        # [Lite V1.0] 번호 강제 설정 및 원형 스타일(36x36, Radius 18px) 적용
+        if idx >= len(self.cond_buttons): return
+        btn = self.cond_buttons[idx]
+        state = self.cond_states[idx]
+        btn.setText(str(idx))
         
         # State colors: Off(Gray), 🔴(Red), 🟢(Green), 🔵(Blue)
         colors = {0: "#e0e0e0", 1: "#dc3545", 2: "#28a745", 3: "#007bff"}
         text_colors = {0: "#333", 1: "white", 2: "white", 3: "white"}
         
-        c = colors.get(self.cond_states[idx], "#e0e0e0")
-        tc = text_colors.get(self.cond_states[idx], "#333")
+        bg_color = colors.get(state, "#e0e0e0")
+        text_color = text_colors.get(state, "#333")
         
-        # [수정] 번호가 중앙에 잘 보이도록 폰트 크기와 패딩 조정
-        self.cond_buttons[idx].setStyleSheet(f"""
+        # 완전한 원형 스타일 (Border-radius: 18px / Width=Height=36px)
+        btn.setStyleSheet(f"""
             QPushButton {{ 
-                background-color: {c}; 
-                color: {tc}; 
+                background-color: {bg_color}; 
+                color: {text_color}; 
                 font-weight: bold; 
-                border-radius: 4px;
-                border: 1px solid #999;
-                font-size: 11px;
+                border-radius: 18px;
+                border: 1px solid rgba(0,0,0,0.1);
+                font-size: 14px;
                 padding: 0px;
+            }}
+            QPushButton:hover {{
+                opacity: 0.9;
+                border: 2px solid white;
             }}
         """)
 
@@ -1341,7 +1319,7 @@ class KipoWindow(QMainWindow):
             strat_map = target.get('condition_strategies', {})
             active_seqs = set(map(str, seq_data)) if isinstance(seq_data, (list, set)) else set()
 
-            for i in range(20): # [수정] 10개 -> 20개로 확장
+            for i in range(10): # [Lite] 10개로 한정
                 mode = strat_map.get(str(i))
                 if mode == 'qty': self.cond_states[i] = 1
                 elif mode == 'amount': self.cond_states[i] = 2

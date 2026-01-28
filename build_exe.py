@@ -26,7 +26,7 @@ def build_exe(script_name, exe_name=None, use_console=False, options=None):
          base_options.extend(['--name', exe_name])
 
     # script_name이 마지막에 와야 함
-    cmd = [sys.executable, '-m', 'PyInstaller'] + base_options + options + ['--add-data', 'icon.ico;.', '--icon=icon.ico'] + [script_name]
+    cmd = [sys.executable, '-m', 'PyInstaller'] + base_options + options + ['--add-data', 'kipo_yellow.ico;.', '--icon=kipo_yellow.ico'] + [script_name]
     
     print(f"빌드 시작: {script_name} -> {exe_name if exe_name else 'default'}")
     
@@ -37,7 +37,7 @@ def build_exe(script_name, exe_name=None, use_console=False, options=None):
         # ---------------------------------------------------------
         # [추가] 필수 파일 자동 복사 기능 (dist 및 상위 KipoStock_V5.4 폴더)
         # ---------------------------------------------------------
-        target_dirs = ['dist', '../KipoStock_V5.4']
+        target_dirs = ['dist', '../KipoStock_Lite_V1.0']
         
         for t_dir in target_dirs:
             if not os.path.exists(t_dir):
@@ -54,7 +54,7 @@ def build_exe(script_name, exe_name=None, use_console=False, options=None):
                     print(f"🚀 {final_exe}를 {t_dir} 폴더로 복사했습니다.")
 
             # 2. 리소스 파일 복사
-            for filename in ['settings.json', 'icon.ico', 'icon.png']:
+            for filename in ['settings.json', 'kipo_yellow.ico', 'kipo_yellow.png']:
                 if os.path.exists(filename):
                     src_res = os.path.abspath(filename)
                     dst_res = os.path.abspath(os.path.join(t_dir, filename))
@@ -76,7 +76,7 @@ def build_exe(script_name, exe_name=None, use_console=False, options=None):
 if __name__ == '__main__':
     # (스크립트 파일명, 실행파일 이름, 콘솔사용여부)
     scripts = [
-        ('Kipo_GUI_main.py', 'KipoStock_V5.5.3_Auto', False),
+        ('Kipo_GUI_main.py', 'KipoStock_Lite_V1_GOLD', False),
         # ('Kipo_main.py', 'KipoStock_Console_V1.2', True),
     ]
     

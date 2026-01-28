@@ -1,0 +1,6 @@
+flask
+requests
+pandas
+websockets
+python-dateutil
+numpy

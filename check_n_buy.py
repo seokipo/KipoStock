@@ -116,16 +116,11 @@ def save_buy_time(code):
         print(f"⚠️ [DEBUG] 매수 시간 저장 실패: {e}")
 
 # [신규] 로그를 예쁘게 출력하는 함수
+# [Lite V1.0] 간결한 로그 시스템
 def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
-    display_name = stock_name
-    if len(display_name) > 8:
-        display_name = display_name[:7] + ".."
-    
-    # [수정] 중복 타임스탬프 제거 (GUI에서 자동 추가함)
+    display_name = stock_name[:7] + ".." if len(stock_name) > 8 else stock_name
     log_line = f"{status_icon} {status_msg:<6} │ {display_name}"
-    
-    if is_error:
-        log_line += " ❌"
+    if is_error: log_line += " ❌"
     print(log_line)
 
 def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
@@ -302,15 +297,9 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
             log_color = color_map.get(mode, '#00ff00')
             
-            log_msg = f"<font color='{log_color}'>"
-            log_msg += "\n" + "="*50 + "\n"
-            log_msg += "⚡  매 수 체 결  성 공  ⚡\n"
-            log_msg += f"📦 종목: {s_name}\n"
-            log_msg += f"💰 가격: {final_price:,}원 ({qty}주)\n"
-            if seq_name:
-                log_msg += f"🔍 검색: {seq}. {seq_name}\n"
-            log_msg += "="*50 + "\n"
-            log_msg += f"⚡[{qty}주 매수체결]⚡ {s_name} ({final_price:,}원)"
+            # [Lite V1.0] 다이어트 로그 (한 줄 요약 적용)
+            log_msg = f"<font color='{log_color}'>⚡<b>[매수체결]</b> {s_name} ({final_price:,}원/{qty}주)"
+            if seq_name: log_msg += f" <b>[{seq}. {seq_name}]</b>"
             log_msg += "</font>"
             print(log_msg)
             

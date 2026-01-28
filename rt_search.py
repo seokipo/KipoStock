@@ -129,6 +129,12 @@ class RealTimeSearch:
                     # print(f"📝 [CNSR_RAW] {raw_message}")
 
                     if data:
+                        # [Lite V1.0] 한 번에 검출되는 종목 수를 절반으로 제한 (최소 1개)
+                        orig_count = len(data)
+                        data = data[:max(1, orig_count // 2)]
+                        if orig_count > 1:
+                            print(f"✂️ [Lite] 종목 제한: {orig_count}개 -> {len(data)}개")
+                            
                         stock_list = []
                         for item in data:
                             jmcode = item.get('stk_cd') or item.get('code') or (item.get('values') or {}).get('9001')

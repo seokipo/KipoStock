@@ -442,7 +442,7 @@ class ChatCommand:
             tel_rows = []     # 텔레그램용 (Plain Text)
             
             h_line = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            header = " [매수시간] [매수전략] [조건식] 종목명     |  매수(평균/수량/금액)  |  매도(평균/수량/금액)  |  세금  | 손익(수익률) \n"
+            header = " [시간] [전략] 종목     |  매수액  |  매도액  |  세금  | 손익(수익률) \n"
             
             display_rows.append(h_line + header + h_line)
             tel_rows.append(h_line + header + h_line)
@@ -461,10 +461,10 @@ class ChatCommand:
                 buy_qty_str = f"{r['buy_qty']:>3}" if r['buy_qty'] > 0 else f"{'-':>3}"
                 buy_amt_str = f"{r['buy_amt']:>8,}" if r['buy_amt'] > 0 else f"{'-':>8}"
                 
-                row_content = f"{bt_str:<10} {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {buy_avg_str}/{buy_qty_str}/{buy_amt_str} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
+                row_content = f"{bt_str:<10} {st_str:<6} {r['name']:<10} | {buy_amt_str:>8} | {r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
-                # [수정] 텔레그램용은 HTML 태그 제거
-                row_tel = f"[{r['buy_time']:<8}] {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {buy_avg_str}/{buy_qty_str}/{buy_amt_str} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
+                # [Lite V1.0] 텔레그램용은 HTML 태그 제거 및 간소화
+                row_tel = f"[{r['buy_time']:<8}] {st_str:<6} {r['name']:<10} | {buy_amt_str:>8} | {r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
                 display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
                 tel_rows.append(row_tel)
@@ -473,7 +473,7 @@ class ChatCommand:
             display_rows.append(d_ft)
             tel_rows.append(d_ft)
             
-            summary_str = f"{'TOTAL':<21} {'  ':<6} {'합계':<10} | {'-':>7}/{'-':>3}/{total_b_amt:>8,} | {'-':>7}/{'-':>3}/{total_s_amt:>8,} | {total_tax:>5,} | {total_pnl:>+8,} ({avg_pnl_rt:>+6.2f}%)\n"
+            summary_str = f"{'TOTAL':<21} {'  ':<6} {'합계':<10} | {total_b_amt:>8,} | {total_s_amt:>8,} | {total_tax:>5,} | {total_pnl:>+8,} ({avg_pnl_rt:>+6.2f}%)\n"
             display_rows.append(summary_str)
             tel_rows.append(summary_str)
             
