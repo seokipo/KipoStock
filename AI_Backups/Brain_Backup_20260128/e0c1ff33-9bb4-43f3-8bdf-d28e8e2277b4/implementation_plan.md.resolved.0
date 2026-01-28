@@ -1,0 +1,49 @@
+# V4.0 버그 수정 및 최적화 (2차)
+
+사용자 피드백을 바탕으로 [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) 명령어 데이터 누락, [json](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/settings.json) 정의 에러, 그리고 장외 시간 상태 표시(WAITING) 오작동 문제를 수정합니다.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) 명령어의 데이터 키를 `tdy_acc_diary`에서 `tdy_trde_diary`로 변경합니다. (사용자 제공 샘플 기준)
+> - `WAITING` 상태는 이제 오전 9:00 이전 또는 오후 3:30 이후에 `START`를 눌렀을 때만 나타납니다. 그 외 시간(낮 시간)에 사용자 설정상 종료되어 시작이 안 되는 경우는 `READY` 상태를 유지합니다.
+
+## Proposed Changes
+
+### 1. 계좌 및 거래 모듈
+
+#### [MODIFY] [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/check_n_buy_1ju.py)
+- 파일 상단에 `import json` 추가 (조건식 매핑 저장 시 발생하는 `NameError` 수정).
+
+#### [MODIFY] [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py)
+- 응답 데이터 키 수정: `tdy_acc_diary` -> `tdy_trde_diary`.
+- 응답 합계 키 수정: `tdy_acc_diary_tot` -> `tdy_trde_diary_tot` (예상).
+- 기본 파라미터 `ottks_tp`를 `'1'`로 변경 (사용자 제공 샘플 기준).
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) 함수 내 응답 리스트 접근 키 수정 ([list](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py#735-768) -> `tdy_trde_diary` 확인).
+
+---
+
+### 2. GUI 및 시간 로직
+
+#### [MODIFY] [market_hour.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/market_hour.py)
+- [is_waiting_period](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/market_hour.py#61-70) 로직을 사용자 요청에 맞춰 엄격하게 15:30 ~ 09:00 사이로 재검증합니다.
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py)
+- [_execute_command](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py#144-184) 내 [start](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#106-144) 로직 수정:
+    - 15:30~09:00 사이인 경우에만 `WAITING` 상태로 전환.
+    - 그 외 시간(낮 시간)인데 사용자 설정(예: 10:14 종료)으로 인해 시작이 안 되는 경우에는 `READY` 상태를 유지하고 "시간 설정을 확인하세요" 메시지 출력.
+
+---
+
+## Verification Plan
+
+### Automated Tests
+- [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py)를 직접 실행하여 `tdy_trde_diary` 키로 데이터가 정상 수신되는지 확인.
+    - `python d:\Work\Python\AutoBuy\KipoBuy4.0\acc_diary.py` 실행 후 `debug_diary_res.json` 확인.
+
+### Manual Verification
+1.  **GUI 상태 확인**: 낮 시간(현재 약 10:20)에 종료 시간을 `10:10`으로 설정하고 `START` 클릭 시 `WAITING`이 아닌 `READY` 상태로 남는지 확인.
+2.  **로그 확인**: 조건식 체결 시 `⚠️ 조건식 매핑 저장 실패` 에러가 더 이상 발생하지 않는지 확인.
+3.  **Telegram 확인**: `/today` 명령어 입력 시 매매 내역 표가 정상적으로 출력되는지 확인.

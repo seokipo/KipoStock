@@ -1,0 +1,20 @@
+# KipoStock V5.2 Automation - API 요청 가시성 개선
+
+사용자 요청에 따라 시퀀스 전환 시 새로운 조건식들이 증권사 API에 등록되는 과정을 명확히 볼 수 있도록 수정했습니다.
+
+## 주요 수정 사항
+
+### 1. 시퀀스 전환 시 API 재등록 로그 복구
+- **현상**: 기존에는 "RUNNING" 상태에서 프로필이 바뀌면 버튼이 비활성화되어 있어 API 재등록 로직이 실행되지 않았습니다.
+- **수정**: 엔진 가동 로직에 `force` 모드를 추가하여, 시퀀스가 전환될 때 강제로 엔진을 재시작하고 새로운 조건들을 API에 하나씩 요청하는 과정을 로그로 보여줍니다. 이제 **`📡 [요청] {번호}번: {이름}`** 로그가 다시 정상적으로 출력됩니다.
+
+### 2. 시퀀스 완주 로직 강화
+- **연속성**: 프로필이 바뀌어도 시퀀스 모드가 꺼지지 않고 3번 끝까지 유지되도록 버튼 상태 관리 로직을 보완했습니다.
+- **최종 보고**: 3번 시퀀스 종료 즉시 매매가 중단되며, 2초 뒤에 당일 최종 성적표([today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398))가 자동으로 출력됩니다.
+
+## 동작 확인 방법
+1. 시퀀스 1번에서 2번으로 넘어갈 때 로그창을 확인하세요.
+2. `🛰️ [시퀀스] 2번 프로필로 전환...` 출력 후, **`🚀 {N}개 조건식 고속 등록 시작...`** 과 **`📡 [요청]`** 로그가 줄지어 올라오는지 확인합니다.
+3. 마지막 3번 시퀀스가 끝나고 [stop](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#259-268) 버튼과 함께 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 결과가 나오는지 확인하세요.
+
+최신 빌드 파일([dist\KipoStock_V5.2_Automation.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.2_Automation.exe))에 반영되었습니다.

@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "Implementation plan for adding the `log` command to export GUI logs to a text file.",
+  "updatedAt": "2026-01-23T07:49:20.959457800Z",
+  "version": "20"
+}

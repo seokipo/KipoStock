@@ -1,0 +1,14 @@
+# 작업 목록 (Task List)
+
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#248-427) 리포트 시간 정렬 수정
+- [x] 시퀀스 자동(Sequence Auto) 고도화 및 버그 수정
+  - [x] 중복 로그인(R10001) 방지 플래그 도입
+  - [x] 시퀀스 전환 안정성 강화
+- [x] UI 편의성 및 안정성 강화
+  - [x] 장외 대기 메시지 시간 순서 교정
+  - [x] 프로필 버튼 클릭 시 시퀀스 모드 자동 시작
+- [x] 시퀀스 완주 후 UI 복구 및 리포트 컬러링 (V5.2.2)
+  - [x] 시퀀스 최종 종료 시 UI 잠금 완전 해제 및 버튼 상태 초기화
+  - [x] [stock_conditions.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/stock_conditions.json)에 매수 전략 정보 추가 저장
+  - [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#248-427) 리포트 출력 시 전략별 색상 적용 (빨강/초록/파랑)
+- [x] 최종 빌드 및 검증 완료 (`KipoStock_V5.2_Automation.exe`)

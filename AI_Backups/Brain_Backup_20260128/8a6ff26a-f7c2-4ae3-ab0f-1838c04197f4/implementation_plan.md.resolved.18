@@ -1,0 +1,25 @@
+# Raw API-based Reporting Accuracy (V5.3.0)
+
+사용자 피드백을 반영하여 복잡한 보정 계산을 제거하고, 키움 API가 제공하는 원본 데이터를 HTS('당일매매일지') 화면과 100% 동일하게 출력하도록 수정합니다.
+
+## Proposed Changes
+
+### [Component] Trade Reporting Layer
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- **헤더 수정**: 로그 상단 타이틀에 `| 세금 |` 항목을 명시적으로 추가합니다.
+- **로직 단순화**: [ka10077](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#54-94)과의 병합 로직 및 수동 계산(`b_amt_for_sell` 등)을 대폭 간소화하거나 제거합니다.
+- **필드 매핑 최적화**: [ka10170](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#9-52)에서 제공하는 매수/매도 평균가, 수량, 금액, 세금, 손익 필드를 직접 매핑합니다. 
+  - (세금 확인: `tdy_trde_diary_tax` 또는 `cmsn_tax` 등 TR 원본 필드 사용)
+- **정렬/포맷**: HTS와 동일한 `매수(가/수/금) | 매도(가/수/금) | 세금 | 손익` 순서로 정렬합니다.
+
+### [Component] GUI Layout
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- 버전 표기를 V5.3.0으로 업데이트합니다.
+
+## Verification Plan
+
+### Manual Verification
+1. [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#253-432) 명령 실행 후 출력되는 로그와 업로드해주신 HTS `[0353] 당일매매일지` 화면의 수치(유라클, 이랜시스 등)가 정확히 일치하는지 확인.
+2. 세금 컬럼이 실수를 포함하여 정상적으로 표시되는지 확인.

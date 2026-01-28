@@ -1,0 +1,30 @@
+# Implementation Plan - Restore Auto-Start Functionality
+
+## Goal Description
+Restore the functionality where the application automatically starts (or enters waiting mode) upon launch if it was previously running (or set to auto-start). This ensures the user doesn't need to manually click "Start" every time the app restarts, especially for off-market hour restarts.
+
+## User Review Required
+None. This is a restoration of expected behavior.
+
+## Proposed Changes
+
+### GUI Logic
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py)
+- Modify `AsyncWorker.load_initial_settings` or [main_loop](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#82-130) to:
+    1. Read `auto_start` boolean from [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/settings.json).
+    2. If `auto_start` is `True`, automatically trigger `self.schedule_command('start')`.
+    - This will leverage existing logic in [schedule_command('start')](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#182-184) which correctly handles:
+        - Market Open -> Starts running.
+        - Waiting Period (15:30 - 09:00) -> Enters WAITING mode.
+        - Other times (e.g. weekends if not ignored) -> Ready mode (with warning).
+
+## Verification Plan
+
+### Manual Verification
+1.  **Modify Settings**: Manually set `"auto_start": true` in [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/settings.json).
+2.  **Dry Run**: Initialize [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py) code (simulated) or user runs the app.
+3.  **Expectation**:
+    - App logs "🚀 시스템 초기화 완료..."
+    - Logs "ℹ️ 자동 시작 설정이 활성화되어 있습니다." (New log)
+    - Automatically attempts to start.
+    - Status changes to **RUNNING** (if market open) or **WAITING** (if off-hours).

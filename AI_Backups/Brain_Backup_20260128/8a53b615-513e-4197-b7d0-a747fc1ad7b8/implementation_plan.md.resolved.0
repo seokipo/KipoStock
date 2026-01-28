@@ -1,0 +1,35 @@
+# 자동 시퀀스 전환 로직 개선 및 UI 동기화 플랜
+
+상태 표시가 `READY`임에도 UI가 잠겨있거나, 매매 중 시퀀스 전환 시 발생할 수 있는 '꼬임(Race Condition)' 현상을 방지하기 위해 로직을 개선합니다.
+
+## Proposed Changes
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python\AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+
+#### 1. 시퀀스 전환 로직 강화 ([on_profile_clicked](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1455-1475) 및 관련 메서드)
+- **상태 체크**: 프로필 클릭(또는 [auto](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1530-1643) 명령) 시 현재 상태가 `RUNNING`인지 확인합니다.
+- **안전 정지**: 실행 중이라면 즉시 `STOP` 명령을 내리고, "안전한 전환을 위해 5초간 대기합니다"라는 로그를 남깁니다.
+- **지연 후 시작**: `QTimer.singleShot(5000, ...)`을 사용하여 5초 뒤에 새 설정을 로드하고 `START`를 수행합니다.
+
+#### 2. UI 잠금 로직 개선 ([lock_ui_for_sequence](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1644-1679))
+- **수동 정지 대응**: 현재는 `btn_seq_auto`가 체크되어 있으면 무조건 UI를 잠그지만, 상태가 `READY`인 경우에는 설정을 수정할 수 있도록 허용합니다. (단, 08:00~09:00 장 시작 예약 시간은 제외)
+- **상태 변화 연동**: [update_status_ui](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#836-852)에서 상태가 `READY`로 변할 때 [lock_ui_for_sequence](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1644-1679)를 다시 호출하여 잠금을 해제합니다.
+
+#### 3. 메서드 리팩토링
+- 인라인으로 정의된 [on_stop](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#740-743) 함수를 클래스 메서드 `on_stop_clicked`로 분리하여 코드 재사용성을 높입니다.
+
+## Verification Plan
+
+### Automated Tests
+- 없음 (GUI 기반 로직이므로 수동 검증 위주로 진행)
+
+### Manual Verification
+1. **매매 중 전환 테스트**:
+   - 프로그램을 `START` 시킨 후 (`RUNNING` 상태), 명령어 창에 `auto 2`를 입력합니다.
+   - 즉시 `STOP` 애니메이션이 작동하고 상태가 `READY`로 변하는지 확인합니다.
+   - 로그에 "5초 대기" 메시지가 뜨고, 정확히 5초 뒤에 프로필 2번으로 자동 시작되는지 확인합니다.
+2. **UI 잠금 해제 테스트**:
+   - 시퀀스 자동 모드를 켠 상태에서 `STOP`을 눌러 엔진을 멈춥니다.
+   - 상태가 `READY`일 때 입력창(익절/손절 등)을 수정할 수 있는지 확인합니다.
+3. **버전 업 확인**:
+   - `V5.4.13`으로 정상 표시되는지 확인합니다.

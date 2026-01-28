@@ -1,0 +1,17 @@
+# Sequence Auto Mode Improvements
+
+This plan addresses the user requests to increase the transition delay between profiles to 5 seconds and add detailed logging of operating conditions when the sequence auto button is pressed.
+
+## Proposed Changes
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- Update [handle_end_time_event](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1446-1509) to use a 5000ms (5 seconds) delay instead of 2500ms.
+- Update [on_seq_auto_toggled](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1378-1394) to output a detailed list of conditions and timing logic to the system logs when it is turned ON.
+
+## Verification Plan
+
+### Manual Verification
+- Toggle the Sequence Auto button in the GUI and verify the detailed log output.
+- Simulate a profile transition (by setting an end time close to current time) and verify the 5-second delay before the next profile starts.

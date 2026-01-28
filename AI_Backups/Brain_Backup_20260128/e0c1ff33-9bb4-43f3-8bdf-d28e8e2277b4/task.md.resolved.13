@@ -1,0 +1,11 @@
+# Task: V4.1 Final Polish (Data & UI)
+
+- [x] Fix Log Data Mapping (Missing sell/profit) <!-- id: 54 -->
+    - [x] Add robust key fallbacks (rznd_pnl_amt, tot_sel_qty, etc.) <!-- id: 55 -->
+- [x] Improve Profile UI (Visibility & Highlight) <!-- id: 56 -->
+    - [x] Increase button size (35x35) & high-contrast font <!-- id: 57 -->
+    - [x] Implement blue highlight for active slot <!-- id: 58 -->
+- [x] UI Restriction (Lock 1 share Qty) <!-- id: 59 -->
+    - [x] Set `input_qty_val` to read-only <!-- id: 60 -->
+- [x] Re-build & Final Verification <!-- id: 61 -->
+    - [x] Build `KipoStock_V4.1_GOLD.exe` <!-- id: 62 -->

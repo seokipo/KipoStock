@@ -76,7 +76,7 @@ def build_exe(script_name, exe_name=None, use_console=False, options=None):
 if __name__ == '__main__':
     # (스크립트 파일명, 실행파일 이름, 콘솔사용여부)
     scripts = [
-        ('Kipo_GUI_main.py', 'KipoStock_V5.5.2_Auto', False),
+        ('Kipo_GUI_main.py', 'KipoStock_V5.5.3_Auto', False),
         # ('Kipo_main.py', 'KipoStock_Console_V1.2', True),
     ]
     

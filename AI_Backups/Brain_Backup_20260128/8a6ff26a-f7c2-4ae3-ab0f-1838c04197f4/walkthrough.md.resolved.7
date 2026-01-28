@@ -1,0 +1,35 @@
+# KipoStock V5.1 Stable 업데이트 - 한글화 및 수정 사항
+
+이번 업데이트는 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 명령어 오류 수정, 레거시 파일 정리, 그리고 프로그램 UI의 전반적인 한글화를 포함합니다.
+
+## 주요 변경 사항
+
+### 1. 프로그램 한글화 (UI Localization)
+사용자 요청에 따라 프로그램 UI의 영문 메시지를 한글로 변경했습니다.
+- **윈도우 제목**: "KipoBuy Auto Trading System..." → **"키포스톡 자동매매 시스템 - V5.1 (Stable)"**
+- **메인 타이틀**: "🚀 KipoStock V5.1 (Stable)" → **"🚀 키포스톡 V5.1 (Stable)"**
+- **상태 표시**: 
+  - `READY` → **`준비 완료`**
+  - `RUNNING` → **`실행 중`**
+  - `WAITING` → **`장 시작 대기`**
+
+### 2. [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 명령어 수정 및 안정화 ([chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py))
+- **매수 시간 표시 오류 해결**: 
+  - 매수 시간 파일(`daily_buy_times.json`)을 찾지 못하거나 정보가 없으면, 프로그램이 멈추지 않고 **`[ ? ]`** 로 표시되도록 폴백(Fallback) 로직을 추가했습니다.
+  - 파일 로드 과정을 최적화(루프 밖으로 이동)하고, 폴백 시 **디버그 로그(`▶ [DEBUG] ...`)**가 출력되도록 하여 문제 원인을 쉽게 파악할 수 있게 했습니다.
+
+### 3. 코드베이스 정리 (Refactoring)
+- **[check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy_1ju.py) 삭제**: 불필요한 레거시 파일을 삭제하고 [check_n_buy.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py)로 완전히 대체했습니다.
+- **임포트 정리**: 모든 모듈이 새로운 [check_n_buy.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py)를 참조하도록 수정했습니다.
+
+### 4. 빌드 (Build)
+- **실행 파일**: `KipoStock_V5.1_Stable.exe`
+- **위치**: `D:\Work\Python\AutoBuy\KipoStock_V5.1_Stable.exe` (기존 파일을 덮어썼습니다)
+
+## 검증 방법
+1. **새로운 EXE 실행**: `KipoStock_V5.1_Stable.exe`를 실행합니다.
+2. **한글 UI 확인**: 제목 표시줄과 상태 메시지가 한글로("준비 완료", "실행 중" 등) 표시되는지 확인합니다.
+3. **[today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 명령어 테스트**:
+   - 챗봇 명령창에 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 입력.
+   - 매매 내역이 있을 경우 매수 시간이 `[HH:mm:ss]` 또는 `[ ? ]`로 표시되는지 확인합니다.
+   - 콘솔 창(검은 화면)에 `▶ [DEBUG]` 메시지가 뜨는지 확인합니다 (파일 로드 관련).

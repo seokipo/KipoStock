@@ -1,0 +1,35 @@
+# Plan: Fix Sell Amount & PnL Bug in Trade Report
+
+The goal is to fix the [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#296-501) command in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py) so it accurately calculates and displays the total sell amount and profit/loss.
+
+## User Review Required
+
+> [!IMPORTANT]
+> I am assuming the bug is caused by picking up the summary row from the KIS API (which has a code like '000000' or is empty) and including it in our manual summation, and/or using incorrect field name priorities for the [ka10170](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#9-52) (Domestic Diary) response.
+
+## Proposed Changes
+
+### Core Logic
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- **Filter Summary Rows**: Add a check to skip rows where the stock code is empty, '000000', or doesn't start with a valid prefix if applicable.
+- **Refine Field Mapping**: Update the [val](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#332-337) function usage or the key list to prioritize the correct KIS field names for [ka10170](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#9-52) summary mode (`ottks_tp='1'`).
+- **Precision Handling**: Ensure all values are correctly cast to int/float to avoid unexpected negative numbers from malformed strings.
+
+---
+
+### API Interaction (If needed)
+
+#### [MODIFY] [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py)
+- Ensure [ka10170](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#9-52) and [ka10077](file:///d:/Work/Python/AutoBuy/KipoStockNow/acc_diary.py#54-94) responses are handled consistently.
+
+## Verification Plan
+
+### Automated Tests
+- Create a mock test script `test_today_bug.py` that simulates a KIS API response with a mix of stock rows and a summary row, then verifies that the [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#296-501) command's logic calculates the correct totals.
+```bash
+python test_today_bug.py
+```
+
+### Manual Verification
+- The user can run the [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#296-501) command in the GUI and verify if the "Total Sell Amount" and "Total PnL" now match their expectation (non-zero and non-doubled).

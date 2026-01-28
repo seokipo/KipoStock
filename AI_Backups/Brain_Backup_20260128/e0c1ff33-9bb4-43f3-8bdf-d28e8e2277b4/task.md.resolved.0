@@ -1,0 +1,15 @@
+# Task: V4.0 Bug Fixes and Final Build
+
+- [x] Fix [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) command (Daily Trade Log) <!-- id: 0 -->
+    - [x] Investigate [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#9-57) API parameters (`base_dt`, `ottks_tp`) <!-- id: 1 -->
+    - [x] Add debug logging to [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py) <!-- id: 2 -->
+    - [x] Verify retrieval of trade log <!-- id: 3 -->
+- [x] Fix Alarm Functionality <!-- id: 4 -->
+    - [x] Normalize time format (e.g., "9:50" -> "09:50") for comparison <!-- id: 5 -->
+    - [x] Ensure alarm triggers correctly at the specified time <!-- id: 6 -->
+- [x] Refine Auto-Start / Waiting Status <!-- id: 7 -->
+    - [x] Implement [is_waiting_period](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/market_hour.py#61-70) (15:30 ~ 09:00 next day) <!-- id: 8 -->
+    - [x] Update GUI status to "WAITING" during off-market hours <!-- id: 9 -->
+- [x] Re-build Executable <!-- id: 10 -->
+    - [x] Run [build_v4.0_FINAL.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/build_v4.0_FINAL.py) <!-- id: 11 -->
+    - [x] Verify [KipoStock_V4.0_GOLD.exe](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/dist/KipoStock_V4.0_GOLD.exe) in `dist` folder <!-- id: 12 -->

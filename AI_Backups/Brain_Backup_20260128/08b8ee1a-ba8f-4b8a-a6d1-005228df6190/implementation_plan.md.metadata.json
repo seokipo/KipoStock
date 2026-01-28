@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "Implementation plan for upgrading KipoStock to V4.0. Includes fixing the `pnl_amt` error in reports, implementing color-coded trade logs in the GUI, and updating version strings and build scripts.",
+  "updatedAt": "2026-01-21T05:44:53.923592800Z",
+  "version": "4"
+}

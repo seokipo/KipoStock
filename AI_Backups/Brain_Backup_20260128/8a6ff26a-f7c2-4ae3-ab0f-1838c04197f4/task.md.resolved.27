@@ -1,0 +1,10 @@
+# 작업 목록 (Task List)
+
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 명령어 매수 시간 표시 오류 수정 (폴백 로직 추가)
+- [x] UI 버튼 애니메이션(Start, Stop, Report) 및 중복 클릭 방지 로직 추가
+- [x] 데이터 유실 방지하도록 빌드 스크립트 수정 (dist 폴더 보존)
+- [x] 조건식 선택 박스(0-19) 전체 범위 확장 및 번호 유실 현상 수정
+- [x] 최종 빌드 및 검증 (V5.1 Stable) 버전 빌드 (`KipoStock_V5.1_Stable.exe`)
+- [x] 사용자 테스트 및 검증 (최종 수정본 배포)
+  - [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 명령어 출력 확인 (`[ ? ]` 또는 시간 표시)
+  - 조건식 버튼 0-19 번호 표시 확인

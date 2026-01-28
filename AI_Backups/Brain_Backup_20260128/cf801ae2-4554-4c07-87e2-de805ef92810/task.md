@@ -1,0 +1,9 @@
+# 작업 목록: 시퀀스 제어 명령어 고도화 (auto 0 포함)
+
+- [x] 기존 `MarketHour` 로직 및 시퀀스 토글 이벤트 분석
+- [x] 상세 구현 계획 수립 
+- [/] 명령어 고도화 구현 [/]
+    - [ ] `chat_command.py`: `auto 0` 처리 및 도움말 업데이트 [ ]
+    - [ ] `Kipo_GUI_main.py`: `on_remote_auto_sequence(0)` 중지 로직 구현 [ ]
+    - [ ] `Kipo_GUI_main.py`: 망가진 `update_status_ui` 완전 복구 및 검증 [ ]
+- [ ] 최종 테스트 및 클린 빌드 [ ]

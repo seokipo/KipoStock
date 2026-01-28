@@ -1,0 +1,17 @@
+# 작업: 명령어 및 UI 동기화
+
+- [x] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py) 및 [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)의 시작/중지 로직 분석
+- [x] GUI 버튼 액션과 명령어 액션 간의 불일치 식별
+- [x] 통합된 `start_system` 및 `stop_system` 메커니즘 구축
+- [x] 모든 명령어 소스에서 UI 업데이트 트리거 보장
+- [x] CLI, 텔레그램, GUI 버튼 간의 동기화 검증
+- [x] 최종 변경 사항 문서화 및 워크스루 작성
+- [x] 최신 로직 반영 실행 파일(EXE) 빌드 시작
+- [x] 공식 V5.5.0 버전 확정 및 최종 빌드
+- [x] 파생 프로젝트 폴더 관리 전략 제안
+- [x] V5.5 완성본 백업 (`StockStockV5.5`)
+- [/] 리포트 합계 오류 수정 및 V5.5.1 빌드
+    - [ ] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py) 내 총 매도금액 합산 로직 수정
+    - [ ] 로그 출력 및 요약 섹션 동기화 확인
+    - [ ] V5.5.1 버전 상향 및 재빌드
+    - [ ] `StockStockV5.5` 백업 최신화

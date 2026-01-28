@@ -1,0 +1,30 @@
+# 구현 계획 - 자동 시작 기능 복구 (Auto-Start Restoration)
+
+## 목표 설명 (Goal Description)
+앱이 실행될 때 [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/settings.json)의 `auto_start` 설정이 켜져 있다면, 사용자가 수동으로 "START" 버튼을 누르지 않아도 자동으로 감시를 시작(또는 장외 시간 대기 모드로 진입)하도록 기능을 복구합니다.
+
+## 사용자 검토 필요 사항 (User Review Required)
+없음. 기존에 동작하던 기능을 복구하는 작업입니다.
+
+## 변경 제안 (Proposed Changes)
+
+### GUI 로직 수정
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py)
+- [AsyncWorker](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#32-246) 클래스의 초기화 또는 루프 시작 부분 수정:
+    1. [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/settings.json)에서 `auto_start` 값을 읽어옵니다.
+    2. 값이 `True`인 경우, 자동으로 `self.schedule_command('start')`를 호출하도록 로직을 추가합니다.
+    - 기존의 [start](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#106-146) 명령 로직을 그대로 활용하므로, 다음 동작이 자동으로 처리됩니다:
+        - 장 운영 시간인 경우: 즉시 **RUNNING** 상태로 전환.
+        - 장외 시간(15:30 ~ 09:00)인 경우: **WAITING** 상태로 전환 및 안내 메시지 출력.
+        - 그 외 시간: 경고 메시지와 함께 READY 상태 유지.
+
+## 검증 계획 (Verification Plan)
+
+### 수동 검증 (Manual Verification)
+1.  **설정 변경**: [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/settings.json) 파일에서 `"auto_start": true`로 설정합니다.
+2.  **앱 실행**: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py)를 실행합니다.
+3.  **기대 결과**:
+    - "🚀 시스템 초기화 완료..." 로그 출력.
+    - "ℹ️ 자동 시작 설정이 활성화되어 있습니다." 로그 출력 (신규 추가).
+    - 별도 조작 없이 자동으로 시작 시도.
+    - 현재 시간에 따라 **RUNNING** 또는 **WAITING** 상태로 자동 전환되는지 확인.

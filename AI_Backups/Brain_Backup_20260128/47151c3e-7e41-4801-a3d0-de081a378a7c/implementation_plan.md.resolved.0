@@ -1,0 +1,44 @@
+# Implementation Plan - KipoBuy Android App Conversion
+
+Convert the KipoBuy trading system into a professional-grade mobile web application (PWA) suitable for Android devices, with a modular layout and no alarm features.
+
+## Proposed Changes
+
+### Backend Refactoring
+#### [MODIFY] [mobile_server.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/mobile_server.py)
+- Enhance the FastAPI server to serve a modern, responsive mobile UI.
+- Add robust API endpoints for fetching detailed status (holdings, balance, logs).
+- Ensure any alarm-related logic is excluded.
+- Implement server-side state management for logs to ensure mobile users see recent activity.
+
+### Mobile UI Implementation
+#### [NEW] [index.html](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/index.html)
+- A single-page application (SPA) structure with Three main sections:
+    - **Dashboard**: High-level metrics (Profit/Loss, Status, Today's Change).
+    - **Trading/Logs**: Real-time log feed and trading controls (Start/Stop).
+    - **Settings**: Interactive forms for Profit/Loss rates, Max stocks, and Condition list.
+- Premium aesthetics: Dark mode support, glassmorphism, smooth transitions, and vibrant accents.
+
+#### [NEW] [mobile_ui.css](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/css/mobile_ui.css)
+- Custom Vanilla CSS for a cohesive, premium look and feel.
+- Responsive design optimized for Android screens.
+
+#### [NEW] [mobile_app.js](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/js/mobile_app.js)
+- Frontend logic for API communication, dynamic UI updates, and tab switching.
+
+### PWA Configuration
+#### [MODIFY] [manifest.json](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/manifest.json)
+- Update for better "Add to Home Screen" experience on Android with proper icons and theme colors.
+
+## Verification Plan
+
+### Automated Tests
+- No automated tests currently exist for the UI, so I will perform manual verification of the API endpoints using `curl` or browser tools.
+- Verify `GET /api/status` returns expected trading data.
+
+### Manual Verification
+1. **Mobile Layout Check**: Open the server on a browser (or simulated mobile view) and verify the 3 sections are well-placed.
+2. **Functional Test**: 
+    - Click "Start" on mobile and verify the trading logic begins (logs appear).
+    - Change a setting (e.g., Profit Rate) and verify it's saved to [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/settings.json).
+3. **Alarm Absence**: Ensure no "Alarm" or "Sound" options are present in the mobile UI.

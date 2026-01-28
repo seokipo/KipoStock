@@ -1,0 +1,30 @@
+# 세금 데이터 수정 및 정렬 기능 구현 계획
+
+사용자가 세금 데이터가 0으로 표시되는 문제를 보고했으며, 거래 일지 리스트를 조건식 이름 기준으로 오름차순 정렬하여 출력하기를 원합니다.
+
+## 변경 제안 내용
+
+### [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py)
+
+#### [MODIFY] [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#233-323) 메서드
+
+1.  **세금 데이터 수집 보강:** `tax` 변수를 추출할 때 `levy_comamt`, `tr_tax`, `tot_tr_tax` 필드를 추가로 체크하도록 수정합니다. (한국투자증권 API의 다양한 필드명 대응)
+2.  **정렬 기능 추가:** `diary_list`를 순회하기 전에 `cond_mapping`에서 얻은 조건식 이름(`cond_name`)을 기준으로 오름차순 정렬을 수행합니다.
+
+```python
+# 수정 전:
+# diary_list = res.get('list', [])
+
+# 수정 후:
+# diary_list = res.get('list', [])
+# # 조건식 이름 기준으로 정렬 (직접매매 포함)
+# diary_list.sort(key=lambda x: cond_mapping.get(x['stk_cd'].replace('A', ''), "직접매매"))
+```
+
+## 검증 계획
+
+### 수동 검증
+- 실제 API를 호출할 수 없으므로, 코드 로직이 다음 사항을 충족하는지 검토합니다:
+    - 새로운 세금 관련 필드들이 `tax` 변수 추출에 반영되었는지 확인.
+    - `display_rows`를 만들기 전에 `diary_list`가 제대로 정렬되는지 확인.
+- 사용자에게 [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#233-323) 명령어를 실행하여 세금이 표시되는지, 그리고 정렬이 조건식 별로 잘 되는지 확인 요청.

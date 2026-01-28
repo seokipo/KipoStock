@@ -1,0 +1,36 @@
+# Task: Add `:today` command for daily trading log
+
+## Research
+- [x] Find where commands are processed in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Identify the API call for "당일매매일지조회" in image 0 (Confirmed: [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53))
+- [x] Check if [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py) has a log display function
+
+## Implementation
+- [x] Create [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py) using [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53)
+- [x] Update [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/check_n_buy_1ju.py) to persist stock-condition mapping
+- [x] Implement `:today` command in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Implement Excel export feature (CSV) along with log display
+# Task: Add `:today` command for daily trading log
+
+## Research
+- [x] Find where commands are processed in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Identify the API call for "당일매매일지조회" in image 0 (Confirmed: [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53))
+- [x] Check if [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py) has a log display function
+
+## Implementation
+- [x] Create [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py) using [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53)
+- [x] Update [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/check_n_buy_1ju.py) to persist stock-condition mapping
+- [x] Implement `:today` command in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Implement Excel export feature (CSV) along with log display
+- [x] Format the output with lines and requested columns
+
+## Verification
+- [ ] Verify the `:today` command prints the log correctly
+- [ ] Check if the formatting matches the user's request
+## UI Polishing & Final Fixes
+- [x] Restore 'Save Settings' button to UI
+- [x] Brighten log timestamp color
+- [x] Fix icon loading and bundling
+- [ ] Silence `[조건식 목록]` in log when saving settings
+- [ ] Implement auto-start logic for off-market hours
+- [ ] Re-build and verify

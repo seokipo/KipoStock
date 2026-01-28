@@ -1,0 +1,43 @@
+# Start/Stop Command and UI Synchronization Plan
+
+Ensure that the trading system's start and stop actions are perfectly synchronized across all input sources (GUI buttons, CLI, and Telegram) and that the UI state correctly reflects the system status (READY, RUNNING, WAITING).
+
+## User Review Required
+
+> [!IMPORTANT]
+> To achieve perfect synchronization, all "start" and "stop" requests (including those from Telegram) will now pass through the GUI's worker logic. This ensures that the "WAITING" state for market-off hours is consistently applied regardless of the command source.
+
+## Proposed Changes
+
+### [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- Add `on_start_request` and `on_stop_request` callback attributes to the [ChatCommand](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#29-659) class.
+- Update [process_command](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#569-659) to call these callbacks for 'start' and 'stop' commands instead of calling `self.start()` / `self.stop()` directly (if the callbacks are set).
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- In `AsyncWorker.run`, register `on_start_request` and `on_stop_request` to call `self.schedule_command('start')` and `self.schedule_command('stop')` respectively.
+- Refine `AsyncWorker._execute_command` to ensure 'start' and 'stop' logic is robust and unified.
+- Update [update_status_ui](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#866-885) to ensure all relevant buttons (START, STOP, etc.) are correctly enabled/disabled based on the status.
+
+## Verification Plan
+
+### Automated Tests
+- I will add log messages to verify which path is taken when a command is received.
+- I will verify that `status_signal` is emitted exactly once or consistently for both GUI and Telegram inputs.
+
+### Manual Verification
+1.  **GUI Button Test**:
+    - Click START button -> Verify UI shows RUNNING (or WAITING if market is off).
+    - Click STOP button -> Verify UI shows READY.
+2.  **CLI Command Test**:
+    - Type "start" in GUI input -> Verify UI shows RUNNING/WAITING.
+    - Type "stop" in GUI input -> Verify UI shows READY.
+3.  **Telegram Command Test**:
+    - Send "start" from Telegram -> Verify GUI UI updates to RUNNING/WAITING.
+    - Send "stop" from Telegram -> Verify GUI UI updates to READY.
+4.  **Waiting State Sync**:
+    - Start the system during off-market hours -> Verify UI shows WAITING.
+    - Send "stop" from Telegram while in WAITING -> Verify UI shows READY.

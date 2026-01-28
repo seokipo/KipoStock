@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_TASK",
+  "summary": "명령어 동기화 및 자동 시작 버그 수정을 위한 구체적인 수동 작업 목록입니다. `ChatCommand` 콜백 추가와 GUI 연동 작업이 포함되었습니다.",
+  "updatedAt": "2026-01-27T05:46:28.606245100Z",
+  "version": "6"
+}

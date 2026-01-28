@@ -1,0 +1,13 @@
+# Task Checklist
+
+- [x] Find where the "매 수 체 결 성 공" log is generated <!-- id: 0 -->
+- [x] Identify which component has access to the search formula name <!-- id: 1 -->
+- [x] Update the logging logic to include the search formula name and number <!-- id: 2 -->
+- [x] Creating the executable file <!-- id: 4 -->
+- [x] Verify the changes <!-- id: 3 -->
+- [x] Fix "None. 출처불명" and "No reaction" issues <!-- id: 5 -->
+    - [x] Add more robust parsing and debug logs to [rt_search.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.%EC%95%8C%EB%9E%8C/KipoBuy_Gui/rt_search.py) <!-- id: 6 -->
+    - [x] Restore permissive `REAL` buy trigger (with improved naming) <!-- id: 7 -->
+- [x] Add "RUNNING" visual indicator to GUI <!-- id: 8 -->
+    - [x] Update [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.%EC%95%8C%EB%9E%8C/KipoBuy_Gui/Kipo_GUI_main.py) UI and status signals <!-- id: 9 -->
+- [x] Re-build and verify <!-- id: 10 -->

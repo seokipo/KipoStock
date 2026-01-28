@@ -1,0 +1,24 @@
+# Build Walkthrough - KipoStock V5.3.9
+
+The executable file for KipoStock V5.3.9 has been successfully created.
+
+## Changes Made
+- Executed [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/build_exe.py) to compile [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py) into a standalone executable.
+- The build was named [KipoStock_V5.3.9_Auto.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.3.9_Auto.exe) as requested.
+
+## Verification Results
+
+### Build Output
+The build process completed successfully with the following highlights:
+- `✅ 빌드 완료! dist 폴더를 확인하세요.`
+- Files copied to `dist`: [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/settings.json), [icon.ico](file:///d:/Work/Python/AutoBuy/KipoStockNow/icon.ico), [icon.png](file:///d:/Work/Python/AutoBuy/KipoStockNow/icon.png).
+
+### File Locations
+The following files are now available in the `dist` directory:
+- [KipoStock_V5.3.9_Auto.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.3.9_Auto.exe)
+- [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/settings.json)
+- [icon.ico](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/icon.ico)
+- [icon.png](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/icon.png)
+
+> [!NOTE]
+> Ensure all supporting files remain in the same folder as the [.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.3.9_Auto.exe) for the application to function correctly.

@@ -1,0 +1,11 @@
+# 작업 목록 (Task List)
+
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#248-427) 리포트 시간 정렬 수정
+- [x] 시퀀스 자동(Sequence Auto) 고도화 및 버그 수정
+- [x] UI 편의성 및 안정성 강화
+- [x] 시퀀스 완주 후 UI 복구 및 리포트 컬러링 (V5.2.2)
+- [x] 장외 시간 동기화 및 비정상 자동 시작 수정 (V5.2.3)
+- [/] 시퀀스 상태 유지 및 로그 정제 (V5.2.4)
+  - [ ] 프로필 로드 시 현재의 `Sequence Auto` 버튼 상태 강제 유지
+  - [ ] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#248-427) 리포트의 `[DEBUG]` 문구 제거
+- [ ] 최종 빌드 및 검증 완료

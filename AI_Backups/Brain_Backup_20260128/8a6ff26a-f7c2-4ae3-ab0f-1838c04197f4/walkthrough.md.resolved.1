@@ -1,0 +1,20 @@
+# 기능 추가 완료 보고
+
+## 변경된 내용
+
+### 1. 조건식 선택 확장 (20개)
+- **GUI 변경**: 기존 10개(0~9)에서 20개(0~19)로 버튼을 확장하고, 2줄(Grid)로 배치하여 공간 활용도를 높였습니다.
+- **동적 반영**: `START` 상태에서 조건식 버튼을 켜거나 끄면, 즉시 감시 목록 갱신([refresh_conditions](file:///d:/Work/Python/AutoBuy/KipoStockNow/rt_search.py#227-258))이 요청되어 서버에 반영됩니다. 엔진을 재시작할 필요가 없습니다.
+
+### 2. Today 매수 시간 표시
+- **로컬 저장**: 매수가 체결될 때 `daily_buy_times.json` 파일에 체결 시간을 기록합니다.
+- **출력 개선**: [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-368) 명령어 실행 시, 해당 파일 내용을 읽어 **[매수시간]** 항목을 추가로 표시합니다.
+  - 예: `[09:30:15] [급등주] 삼성전자 ...`
+
+### 3. 기술적 개선
+- **[rt_search.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/rt_search.py)**: 실시간 재등록을 위한 [refresh_conditions](file:///d:/Work/Python/AutoBuy/KipoStockNow/rt_search.py#227-258) 메서드를 추가했습니다.
+- **[Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)**: 설정 저장 시 엔진 완전 재시작 대신, 필요한 부분만 갱신하도록 로직을 개선했습니다.
+
+## 사용 방법
+- **조건식**: 0~19번 버튼을 자유롭게 클릭하여 감시 대상에 추가/제거하세요. (실행 중에도 가능)
+- **Today**: 채팅창에 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-368)를 입력하면 매수 시간과 함께 결과를 볼 수 있습니다.

@@ -1,0 +1,64 @@
+# 프로젝트 GitHub 저장 계획
+
+이 계획은 `KipoStockNow` 디렉토리에 Git 저장소를 초기화하고, 제외할 파일을 설정한 뒤 GitHub에 푸시하는 단계를 설명합니다.
+
+## 사용자 검토 필요
+
+> [!WARNING]
+> **민감 정보 감지됨**: [config.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/config.py) 파일에서 API 키와 텔레그램 토큰이 발견되었습니다. 
+> 보안을 위해 이 파일을 `.gitignore` 목록에 추가하여 GitHub에 유출되지 않도록 설정했습니다. 
+> 앞으로는 환경 변수나 별도의 비공개 설정을 통해 비밀번호를 관리하는 것이 좋습니다.
+
+## 제안된 변경 사항
+
+### [Git 설정]
+
+#### [NEW] [.gitignore](file:///d:/Work/Python/AutoBuy/KipoStockNow/.gitignore)
+불필요하거나 민감한 파일이 추적되지 않도록 `.gitignore` 파일을 생성합니다.
+제안된 내용:
+```text
+# 비밀 정보
+config.py
+
+# Python 관련
+__pycache__/
+.venv/
+*.pyc
+
+# 빌드 및 배포
+build/
+dist/
+*.spec
+*.exe
+
+# 로그 및 데이터
+*.csv
+*.log
+trade_log_*.csv
+
+# IDE 설정
+.idea/
+.vscode/
+```
+
+### [실행 단계]
+
+1. **Git 초기화**: `d:\Work\Python\AutoBuy\KipoStockNow` 경로에서 `git init` 실행.
+2. **파일 추가 및 커밋**:
+   - `git add .`
+   - `git commit -m "Initial commit for KipoStockNow"`
+3. **GitHub 연결**: 
+   - 사용자가 제공한 GitHub 레포지토리 URL 확인.
+   - `git remote add origin <URL>` 실행.
+   - `git branch -M main` 실행.
+   - `git push -u origin main` 실행.
+
+## 확인 계획
+
+### 자동화 단계
+- `git status`를 실행하여 제외된 파일(`__pycache__`, `.venv`, [config.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/config.py) 등)이 추적되지 않는지 확인합니다.
+- `git log`를 실행하여 초기 커밋이 성공적으로 완료되었는지 확인합니다.
+
+### 수동 확인
+- 사용자가 GitHub 레포지토리 URL을 제공합니다.
+- 사용자가 GitHub 웹사이트에서 파일들이 정상적으로 올라갔는지 확인합니다.

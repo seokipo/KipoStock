@@ -1,0 +1,10 @@
+# Task: Strategy Sync & Startup Message
+
+- [x] Fix Strategy Sync Mismatch <!-- id: 65 -->
+    - [x] Implement [update_settings_batch](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#352-368) to prevent race conditions <!-- id: 73 -->
+    - [x] Update `KipoWindow.save_settings` to use batch updates <!-- id: 74 -->
+    - [x] Reduce setting cache to 0.5s for immediate reflection <!-- id: 75 -->
+- [x] Add Startup Profile Message <!-- id: 68 -->
+    - [x] Add active profile index to start logs and Telegram <!-- id: 69 -->
+- [x] Re-build & Final Verification <!-- id: 70 -->
+    - [x] Build V4.1 with atomic sync and logging fixes <!-- id: 71 -->

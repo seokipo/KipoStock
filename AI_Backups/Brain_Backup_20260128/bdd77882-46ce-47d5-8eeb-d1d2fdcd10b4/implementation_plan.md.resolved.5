@@ -1,0 +1,28 @@
+# today 명령어 개선 및 텔레그램 연동 계획
+
+이 계획은 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 명령어에 다양한 정렬 옵션을 추가하고, 요약된 매매 결과를 텔레그램으로 전송하는 기능을 강화하는 방법을 설명합니다.
+
+## 제안된 변경 사항
+
+### [명령어 처리 로직]
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+*   [process_command](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#499-552): `today sic`, `today jun` 등의 공백 구분 명령어를 처리하고, 역순 정렬(`-`)을 인식하도록 파서 수정.
+*   [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426): 
+    *   `sort_mode`에 따른 데이터 정렬 로직 구현 (`jun`: 전략순, `sic`: 조건식순, 기본: 시간순).
+    *   `is_reverse` 플래그를 적용하여 내림차순/오름차순 지원.
+    *   `summary_only=True` (tel today) 시 텔레그램 전송 후 로그창에 "텔레그램으로 요약 보고서를 전송했습니다" 메시지 출력.
+*   [help](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#484-498): 새로운 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 명령어 옵션 및 `tel today` 기능 설명 추가.
+
+## 실행 단계
+
+1.  **로직 수정**: [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)의 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 메서드 내부에 정렬 로직(Python `sort` 또는 `sorted`)을 추가합니다.
+2.  **파서 업데이트**: [process_command](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#499-552)에서 하이픈 및 정렬 키워드를 추출하도록 수정합니다.
+3.  **도움말 갱신**: 사용자가 새로운 기능을 알 수 있도록 [help](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#484-498) 메시지를 보강합니다.
+4.  **빌드 및 백업**: 수정된 코드를 확인하고 EXE 파일로 빌드한 뒤 GitHub에 저장합니다.
+
+## 확인 계획
+
+### 수동 확인
+*   명령어 창에 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426), `today jun`, `today sic`, `today jun-` 등을 입력하여 정렬 결과가 올바른지 확인합니다.
+*   `tel today` 입력 시 텔레그램 메시지가 오고 로그창에 전송 완료 메시지가 뜨는지 확인합니다.

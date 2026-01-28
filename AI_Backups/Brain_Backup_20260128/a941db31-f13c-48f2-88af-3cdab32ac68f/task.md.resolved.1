@@ -1,0 +1,14 @@
+# Task: Resolve Alarm-Time Crash and Refine Build
+
+- [x] Investigate [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py) for any remaining auto-stop/auto-exit logic
+    - [x] Check [main_loop](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py#81-106) for [check_market_timing](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py#136-155) calls
+    - [x] Check [check_market_timing](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py#136-155) implementation
+- [x] Create Implementation Plan
+- [/] Implement Stability Fixes
+    - [/] Completely disable automatic stopping logic
+    - [ ] Simplify Alarm to use a safe visual/audio mechanism (potentially `QMessageBox`)
+    - [ ] Clean up redundant imports and dead code
+- [ ] Refine Build Process
+    - [ ] Create a dedicated build script `build_v3.8.py`
+    - [ ] Ensure [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/settings.json) is always copied to `dist`
+- [ ] Verify Fix with User

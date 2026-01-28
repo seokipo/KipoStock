@@ -1,0 +1,9 @@
+# Task: 자동 시퀀스 전환 안정화 및 UI 논리 개선
+
+- [ ] 프로그래밍 용어 사전 업데이트 (`Race Condition` 등) [/]
+- [ ] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py) 로직 수정
+    - [ ] `on_stop_clicked` 메서드 분리 및 리팩토링 [/]
+    - [ ] [on_profile_clicked](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1455-1475)에 5초 안전 대기 로직 추가 [/]
+    - [ ] [lock_ui_for_sequence](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1644-1679)에서 `READY` 상태 시 잠금 해제 허용 [/]
+- [ ] 버전 업데이트 (V5.4.13) 및 빌드 [/]
+- [ ] 최종 검증 및 워크쓰루 작성 [/]

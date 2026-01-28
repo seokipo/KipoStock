@@ -1,0 +1,9 @@
+# Task: V4.1 Profit Fix Completion
+
+- [x] Fix Log Data Mapping (Missing sell/profit) <!-- id: 54 -->
+    - [x] Add robust key fallbacks <!-- id: 55 -->
+    - [x] Implement manual PnL calculation fallback <!-- id: 63 -->
+- [x] Improve Profile UI (Visibility & Highlight) <!-- id: 56 -->
+- [x] UI Restriction (Lock 1 share Qty) <!-- id: 59 -->
+- [x] Re-build & Final Verification <!-- id: 61 -->
+    - [x] Build `KipoStock_V4.1_GOLD.exe` with profit fix <!-- id: 64 -->

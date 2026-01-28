@@ -1,0 +1,23 @@
+# Build KipoStock Executable (V5.3.9)
+
+This plan outlines the steps to create a Windows executable for the KipoStock Auto Trading System.
+
+## Proposed Changes
+
+We will use the existing [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/build_exe.py) script, which is already configured for the latest version found in [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py) (V5.3.9).
+
+### [Component Name]
+
+#### [MODIFY] [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/build_exe.py)
+- Ensure the script correctly points to [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py) and uses the expected name `KipoStock_V5.3.9_Auto.exe`.
+- *Note: Current check shows it is already set to `V5.3.9`.*
+
+## Verification Plan
+
+### Automated Tests
+- Running `python build_exe.py` and checking for "✅ 빌드 완료!" message.
+
+### Manual Verification
+- Check the `dist` folder for `KipoStock_V5.3.9_Auto.exe`.
+- Verify that supporting files ([settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/settings.json), [icon.ico](file:///d:/Work/Python/AutoBuy/KipoStockNow/icon.ico), [icon.png](file:///d:/Work/Python/AutoBuy/KipoStockNow/icon.png)) are copied to the `dist` folder.
+- (Optional) Attempt to run the executable to ensure it launches (might require user assistance if API keys/environment are missing).

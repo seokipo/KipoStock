@@ -1,0 +1,9 @@
+# Task: Strategy Sync & Startup Message
+
+- [x] Fix Strategy Sync Mismatch <!-- id: 65 -->
+    - [x] Update [on_start_clicked](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py#588-603) to call [save_settings()](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py#967-1050) <!-- id: 67 -->
+- [x] Add Startup Profile Message <!-- id: 68 -->
+    - [x] Add active profile index to start logs <!-- id: 69 -->
+- [x] Re-build & Final Verification <!-- id: 70 -->
+    - [x] Build V4.1 with final fixes <!-- id: 71 -->
+    - [x] Verify profile message and setting sync <!-- id: 72 -->

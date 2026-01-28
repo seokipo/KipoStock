@@ -1,0 +1,43 @@
+# V4.0 설정 프로필 기능 및 오늘 데이터 정교화
+
+사용자 요청에 따라 설정을 3개의 슬롯(1, 2, 3번)에 저장하고 불러올 수 있는 기능을 추가하고, [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-303) 명령어의 데이터 정확도를 높이기 위한 수정을 진행합니다.
+
+## User Review Required
+
+> [!IMPORTANT]
+> - **설정 프로필 저장 방식**: '설정 저장' 버튼 클릭 시 1, 2, 3번 버튼이 점멸하며, 이때 번호를 누르면 해당 슬롯에 현재 설정이 저장됩니다.
+> - **설정 불러오기**: 점멸 중이 아닐 때 번호를 누르면 즉시 해당 슬롯의 설정으로 UI가 업데이트됩니다.
+> - **데이터 보정**: [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-303) 명령어 호출 시 `ottks_tp` 파라미터를 `2`(실현손익 중심)로 변경하여 더 정확한 데이터를 제공합니다.
+
+## Proposed Changes
+
+### 1. GUI 및 설정 프로필 (Kipo_GUI_main.py)
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py)
+- **UI 레이아웃 수정**:
+    - '설정 저장' 버튼 크기를 줄이고 좌측에 배치.
+    - 우측에 '1', '2', '3' 프로필 선택 버튼 추가.
+- **프로필 기능 구현**:
+    - `is_save_mode` 상태 변수 추가.
+    - '설정 저장' 클릭 시 `is_save_mode = True` 및 프로필 버튼 점멸 시작 (`QTimer` 사용).
+    - 프로필 버튼 클릭 시:
+        - `is_save_mode`가 `True`면 해당 슬롯에 현재 UI 값 저장 후 점멸 중지.
+        - `is_save_mode`가 `False`면 해당 슬롯의 설정을 읽어와 UI에 반영.
+- **데이터 구조**: [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/settings.json) 내에 `profiles` 키를 추가하여 1, 2, 3번 데이터를 별도로 관리.
+
+### 2. 데이터 보정 및 버그 수정
+
+#### [MODIFY] [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py)
+- `ottks_tp` 기본값을 `'2'`로 수정하여 실현손익 중심의 데이터를 가져오도록 변경.
+
+#### [MODIFY] [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/check_n_buy_1ju.py)
+- 누락된 `import json` 및 [time](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/market_hour.py#27-32) 등을 재점검하여 선언 에러 방지.
+
+---
+
+## Verification Plan
+
+### Manual Verification
+1.  **프로필 저장**: 설정을 변경하고 '설정 저장' 클릭 시 1, 2, 3번 버튼이 깜빡이는지 확인. 1번을 누르고 다시 불러왔을 때 값이 유지되는지 확인.
+2.  **프로필 스위칭**: 1번과 2번에 서로 다른 설정을 저장한 후, 버튼 클릭만으로 UI 상의 익절/손절/시간 설정 등이 즉시 바뀌는지 확인.
+3.  **오늘 데이터**: `/today` 명령어 결과가 실제 거래 내역과 일치하는지 샘플과 대조.

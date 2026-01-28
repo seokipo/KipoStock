@@ -1,0 +1,10 @@
+# Task: V4.1 Polishing & Bug Fixes
+
+- [x] Fix Log Data Mapping (Missing sell/profit) <!-- id: 54 -->
+- [x] Improve Profile UI (Visibility & Highlight) <!-- id: 56 -->
+- [x] Strategy Sync & Startup Message <!-- id: 65 -->
+- [x] Fix Missing Tax in CSV <!-- id: 78 -->
+- [x] Command Guide & Logic (print/msg) <!-- id: 81 -->
+- [x] Profile Button Multi-State Color Polish <!-- id: 84 -->
+    - [x] Write Logic: White (Empty) / Gray (Data) / Blue (Active) <!-- id: 85 -->
+- [x] Re-build & Final Verification <!-- id: 70 -->

@@ -1,0 +1,6 @@
+# Task: Save Project to GitHub
+
+- [ ] Find the target folder `KipoStock` <!-- id: 0 -->
+- [ ] Initialize Git if necessary <!-- id: 1 -->
+- [ ] Add files and commit <!-- id: 2 -->
+- [ ] Push to GitHub repository <!-- id: 3 -->

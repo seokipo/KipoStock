@@ -1,0 +1,23 @@
+# 워크스루 - 압정 기능 복구 및 today 정렬 표시 개선
+
+이 문서는 압정 기능의 실질적인 복구와 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-448) 명령어의 가독성 개선 작업의 최종 결과를 요약합니다.
+
+## 주요 변경 사항
+
+### 1. 압정 기능(항상 위) 복구
+- **변경**: 이전의 Win32 API 방식이 다른 창과 충돌하여 작동하지 않던 문제를 해결하기 위해, Qt의 전용 메서드(`setWindowFlag`)를 사용하여 기능을 복구했습니다.
+- **효과**: 이제 압정 버튼을 누르면 다른 프로그램 창보다 항상 위에 고정되는 기능이 정상적으로 작동합니다.
+
+### 2. [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-448) 명령어 정렬 기준 표시
+- **개선**: 매매 일지 조회 시 현재 어떤 기준으로 정렬되어 있는지 한글로 명확히 표시합니다.
+- **예시**:
+    - `▶ 조회 결과: 56건 (정렬: 매수시간순)`
+    - `▶ 조회 결과: 56건 (정렬: 손익순-역순)`
+- **정렬 옵션**: [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-448), `today/sic`, `today/jun`, `today/son` (+ `-` 역순)
+
+## 최종 빌드 정보
+- **버전**: V5.3.9 (최종 안정화)
+- **실행 파일**: [KipoStock_V5.3.9_Auto.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.3.9_Auto.exe)
+
+> [!IMPORTANT]
+> 압정 기능 사용 시 시스템 환경에 따라 아주 미세한 깜빡임이 발생할 수 있으나, 이는 '항상 위' 상태를 확실히 적용하기 위한 과정입니다.

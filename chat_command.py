@@ -120,6 +120,10 @@ class ChatCommand:
         failure_count = 0
         while self.rt_search.keep_running:
             try:
+                if MarketHour.is_waiting_period():
+                    await asyncio.sleep(0.5)
+                    continue
+
                 if not self.token: 
                     await asyncio.sleep(1)
                     continue
@@ -130,10 +134,14 @@ class ChatCommand:
                 if failure_count >= 20:
                     print("⚠️ 매도 루프 연속 실패로 재시작 시도")
                     break 
+                
+                # [최적화] CPU 점유율 과다 방지를 위해 0.5초 대기 (초고속 성능 유지와 부하 균형)
+                await asyncio.sleep(0.5) 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"⚠️ 매도 루프 에러: {e}")
+                await asyncio.sleep(1) # 에러 시 잠시 대기
                 failure_count += 1
             await asyncio.sleep(0.1)
 
@@ -160,9 +168,9 @@ class ChatCommand:
                 return False
             
             self.update_setting('auto_start', True)
-            if not MarketHour.is_market_open_time():
+            if MarketHour.is_waiting_period():
                 now_str = datetime.now().strftime('%H:%M:%S')
-                print(f"⚠️ [거부] 장외 시간입니다. 시간을 다시 설정하세요. (현재: {now_str})")
+                print(f"⚠️ [거부] 설정된 매매 시간이 아닙니다. (현재: {now_str})")
                 self.is_starting = False # Ensure flag is reset on failure
                 return False
             
@@ -353,13 +361,28 @@ class ChatCommand:
                     else:
                         cond_name = str(mapping_val)
                     
+                    # [수정] 오버나이트 종목 판별 및 시간 표시 개선
+                    current_time_str = datetime.now().strftime("%H:%M:%S")
+                    is_overnight = False
+                    
+                    # 매수 기록(금품)이 0이거나, 찾은 시간이 현재 시각보다 미래라면 오버나이트로 간주
+                    buy_amt_val = int(float(val(['buy_amt', 'tot_buy_amt'])))
+                    if buy_amt_val <= 0 or (found_buy_time and found_buy_time > current_time_str):
+                        is_overnight = True
+                    
+                    final_buy_time = found_buy_time if found_buy_time else "99:99:99"
+                    if is_overnight:
+                        # 오버나이트면 [전일] 표시를 붙여서 시각적 오해 방지
+                        if found_buy_time: final_buy_time = f"전일 {found_buy_time[:5]}"
+                        else: final_buy_time = "[전일]"
+
                     row = {
                         'code': code,
                         'name': item.get('stk_nm', '--'),
-                        'buy_time': found_buy_time if found_buy_time else '99:99:99',
+                        'buy_time': final_buy_time,
                         'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc']))),
                         'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty']))),
-                        'buy_amt': int(float(val(['buy_amt', 'tot_buy_amt']))),
+                        'buy_amt': buy_amt_val,
                         'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric']))),
                         'sel_qty': int(float(val(['sell_qty', 'tot_sel_qty', 'sel_qty']))),
                         'sel_amt': int(float(val(['sell_amt', 'tot_sel_amt', 'sel_amt']))),
@@ -368,7 +391,8 @@ class ChatCommand:
                         'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate'])),
                         'cond_name': cond_name,
                         'strat_key': strat_key,
-                        'strat_nm': strat_nm
+                        'strat_nm': strat_nm,
+                        'is_overnight': is_overnight
                     }
                     processed_data.append(row)
                 except: continue
@@ -427,11 +451,23 @@ class ChatCommand:
             for r in processed_data:
                 row_color = colors.get(r['strat_key'], '#00ff00')
                 bt_str = f"[{r['buy_time']}]"
+                if r.get('is_overnight'):
+                    bt_str = f"<font color='#ffeb3b'><b>{bt_str}</b></font>" # 오버나이트 강조
+                
                 st_str = f"[{r['strat_nm']}]"
-                row_content = f"{bt_str:<10} {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {r['buy_avg']:>7,}/{r['buy_qty']:>3}/{r['buy_amt']:>8,} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
+                
+                # [수정] 오버나이트 종목은 매수 데이터가 0인 경우가 많으므로 '-' 로 표시해서 가독성 높임
+                buy_avg_str = f"{r['buy_avg']:>7,}" if r['buy_avg'] > 0 else f"{'-':>7}"
+                buy_qty_str = f"{r['buy_qty']:>3}" if r['buy_qty'] > 0 else f"{'-':>3}"
+                buy_amt_str = f"{r['buy_amt']:>8,}" if r['buy_amt'] > 0 else f"{'-':>8}"
+                
+                row_content = f"{bt_str:<10} {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {buy_avg_str}/{buy_qty_str}/{buy_amt_str} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
+                
+                # [수정] 텔레그램용은 HTML 태그 제거
+                row_tel = f"[{r['buy_time']:<8}] {st_str:<6} {r['cond_name']:.8} {r['name']:<10} | {buy_avg_str}/{buy_qty_str}/{buy_amt_str} | {r['sel_avg']:>7,}/{r['sel_qty']:>3}/{r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
                 display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
-                tel_rows.append(row_content)
+                tel_rows.append(row_tel)
 
             d_ft = "--------------------------------------------------------------------------------------------------------------------\n"
             display_rows.append(d_ft)

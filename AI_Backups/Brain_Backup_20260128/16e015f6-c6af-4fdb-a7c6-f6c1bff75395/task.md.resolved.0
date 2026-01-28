@@ -1,0 +1,7 @@
+# Task: Support Switch to English Account
+
+- [ ] Clarify "English account" meaning with the user (Kiwoom vs. KIS Overseas vs. Real account) <!-- id: 0 -->
+- [ ] Research implementation details for the target account type <!-- id: 1 -->
+- [ ] Update [config.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/config.py) and other modules as needed <!-- id: 2 -->
+- [ ] Verify functionality for the "English account" <!-- id: 3 -->
+- [ ] Create latest EXE (V5.5.3+) as promised <!-- id: 4 -->

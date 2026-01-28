@@ -1,0 +1,24 @@
+# 오류 수정 및 UI 안정화 구현 계획
+
+이 계획은 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) 명령어 실행 시 발생하는 런타임 에러를 수정하고, 압정 핀 기능의 사용자 경험을 개선하는 것을 목표로 합니다.
+
+## 제안된 변경 사항
+
+### 1. [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) 명령어 `NameError` 수정
+#### [수정] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- [get_sort_key](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#284-306) 함수 내부에서 사용되는 `bt_data`가 실제 정의 및 로드되기 이전에 참조되어 발생하는 에러를 해결합니다.
+- 매수 시간 데이터를 로드하는 로직을 [get_sort_key](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#284-306) 정의보다 위쪽으로 이동시킵니다.
+
+### 2. 압정 핀 깜빡임 문제 해결
+#### [수정] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- `setWindowFlags`는 윈도우 핸들을 재성성하므로 화면이 깜빡입니다.
+- 대신 `setWindowFlag`를 사용하고, 창의 가시성을 유지하는 최적의 방식을 적용합니다. (필요 시 최소한의 `show()`만 호출)
+
+### 3. 명령어 정렬 순서 설명
+- [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) 명령어의 각 옵션별 정렬 로직과 우선순위를 사용자에게 명확히 설명합니다.
+
+## 검증 계획
+
+### 수동 검증
+- [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) 명령어를 입력했을 때 에러 없이 매수 시간순으로 정렬되는지 확인합니다.
+- 압정 핀 버튼을 클릭할 때 창이 깜빡이거나 사라지지 않고 부드럽게 상태가 변하는지 확인합니다.

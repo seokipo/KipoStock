@@ -1,0 +1,46 @@
+# 구현 계획서 - KipoBuy 안드로이드 앱 변환
+
+KipoBuy 주식 자동매매 시스템을 안드로이드 기기에 최적화된 전문적인 모바일 웹 애플리케이션(PWA)으로 변환합니다. 모듈형 레이아웃을 채택하며, 요청하신 대로 알람 기능을 제외합니다.
+
+## 제안된 변경 사항
+
+### 백엔드 리팩토링
+#### [MODIFY] [mobile_server.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/mobile_server.py)
+- 현대적이고 반응성이 뛰어난 모바일 UI를 제공하도록 FastAPI 서버를 개선합니다.
+- 상세 상태(보유 종목, 잔고, 로그)를 가져오기 위한 견고한 API 엔드포인트를 추가합니다.
+- 알람 관련 모든 로직을 제외합니다.
+- 서버 측 로그 상태 관리를 구현하여 모바일 사용자가 최근 활동을 즉시 확인할 수 있도록 합니다.
+
+### 모바일 UI 구현
+#### [MODIFY] [index.html](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/index.html)
+- 대시보드 섹션에 "Hero" 영역 추가하여 주요 상태(수익률, 잔고) 시각화 강화.
+- 실시간 상태를 나타내는 펄스(Pulse) 애니메이션 인디케이터 적용.
+- 가독성을 높인 카드 레이아웃 및 세련된 타이포그래피.
+
+#### [MODIFY] [mobile_ui.css](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/css/mobile_ui.css)
+- 배경에 역동적인 그라데이션 애니메이션 추가.
+- 글래스모피즘 효과 심화 (Blur 및 보더 투명도 최적화).
+- 버튼 및 카드에 네온 효과 및 호버/액티브 상태 애니메이션 추가.
+
+#### [NEW] [mobile_app.js](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/static/js/mobile_app.js)
+- API 통신, 동적 UI 업데이트 및 탭 전환을 위한 프론트엔드 로직.
+
+### PWA 설정
+#### [MODIFY] [manifest.json](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/manifest.json)
+### 안드로이드 네이티브 프로젝트 완성 (Full Project)
+- **Gradle 설정**: 프로젝트 및 앱 수준의 `build.gradle`, `settings.gradle` 생성.
+- **의의**: 안드로이드 스튜디오에서 프로젝트를 여는 즉시 빌드가 가능하거나, 커맨드라인에서 바로 APK를 추출할 수 있는 상태로 만듦.
+- **자동 빌드 시도**: 사용자 환경에 SDK가 있다면 자동으로 APK 생성을 시도하고, 없다면 최종 단계만 사용자에게 위임.
+
+## 검증 계획
+
+### 자동화 테스트
+- UI 자동화 테스트는 없으므로, `curl` 또는 브라우저 도구를 사용하여 API 엔드포인트를 수동으로 검증합니다.
+- `GET /api/status`가 예상된 매매 데이터를 반환하는지 확인합니다.
+
+### 수동 검증
+1. **모바일 레이아웃 확인**: 브라우저나 모바일 시뮬레이터에서 3개 섹션의 배치를 확인합니다.
+2. **기능 테스트**:
+    - 모바일에서 "시작"을 클릭하여 매매 로직이 시작되는지(로그 생성) 확인합니다.
+    - 설정(예: 익절률)을 변경하고 [settings.json](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/settings.json)에 반영되는지 확인합니다.
+3. **알람 부재 확인**: 모바일 UI에 "알람" 또는 "소리" 관련 옵션이 없는지 최종 확인합니다.

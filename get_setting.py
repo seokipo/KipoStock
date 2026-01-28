@@ -12,9 +12,18 @@ def get_base_path():
         # 파이썬 스크립트로 실행 중일 때: 스크립트 파일이 위치한 폴더 반환
         return os.path.dirname(os.path.abspath(__file__))
 
+# 전역 캐시 변수 (파일 I/O 최소화)
+_SETTINGS_CACHE = {}
+_LAST_SETTINGS_LOAD_TIME = 0
+
 def get_setting(key, default=''):
+    global _SETTINGS_CACHE, _LAST_SETTINGS_LOAD_TIME
     try:
-        # [수정] 경로 구하는 방식 변경
+        now = time.time()
+        # [최적화] 1초 이내 요청은 메모리 캐시 사용 (매 초 수백번의 I/O 방지)
+        if _SETTINGS_CACHE and (now - _LAST_SETTINGS_LOAD_TIME < 1.0):
+            return _SETTINGS_CACHE.get(key, default)
+
         base_path = get_base_path()
         settings_path = os.path.join(base_path, 'settings.json')
         
@@ -22,25 +31,14 @@ def get_setting(key, default=''):
             return default
             
         with open(settings_path, 'r', encoding='utf-8') as f:
-            settings = json.load(f)
-        return settings.get(key, default)
+            _SETTINGS_CACHE = json.load(f)
+            _LAST_SETTINGS_LOAD_TIME = now
+            
+        return _SETTINGS_CACHE.get(key, default)
     except Exception as e:
-        print(f"오류 발생(get_setting): {e}")
+        # print(f"오류 발생(get_setting): {e}") # 로그 과다 방지
         return default
 
 def cached_setting(key, default=''):
-    # 여러 key 값의 캐시 관리 (value, read_time) 형태로 저장
-    if not hasattr(cached_setting, "_cache"):
-        cached_setting._cache = {}
-
-    now = time.time()
-    cache = cached_setting._cache
-
-    value_info = cache.get(key, (None, 0))
-    cached_value, last_read_time = value_info
-
-    if now - last_read_time > 0.5 or cached_value is None:
-        # 0.5초 경과하거나 캐시 없음 → 새로 읽음 (실시간 반영을 위해 주기 대폭 단축)
-        cached_value = get_setting(key, default)
-        cache[key] = (cached_value, now)
-    return cached_value
+    """기존 인터페이스 유지를 위해 사용 (이제 get_setting 자체가 캐싱됨)"""
+    return get_setting(key, default)

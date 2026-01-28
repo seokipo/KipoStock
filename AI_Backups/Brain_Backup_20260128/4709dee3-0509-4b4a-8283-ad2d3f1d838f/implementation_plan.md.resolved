@@ -1,0 +1,30 @@
+# 장 운영 시간 제한 및 자동 종료 시퀀스 구현 계획 (v7)
+
+장 운영 시간을 09:00~15:30으로 엄격히 제한하고, 장 종료 시 자동으로 중단 및 보고를 수행하는 기능을 추가합니다.
+
+## 변경 제안 내용
+
+### [market_hour.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/market_hour.py)
+#### [MODIFY] 클래스 상수 및 메서드
+- **상수 고정**: `MARKET_END_HOUR`를 15, `MARKET_END_MINUTE`를 30으로 기본값 조정.
+- **로직 보강**: 장 종료 시간 판단 로직 정교화.
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py)
+#### [MODIFY] 설정 저장 로직 ([save_settings](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#988-1074))
+- **시간 검증**: 입력된 시작/종료 시간이 09:00~15:30 범위를 벗어날 경우 자동으로 해당 범위 내로 보정하거나 경고를 표시합니다.
+#### [MODIFY] 메인 루프 ([main_loop](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#81-110))
+- **자동 종료 시퀀스**: 현재 시간이 15:30:00(또는 설정된 종료 시간)에 도달하면 다음 작업을 순차적으로 실행합니다:
+    1.  [stop()](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/Kipo_GUI_main.py#204-207) (감시 중단)
+    2.  [today()](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#233-354) (당일 매매 일지 출력)
+    3.  [report()](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#177-232) (최종 계좌 보고)
+- **중복 방지**: 해당 분(minute) 내에서 한 번만 실행되도록 플래그 처리.
+
+### [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py)
+#### [MODIFY] [start](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#106-146) 메서드
+- **시간 엄격 체크**: 15:30 이후에는 수동 시작도 거부되도록 체크 강화.
+
+## 검증 계획
+### 수동 검증
+- **시간 제한**: 설정을 16:00 등으로 변경 시도시 15:30으로 강제 조정되는지 확인.
+- **자동 종료**: 시스템 가동 중 15:30이 되었을 때 로그창에 중단 안내 -> 일지 출력 -> 보고서 출력이 순서대로 나타나는지 확인.
+- 최종 EXE 빌드 후 동작 확인.

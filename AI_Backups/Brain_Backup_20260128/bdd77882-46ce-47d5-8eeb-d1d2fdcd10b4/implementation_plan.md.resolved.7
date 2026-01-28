@@ -1,0 +1,30 @@
+# 전략별 개별 익절/손절 설정 구현 계획
+
+매수 전략(1주, 금액, 비율)마다 서로 다른 익절 및 손절 비율을 설정할 수 있도록 기능을 확장합니다.
+
+## 제안된 변경 사항
+
+### [Kipo_GUI_main.py]
+
+- **UI 수정**: `매수 전략 (Buying Strategy)` 그룹박스 내부의 각 행(1주, 금액, 비율)에 익절(TP)과 손절(SL) 입력 필드를 추가합니다.
+    - 디자인: 레이아웃을 최적화하여 기존 `주/원/%` 옆에 `익절/손절` 입력칸을 배치합니다.
+- **데이터 구조**: [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/settings.json)에 `strategy_tp_sl` 항목을 추가하거나 기존 `qty_val`, `amt_val` 등의 형식을 확장하여 저장합니다.
+- **저장/로드**: [save_settings](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1250-1375)와 [load_settings_to_ui](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1173-1249)가 새로운 개별 설정값을 처리하도록 수정합니다.
+
+### [check_n_buy.py]
+
+- **매핑 저장**: 종목 매수 시 [stock_conditions.json](file:///d:/Work/Python/AutoBuy/%EC%8B%A4%ED%96%89%ED%99%94%EC%9D%BC/KipoStock_V5.4/stock_conditions.json)에 해당 전략뿐만 아니라, 매수 시점의 개별 익절/손절 설정값도 함께 저장하여 나중에 매도 시 참조할 수 있게 합니다.
+
+### [check_n_sell.py]
+
+- **매도 로직**: 종목 수익률 체크 시, 먼저 [stock_conditions.json](file:///d:/Work/Python/AutoBuy/%EC%8B%A4%ED%96%89%ED%99%94%EC%9D%BC/KipoStock_V5.4/stock_conditions.json)에 저장된 해당 종목의 개별 TP/SL 값을 확인합니다. 값이 없으면 상단의 글로벌 설정을 사용합니다.
+
+---
+
+## 검증 계획
+
+### 수동 테스트
+1. 1주 전략은 익절 5%, 손절 -3%로 설정.
+2. 금액 전략은 익절 10%, 손절 -5%로 설정.
+3. 각각 매수 발생 후, 실제로 설정된 개별 수익률에 도달했을 때 정확히 매도가 나가는지 확인.
+4. UI에서 값을 바꿨을 때 [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/settings.json)에 잘 반영되는지 확인.

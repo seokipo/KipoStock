@@ -1,0 +1,6 @@
+# 작업: 텔레그램 전송 오류 수정
+
+- [ ] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py): [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 메서드에서 GUI용(HTML)과 Telegram용(Plain Text) 메시지 분리 <!-- id: 5 -->
+- [ ] [tel_send.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/tel_send.py): `parse_mode='HTML'` 지원 추가 및 길이 제한 대응 <!-- id: 6 -->
+- [ ] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 명령어 테스트 (텔레그램 전송 여부 확인) <!-- id: 7 -->
+- [ ] 최신 버전 EXE 재빌드 및 안내 <!-- id: 8 -->

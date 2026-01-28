@@ -1,0 +1,23 @@
+# KipoStock V5.1 Stable - 최종 배포 (에러 수정 완료)
+
+매수 시간 저장 문제의 원인이었던 `sys` 정의 에러를 수정하고 최종 빌드를 완료했습니다.
+
+## 이번 빌드의 핵심 수정 사항
+
+### 1. 매수 시간 저장 오류 해결 (`sys` NameError fix)
+- **에러 수정**: 로그에 나타났던 `name 'sys' is not defined` 오류를 해결했습니다. 코드 내에 `import sys`가 누락되어 발생한 문제였으며, 이를 추가하여 이제 매수 시각이 정상적으로 기록됩니다.
+- **기능 복구**: 이제 종목이 매수되는 즉시 `daily_buy_times.json` 파일에 시간이 저장됩니다.
+
+### 2. 조건식 버튼(0-19) 번호 유실 및 범위 수정 (복습)
+- 10번 이후의 버튼들이 갱신되지 않던 문제를 해결(`range(20)` 적용)하고, 버튼 숫자가 항상 보이도록 강제 설정했습니다.
+
+### 3. 데이터 보존 및 빌드 안정화
+- 빌드 시 기존 데이터가 삭제되지 않도록 빌드 스크립트를 개선했습니다.
+- 프로그램 종료 시 발생하는 "응답 없음" 멈춤 현상을 해결했습니다.
+
+## 테스트 가이드 (최종 확인)
+1. **EXE 실행**: [D:\Work\Python\AutoBuy\KipoStockNow\dist\KipoStock_V5.1_Stable.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.1_Stable.exe) 파일을 실행합니다.
+2. **매수 발생 확인**: 종목이 매수되었을 때 로그 창에 **`✅ [DEBUG] 매수 시간 기록 완료...`** 메시지가 뜨는지 확인해 주세요.
+3. **[today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 명령**: 매수 후 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 명령어를 입력했을 때 매수 시각이 `[12:05:01]` 처럼 정상적으로 출력되는지 확인합니다.
+
+오랜 시간 기다려 주셔서 감사합니다. 이제 모든 기능이 의도대로 동작할 것입니다!

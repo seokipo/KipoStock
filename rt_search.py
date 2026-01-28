@@ -5,6 +5,7 @@ from config import socket_url
 from check_n_buy import chk_n_buy, update_account_cache
 from get_setting import get_setting
 from login import fn_au10001 as get_token
+from market_hour import MarketHour
 
 class RealTimeSearch:
     def __init__(self, on_connection_closed=None):
@@ -109,7 +110,7 @@ class RealTimeSearch:
                             possible = data[0].get('seq') or data[0].get('condition_seq')
                             if possible:
                                 seq = str(possible)
-                                print(f"🔍 [CNSR_DEBUG] Found SEQ in data body: {seq}")
+                                # print(f"🔍 [CNSR_DEBUG] Found SEQ in data body: {seq}")
 
                     # [Fallback 2] 단일 조건식 감시 중이라면 그 번호로 가정
                     if not seq:
@@ -117,13 +118,13 @@ class RealTimeSearch:
                         if isinstance(active_seqs, str): active_seqs = [active_seqs]
                         if len(active_seqs) == 1:
                             seq = str(active_seqs[0])
-                            print(f"🔍 [CNSR_DEBUG] Fallback to single active SEQ: {seq}")
+                            # print(f"🔍 [CNSR_DEBUG] Fallback to single active SEQ: {seq}")
                         else:
                              # 다중 조건식인데 seq가 없으면 0번이라도 가정? (위험하지만 사용자 요청이 0번이 위주라면..)
                              # 일단은 경고만
                              print(f"⚠️ [CNSR_DEBUG] SEQ Missing in Multi-Search! Active: {active_seqs}")
 
-                    print(f"🔍 [CNSR_DEBUG] Extracted SEQ: '{seq}' (Name: {self.condition_map.get(seq, 'Unknown')})")
+                    # print(f"🔍 [CNSR_DEBUG] Extracted SEQ: '{seq}' (Name: {self.condition_map.get(seq, 'Unknown')})")
                     # [Raw Log] 구조 분석용
                     # print(f"📝 [CNSR_RAW] {raw_message}")
 
@@ -161,8 +162,12 @@ class RealTimeSearch:
                                 # 검색식 명칭 추출
                                 seq_name = self.condition_map.get(seq, "이름모름") if seq else "출처불명"
 
-                                # 즉시 매수 스레드로 던짐 (seq, price 전달)
-                                loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name)
+                                # [신규] 매매 가능 시간인지 최종 확인 (3중 방어)
+                                if not MarketHour.is_waiting_period():
+                                    # 즉시 매수 스레드로 던짐 (seq, price 전달)
+                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name)
+                                else:
+                                    pass # print(f"⏳ [대외시간] {jmcode} 매수 건너뜀 (설정 시간 외)")
                 
                 # --- 4. 기타 메시지 ---
                 elif trnm == 'REAL':
@@ -200,7 +205,12 @@ class RealTimeSearch:
                                     seq_name = "실시간감시" 
                                     origin_seq = "N/A"
 
-                                loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name)
+                                # [신규] 매매 가능 시간인지 최종 확인 (3중 방어)
+                                if not MarketHour.is_waiting_period():
+                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name)
+                                else:
+                                    # REAL 신호는 너무 잦으므로 로그 생략
+                                    pass
 
                 elif trnm == 'CNSRREQ':
                     rc = response.get('return_code', 0)

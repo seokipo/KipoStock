@@ -1,0 +1,19 @@
+# 시퀀스 예약 목록 로그 상세화 계획
+
+사용자 요청에 따라 '시퀀스 자동' 버튼 클릭 시 출력되는 예약 목록 정보를 대폭 강화합니다.
+
+## 변경 사항
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python\AutoBuy\KipoStockNow\Kipo_GUI_main.py)
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python\AutoBuy\KipoStockNow\Kipo_GUI_main.py)
+- [on_seq_auto_toggled](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1378-1394) 함수를 수정하여 다음 정보를 로그에 포함합니다.
+    - **매매 기본 설정**: 익절(%), 손절(%), 최대 종목수
+    - **매수 전략**: 프로필별 설정된 매수 방식(1주, 금액, 비율) 및 값
+    - **조건식 목록**: 선택된 모든 조건식의 번호와 **이름** (RT 서버의 `condition_map` 활용)
+
+## 검증 계획
+
+### 수동 검증
+1. GUI에서 '시퀀스 자동' 버튼을 클릭합니다.
+2. 로그창에 각 프로필의 시간, 설정값, 조건식 이름들이 사용자가 원하는 수준으로 상세히 출력되는지 확인합니다.

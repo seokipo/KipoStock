@@ -1,0 +1,35 @@
+# Implementation Plan - Android App Transition
+
+Transition the KipoStock application to a high-end Android interface optimized for Galaxy Note 22 Ultra.
+
+## Concept: "Remote Command Center"
+
+Since Korean stock trading APIs (Kiwoom, etc.) often rely on Windows-only 32-bit DLLs, a direct Android port of the *logic* is usually impossible. 
+
+**Solution**:
+1.  **PC App (Server)**: The current Python code runs on the PC, handling the trading and API logic.
+2.  **Mobile App (Frontend)**: A beautiful, modern web-based app (PWA) that connects to the PC via a secure API to monitor logs, change settings, and send commands (Start/Stop).
+
+## Proposed UI Design (Premium Note 22 Ultra)
+- **Dark Mode by default**: Utilizing the OLED screen.
+- **Vibrant Neon Accents**: To highlight profit/loss and active status.
+- **Glassmorphism**: Sleek, transparent UI elements.
+- **Responsive Dashboard**: Optimized for the Note 22's large display and stylus interaction.
+
+## Proposed Changes
+
+### 1. Backend Integration
+- Add a lightweight web server (e.g., FastAPI) to [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py) or a separate monitor script.
+- Create endpoints for:
+    - `GET /status`: Current trading status and logs.
+    - `POST /command`: Send Start/Stop/Report commands.
+    - `POST /settings`: Update trading parameters wirelessly.
+
+### 2. Mobile Frontend
+- Create a modern HTML/CSS/JS dashboard.
+- Use WebSockets for real-time log updates (so the logs "scroll" on the phone just like the PC).
+
+## Verification Plan
+1.  Create a mockup of the mobile dashboard.
+2.  Establish local network communication between phone and PC.
+3.  Verify command latency and UI responsiveness on a mobile browser.

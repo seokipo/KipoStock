@@ -1,0 +1,12 @@
+# 작업 목록: 기능 개선 및 today 명령어 확장
+
+- [x] 코드 분석 및 계획 수립
+- [x] 압정 핀 깜빡임 개선 ([Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py))
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) 명령어 정렬 옵션 구현 ([chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py))
+    - [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-441) (기본: 매수시간순)
+    - [x] `today/sic` (조건식순)
+    - [x] `today/jun` (매수전략순)
+    - [x] `today/son` (손익순)
+- [x] [help](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#480-491) 명령어 리스트 업데이트 
+- [x] 최종 테스트 및 확인 
+- [/] 실행 파일 재빌드 (최종 반영) [/]

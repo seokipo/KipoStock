@@ -224,6 +224,9 @@ class AsyncWorker(QThread):
                 # [수정] 장외 시간 예약 시작 처리 (사용자 요청: 15:30 ~ 09:00 사이만 WAITING 처리)
                 # 낮 시간(09~15:30) 중에 사용자 종료 설정 등으로 시작이 안되는 경우는 READY 유지
                 if MarketHour.is_waiting_period():
+                    # [신규] 대기 상태 진입 시 기존 엔진이 있다면 확실히 정기 (좀비 매매 방지)
+                    await self.chat_command.stop(set_auto_start_false=False, quiet=True)
+                    
                     if not self.pending_start:
                         self.pending_start = True
                         self.pending_profile_info = args[0] if args else None
@@ -316,7 +319,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.5.2 (Final Edition)")
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.5.3 (Final Edition)")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -385,6 +388,11 @@ class KipoWindow(QMainWindow):
         self.is_profile_blink_on = False
         self.current_profile_idx = None # 현재 선택된 프로필 인덱스
         self.active_alert = None # [신규] 자동 종료 알림창 인스턴스 보관용
+        
+        # [신규] 안전한 알림 종료를 위한 단일 타이머 (SingleShot 대체)
+        self.alert_close_timer = QTimer(self)
+        self.alert_close_timer.setSingleShot(True)
+        self.alert_close_timer.timeout.connect(self._close_active_alert)
 
     def setup_ui(self):
         # --- Styles ---
@@ -619,7 +627,8 @@ class KipoWindow(QMainWindow):
         # 1. Qty Mode (Red Border)
         qty_layout = QHBoxLayout()
         lbl_qty = QLabel("🔴 1주")
-        lbl_qty.setFixedWidth(45) # [수정] 텍스트 잘림 방지 (35->45)
+        lbl_qty.setFixedWidth(45)
+        lbl_qty.setStyleSheet("color: #dc3545; font-weight: bold;") # [신규] 라벨 색상 통일
         self.input_qty_val = QLineEdit("1")
         self.input_qty_val.setReadOnly(True)
         self.input_qty_val.setFixedWidth(60)
@@ -637,7 +646,8 @@ class KipoWindow(QMainWindow):
         # 2. Amount Mode (Green Border)
         amt_layout = QHBoxLayout()
         lbl_amt = QLabel("🟢 금액")
-        lbl_amt.setFixedWidth(45) # [수정] 45px로 확장
+        lbl_amt.setFixedWidth(45)
+        lbl_amt.setStyleSheet("color: #28a745; font-weight: bold;") # [신규] 라벨 색상 통일
         self.input_amt_val = QLineEdit("100,000")
         self.input_amt_val.setFixedWidth(90) # [수정] 너비 더 확장 (85->90)
         self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
@@ -655,7 +665,8 @@ class KipoWindow(QMainWindow):
         # 3. Percent Mode (Blue Border)
         pct_layout = QHBoxLayout()
         lbl_pct = QLabel("🔵 비율")
-        lbl_pct.setFixedWidth(45) # [수정] 45px로 확장
+        lbl_pct.setFixedWidth(45)
+        lbl_pct.setStyleSheet("color: #007bff; font-weight: bold;") # [신규] 라벨 색상 통일
         self.input_pct_val = QLineEdit("10")
         self.input_pct_val.setFixedWidth(60)
         self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
@@ -681,10 +692,10 @@ class KipoWindow(QMainWindow):
         self.btn_seq_auto.setCheckable(True)
         self.btn_seq_auto.setFixedSize(35, 35) # 35x35 통일
         self.btn_seq_auto.setToolTip("시퀀스 자동 모드 (클릭하여 ON/OFF)")
-        # [수정] 대기 시 노랑(#ffff00), 작동 시 스타일은 blink 메서드에서 제어
+        # [수정] 정지 시 바탕색(#f8f9fa), 시작 시 밝은 노란색 점멸 시작
         self.btn_seq_auto.setStyleSheet("""
-            QPushButton { background-color: #fff59d; border: 1px solid #999; border-radius: 4px; color: #0000ff; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
-            QPushButton:checked { background-color: #2196f3; color: white; }
+            QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
+            QPushButton:checked { background-color: #fff59d; color: #0000ff; }
         """)
         self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
         save_profile_layout.addWidget(self.btn_seq_auto)
@@ -890,11 +901,17 @@ class KipoWindow(QMainWindow):
         self.lock_ui_for_sequence(self.btn_seq_auto.isChecked())
 
     def show_timed_message(self, title, text, timeout=2000):
-        """2초(기본값) 후 자동으로 사라지는 플로팅 오버레이 알림"""
-        # 기존 알림이 있다면 즉시 제거
+        """2초(기본값) 후 자동으로 사라지는 플로팅 오버레이 알림 (안전한 타이머 사용)"""
+        # 기존 알림이 있다면 즉시 제거 및 타이머 중단
         if self.active_alert:
-            self.active_alert.deleteLater()
-            self.active_alert = None
+            self.alert_close_timer.stop() # 타이머 중단이 먼저
+            try:
+                # [수정] Double Deletion 방지: deleteLater만 사용하고 참조를 먼저 끊음
+                alert = self.active_alert
+                self.active_alert = None
+                alert.close()
+                alert.deleteLater()
+            except: pass
             
         # [신규] 윈도우 중앙 상단에 떠있는 라벨 형태의 오버레이 생성
         self.active_alert = QLabel(text, self)
@@ -920,8 +937,20 @@ class KipoWindow(QMainWindow):
         self.active_alert.move(x, y)
         self.active_alert.show()
         
-        # 지정된 시간 후 자동 소멸
-        QTimer.singleShot(timeout, self.active_alert.deleteLater)
+        # 안전한 타이머로 자동 소멸 예약
+        self.alert_close_timer.setInterval(timeout)
+        self.alert_close_timer.start()
+
+    def _close_active_alert(self):
+        """타이머에 의해 호출되는 알림 닫기 메서드"""
+        if self.active_alert:
+            try:
+                # [수정] Double Deletion 방지
+                alert = self.active_alert
+                self.active_alert = None
+                alert.close()
+                alert.deleteLater()
+            except: pass
 
     def append_log(self, text):
         # [추가] 불필요하거나 기술적인 로그 필터링
@@ -1581,7 +1610,9 @@ class KipoWindow(QMainWindow):
             current_status = self.lbl_status.text()
             if "RUNNING" in current_status:
                 self.log_and_tel("⚠️ 매매 진행 중(RUNNING)에는 자동 시퀀스를 시작할 수 없습니다. 중지(STOP) 후 다시 시도하세요.")
+                self.btn_seq_auto.blockSignals(True)
                 self.btn_seq_auto.setChecked(False) # 다시 끔
+                self.btn_seq_auto.blockSignals(False)
                 return
             
             # [신규] 장외 시간 및 예약 시간 체크
@@ -1590,7 +1621,9 @@ class KipoWindow(QMainWindow):
             # 1. 휴장일 또는 주말 체크
             if not MarketHour._is_weekday() or MarketHour.is_holiday():
                 self.show_timed_message("작동 제한", "오늘은 주말 또는 공휴일(휴장일)입니다.\n2초 후 자동으로 닫힙니다.", 2000)
+                self.btn_seq_auto.blockSignals(True)
                 self.btn_seq_auto.setChecked(False)
+                self.btn_seq_auto.blockSignals(False)
                 return
 
             # 2. 장전 예약 시간 체크 (08:00 ~ 09:00)
@@ -1608,12 +1641,43 @@ class KipoWindow(QMainWindow):
             # 3. 장 종료 후 체크 (15:30 이후)
             if MarketHour.is_waiting_period() and now.hour >= 15:
                 self.show_timed_message("작동 제한", "현재는 장 마감 시간입니다.\n오늘의 거래는 종료되었습니다.\n(2초 후 자동 닫힘)", 2000)
+                self.btn_seq_auto.blockSignals(True)
                 self.btn_seq_auto.setChecked(False)
+                self.btn_seq_auto.blockSignals(False)
                 return
 
             # 4. 정규 장 시간 (정상 작동)
             self.seq_blink_timer.start()
             self.append_log("🔄 시퀀스 자동 모드 ON: 종료 시간 도달 시 다음 프로필로 전환합니다.")
+            
+            # [신규] 지능형 프로필 건너뛰기: 현재 시간보다 과거인 프로필은 자동으로 다음으로 넘김
+            now_time = now.time()
+            skipped = False
+            
+            while True:
+                et_str = self.input_end_time.text().strip()
+                try:
+                    et = datetime.datetime.strptime(et_str, "%H:%M").time()
+                    if now_time >= et:
+                        next_idx = self.current_profile_idx + 1
+                        if next_idx <= 3:
+                            # 다음 프로필 로드 시도
+                            self.append_log(f"⏩ 현재 시간({now_time.strftime('%H:%M')})이 {self.current_profile_idx}번 종료 시간({et_str})보다 늦어 다음 프로필로 건너뜁니다.")
+                            self.load_settings_to_ui(profile_idx=next_idx, keep_seq_auto=True)
+                            skipped = True
+                            continue # 다시 루프 돌며 시간 체크
+                        else:
+                            self.append_log("🏁 모든 프로필의 운영 시간이 지났습니다. 시퀀스를 종료합니다.")
+                            self.btn_seq_auto.setChecked(False)
+                            self.on_seq_auto_toggled()
+                            return
+                except: break
+                break
+
+            if not skipped:
+                self.append_log("="*60)
+                self.append_log(f"🔎 [시퀀스 작동 예약 상세 목록]")
+                # ... 기존 로그 출력 로직이 뒤에 이어짐 (필요시 복구)
             
             # [신규] READY 상태에서 시퀀스를 켰다면 엔진도 함께 자동 시작
             if "READY" in self.lbl_status.text():
@@ -1639,47 +1703,66 @@ class KipoWindow(QMainWindow):
                     self.append_log("📋 [시퀀스 작동 예약 상세 목록]")
                     
                     found_any = False
+                    # [수정] 파일에서 읽는 대신 현재 UI 메모리(혹은 저장된 데이터)를 기반으로 하되
+                    # 현재 프로필의 "실제 UI 상태"를 우선적으로 반영하여 리포트 출력
                     for i in range(current_idx, 4):
                         p = profiles.get(str(i))
-                        if p:
+                        if not p and i != current_idx: continue
+                        
+                        # 현재 보고 있는 UI 설정이 해당 프로필 인덱스라면 UI 값을 우선 사용
+                        is_current_view = (i == self.current_profile_idx or (self.current_profile_idx is None and i == 1))
+                        
+                        if is_current_view:
+                            # 현재 UI 값을 리포트에 반영 (동기화 이슈 해결)
+                            st = self.input_start_time.text()
+                            et = self.input_end_time.text()
+                            # 주: 상세 전략 요약은 file 데이터를 따르거나 UI 데이터를 추출해야 함 
+                            # 여기서는 간략히 시간 정보 위주로 UI와 동기화
+                        else:
                             st = p.get('start_time', '09:00')
                             et = p.get('end_time', '15:20')
-                            tp = p.get('take_profit_rate', '12.0')
-                            sl = p.get('stop_loss_rate', '-1.2')
                             
-                            # 매수 전략 정보 추출
-                            qty_v = p.get('qty_val', '1')
-                            amt_v = p.get('amt_val', '100,000')
-                            pct_v = p.get('pct_val', '10')
-                            strat_map = p.get('condition_strategies', {})
+                        log_msg = f"<b>[프로필 {i}번]</b> {st} ~ {et}"
+                        if i == current_idx:
+                            log_msg += " <font color='#ffc107'>[현재]</font>"
+                        self.append_log(log_msg)
+                        
+                        # [수정] 모든 매수 전략(주수/금액/비율) 상세 출력
+                        if p:
+                            qty_val = p.get('qty_val', '1')
+                            amt_val = p.get('amt_val', '100,000')
+                            pct_val = p.get('pct_val', '10')
                             
-                            log_msg = f"<b>[프로필 {i}번]</b> {st} ~ {et}"
-                            if i == current_idx:
-                                log_msg += " <font color='#ffc107'>[현재]</font>"
-                            self.append_log(log_msg)
+                            st_data = p.get('strategy_tp_sl', {})
+                            q_tp = st_data.get('qty', {}).get('tp', '12.0')
+                            q_sl = st_data.get('qty', {}).get('sl', '-1.5')
+                            a_tp = st_data.get('amount', {}).get('tp', '8.0')
+                            a_sl = st_data.get('amount', {}).get('sl', '-1.5')
+                            p_tp = st_data.get('percent', {}).get('tp', '6.0')
+                            p_sl = st_data.get('percent', {}).get('sl', '-1.5')
                             
-                            # 전략 요약 출력
-                            self.append_log(f"  └ 설정: 익절 {tp}% / 손절 {sl}%")
+                            # [수정] 전략별 개별 컬러 적용 (1주: 적색, 금액: 녹색, 비율: 파랑색)
+                            self.append_log(
+                                f"  └ <font color='#dc3545'><b>1주:</b> {qty_val}주 ({q_tp}%/{q_sl}%)</font>  "
+                                f"<font color='#28a745'><b>금액:</b> {amt_val}원 ({a_tp}%/{a_sl}%)</font>  "
+                                f"<font color='#007bff'><b>비율:</b> {pct_val}% ({p_tp}%/{p_sl}%)</font>"
+                            )
                             
-                            # 조건식 상세 나열
                             seqs = p.get('search_seq', [])
                             if seqs:
                                 cond_details = []
-                                # 전략별 색상 정의 (Red, Green, Blue)
                                 color_map = {"qty": "#dc3545", "amount": "#28a745", "percent": "#007bff"}
-                                
+                                strat_map = p.get('condition_strategies', {})
                                 for s_idx in seqs:
                                     name = condition_map.get(str(s_idx), f"조건식 {s_idx}")
                                     mode = strat_map.get(str(s_idx), "qty")
                                     color = color_map.get(mode, "#dc3545")
-                                    # [수정] 텍스트 설명 제거하고 색상으로만 구분
                                     cond_details.append(f"<font color='{color}'><b>{s_idx}:{name}</b></font>")
-                                
                                 self.append_log(f"  └ 감시: {', '.join(cond_details)}")
                             else:
                                 self.append_log("  └ 감시: (선택된 조건식 없음)")
-                            
-                            found_any = True
+                        
+                        found_any = True
                     
                     if not found_any:
                         self.append_log("  (예약된 프로필 정보가 없습니다)")
@@ -1690,7 +1773,7 @@ class KipoWindow(QMainWindow):
         else:
             self.seq_blink_timer.stop()
             self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #fff59d; border: 1px solid #999; border-radius: 4px; color: #0000ff; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
+                QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
             """)
             self.append_log("⏹ 시퀀스 자동 모드 OFF: 종료 시간 도달 시 알람만 울립니다.")
             self.is_seq_blink_on = False
@@ -1744,14 +1827,14 @@ class KipoWindow(QMainWindow):
 
         self.is_seq_blink_on = not self.is_seq_blink_on
         if self.is_seq_blink_on:
-            # 켜짐: 진한 파랑 배경
+            # 밝은 노랑 (눈에 확 띔)
             self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #2196f3; border: 2px solid #0d47a1; border-radius: 4px; color: white; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
+                QPushButton { background-color: #fff59d; border: 2px solid #fbc02d; border-radius: 4px; color: #0000ff; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
             """)
         else:
-            # 꺼짐: 연한 파랑 배경
+            # 진한 파랑 (작동 중임을 강조)
             self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #e3f2fd; border: 2px solid #2196f3; border-radius: 4px; color: #2196f3; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
+                QPushButton { background-color: #2196f3; border: 2px solid #0d47a1; border-radius: 4px; color: white; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
             """)
 
     def handle_end_time_event(self, current_time_str):

@@ -1,0 +1,21 @@
+# 압정 기능 복구 및 today 정렬 표시 구현 계획
+
+이 계획은 실질적으로 작동하지 않는 압정 기능을 복구하고, 매매 일지 조회 시 현재 적용된 정렬 기준을 사용자에게 명확히 알리는 것을 목표로 합니다.
+
+## 제안된 변경 사항
+
+### 1. [UI 개선] 압정 기능(항상 위) 복구 및 최적화
+#### [수정] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- **문제**: Win32 API 호출이 Qt 윈도우 관리 체계와 충돌하여 실제로는 "항상 위"가 유지되지 않을 수 있습니다.
+- **해결**: Qt 고유의 `setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)`를 다시 사용하되, 핸들 재생성을 최소화하고 위치 이동이 발생하지 않도록 코드를 정교화합니다. (기존에 `setWindowFlags`(복수형)를 써서 발생했던 문제일 가능성이 높습니다.)
+
+### 2. [기능 개선] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 결과에 정렬 기준 명시
+#### [수정] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 메서드에서 "조회 결과: N건" 메시지 뒤에 현재의 정렬 모드를 한글로 표시합니다. (예: `조회 결과: 56건 (정렬: 손익순-역순)`)
+- `sort_mode`와 `is_reverse` 값을 바탕으로 적절한 텍스트를 생성합니다.
+
+## 검증 계획
+
+### 수동 검증
+- 압정 버튼을 누르고 다른 창(메모장 등)을 클릭했을 때 프로그램이 뒤로 숨지 않는지 확인합니다.
+- [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422), `today/sic`, `today/son-` 등의 명령어를 입력했을 때 로그에 정렬 기준이 정확히 표시되는지 확인합니다.

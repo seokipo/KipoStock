@@ -7,23 +7,33 @@ from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
 
+# 전역 캐시 (파일 I/O 최소화를 통한 성능 최적화)
+_STRATEGY_MAPPING_CACHE = {}
+_LAST_MAPPING_LOAD_TIME = 0
+
 def chk_n_sell(token=None):
-    # 익절 수익율(%)
+    global _STRATEGY_MAPPING_CACHE, _LAST_MAPPING_LOAD_TIME
+    
+    # 익절/손절 수익율(%)
     TP_RATE = cached_setting('take_profit_rate', 10.0)
-    # 손절 수익율(%)
     SL_RATE = cached_setting('stop_loss_rate', -10.0)
 
-    # [신규] 매핑 정보 사전 로드
-    mapping = {}
-    try:
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        mapping_file = os.path.join(base_path, 'LogData', 'stock_conditions.json')
-        if os.path.exists(mapping_file):
-            with open(mapping_file, 'r', encoding='utf-8') as f:
-                mapping = json.load(f)
-    except: pass
+    # [최적화] 매핑 정보 캐싱 (5초마다 한 번만 디스크 읽기)
+    current_time = time.time()
+    if not _STRATEGY_MAPPING_CACHE or (current_time - _LAST_MAPPING_LOAD_TIME > 5):
+        try:
+            import sys
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            if getattr(sys, 'frozen', False):
+                base_path = os.path.dirname(sys.executable)
+            mapping_file = os.path.join(base_path, 'LogData', 'stock_conditions.json')
+            if os.path.exists(mapping_file):
+                with open(mapping_file, 'r', encoding='utf-8') as f:
+                    _STRATEGY_MAPPING_CACHE = json.load(f)
+                _LAST_MAPPING_LOAD_TIME = current_time
+        except: pass
+    
+    mapping = _STRATEGY_MAPPING_CACHE
 
     try:
         my_stocks = get_my_stocks(token=token)

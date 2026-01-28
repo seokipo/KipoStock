@@ -1,0 +1,10 @@
+# 작업 목록
+
+- [x] GUI 조건식 버튼 확장 (20개)
+- [x] 동적 설정 반영 구현
+- [x] Today 매수 시간 표시 (로컬 저장)
+- [x] 최종 검증
+- [x] 버전 5.0 업그레이드
+    - [x] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py): 타이틀 및 라벨 V5.0으로 변경
+    - [ ] `build_v5.0.py` 생성
+    - [ ] 빌드 실행

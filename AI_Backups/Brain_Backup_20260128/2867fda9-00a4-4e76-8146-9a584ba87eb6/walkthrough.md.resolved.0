@@ -1,0 +1,3279 @@
+# 시퀀스 자동 모드 개선 완료 보고서
+
+사용자 요청에 따라 시퀀스 자동 모드의 안정성을 높이고 진행 상황을 더 명확하게 확인할 수 있도록 보완 작업을 완료했습니다.
+
+## 주요 변경 사항
+
+### 1. 프로필 전환 및 종료 보고 대기 시간 연장
+이전 프로필의 API 세션이 완전히 정리될 시간을 확보하여 중복 로그인 오류(R10001)를 방지했습니다.
+- **수정 전**: 2.5초 (2500ms)
+- **수정 후**: **5.0초 (5000ms)**
+- 적용 위치: [handle_end_time_event](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1482-1545) 함수 (프로필 전환 시 및 최종 종료 시)
+
+### 2. 시퀀스 작동 예약 목록 로그 출력
+'시퀀스 자동' 버튼을 누를 때, 현재 프로필부터 마지막 3번 프로필까지 어떤 시간대에 어떤 매매 조건으로 작동할지 로그창에 상세히 출력하도록 개선했습니다.
+
+**로그 출력 예시:**
+```text
+🔄 시퀀스 자동 모드 ON: 종료 시간 도달 시 다음 프로필로 전환합니다.
+==================================================
+📋 [시퀀스 작동 예약 목록]
+  - 프로필 1번: 09:00 ~ 10:30 (조건식 5개 감시) [현재]
+  - 프로필 2번: 10:30 ~ 13:00 (조건식 8개 감시)
+  - 프로필 3번: 13:00 ~ 15:20 (조건식 3개 감시)
+==================================================
+```
+
+## 검증 결과
+- **버튼 토글 테스트**: 시퀀스 버튼 작동 시 [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/settings.json)에서 다음 프로필 정보를 정상적으로 읽어와 로그에 표시함을 확인했습니다.
+- **타이밍 테스트**: 프로필 전환 코드에서 `singleShot` 딜레이가 5000ms로 정상 업데이트된 것을 확인했습니다.
+
+```diff:Kipo_GUI_main.py
+
+
+import sys
+import os
+import asyncio
+import json
+import datetime
+import traceback
+import ast
+import requests
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                           QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                           QTextEdit, QFrame, QGridLayout, QMessageBox, QGroupBox,
+                           QScrollArea, QRadioButton, QButtonGroup, QCheckBox)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QFont, QIcon, QColor, QPalette
+import winsound
+
+# 기존 모듈 임포트
+
+# 기존 모듈 임포트
+from config import telegram_token
+from chat_command import ChatCommand
+from get_setting import get_setting, cached_setting
+from market_hour import MarketHour
+
+# ----------------- Worker Thread for Asyncio Loop -----------------
+class WorkerSignals(QObject):
+    log_signal = pyqtSignal(str)
+    status_signal = pyqtSignal(str)  # 상태 표시줄 업데이트용
+    clr_signal = pyqtSignal()       # [신규] 로그 초기화용
+    request_log_signal = pyqtSignal() # [신규] 로그 파일 출력 요청
+
+class AsyncWorker(QThread):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.signals = WorkerSignals()
+        self.loop = None
+        self.chat_command = None
+        self.keep_running = True
+        self.pending_start = False # [추가] 장외 시간 예약 시작 기능용
+        self.pending_profile_info = None
+
+    def run(self):
+        # Create a new event loop for this thread
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        # 1. Override tel_send logic
+        import chat_command as chat_cmd_module
+        
+        def gui_log_send(text):
+            self.signals.log_signal.emit(text)
+        
+        # Patch tel_send in chat_command
+        chat_cmd_module.tel_send = gui_log_send
+        
+        # 2. Redirect stdout/stderr to capture prints from get_seq.py and others
+        class StreamRedirector:
+            def __init__(self, emitter):
+                self.emitter = emitter
+            def write(self, text):
+                text = text.strip()
+                if text:
+                    self.emitter(text)
+            def flush(self):
+                pass
+                
+        sys.stdout = StreamRedirector(gui_log_send)
+        sys.stderr = StreamRedirector(gui_log_send)
+
+        # Initialize ChatCommand
+        self.chat_command = ChatCommand()
+        self.chat_command.on_clear_logs = lambda: self.signals.clr_signal.emit()
+        self.chat_command.on_request_log_file = lambda: self.signals.request_log_signal.emit()
+        self.chat_command.rt_search.on_connection_closed = self._on_connection_closed_wrapper
+        
+        self.loop.run_until_complete(self.main_loop())
+        self.loop.close()
+
+    async def _on_connection_closed_wrapper(self):
+        self.signals.log_signal.emit("⚠️ 연결 끊김 감지. 재연결 시도 중...")
+        await self.chat_command._on_connection_closed()
+
+    async def main_loop(self):
+        self.signals.log_signal.emit("🚀 시스템 초기화 완료. 대기 중...")
+        
+        # 설정 로드 및 적용
+        self.load_initial_settings()
+        
+        # 시작 시 자동으로 조건식 목록 가져오기 (마지막 저장된 설정대로 필터링되어 표시됨)
+        self.signals.log_signal.emit("ℹ️ 저장된 조건식 목록을 불러옵니다...")
+        await self.chat_command.condition()
+        
+        # [추가] 자동 시작(auto_start) 설정 확인 및 실행
+        try:
+            settings_path = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if settings.get('auto_start', False):
+                    self.signals.log_signal.emit("ℹ️ 자동 시작 설정이 활성화되어 있습니다.")
+                    # 약간의 딜레이 후 시작 시도 (초기화 안정성 확보)
+                    await asyncio.sleep(1.0)
+                    # 직접 await 호출 (같은 루프 내이므로 schedule_command 대신 직접 호출)
+                    await self._execute_command('start')
+        except Exception as e:
+            self.signals.log_signal.emit(f"⚠️ 자동 시작 확인 중 오류: {e}")
+        
+        try:
+            while self.keep_running:
+                # 텔레그램 메시지 확인 (GUI에서는 필수 아님, 텔레그램 제어 원할 시 유지)
+                message = self.get_chat_updates()
+                if message:
+                    await self.chat_command.process_command(message)
+                
+                
+                # [추가] 장 종료 시 자동 중단 및 보고 시퀀스 (15:30)
+                now = datetime.datetime.now()
+                if now.hour == 15 and now.minute == 30 and not self.today_stopped:
+                    self.today_stopped = True
+                    self.signals.log_signal.emit("🔔 장 종료 시간(15:30)이 되어 자동으로 정산 시퀀스를 시작합니다.")
+                    
+                    # 1. 중지 (STOP)
+                    await self.chat_command.stop(set_auto_start_false=False)
+                    # 2. 당일 일지 (TODAY)
+                    await self.chat_command.today()
+                    # 3. 계좌 보고 (REPORT)
+                    await self.chat_command.report()
+
+                # 날짜가 바뀌면 종료 플래그 초기화
+                current_date = now.date()
+                if self.last_check_date != current_date:
+                    self.last_check_date = current_date
+                    self.today_stopped = False
+
+                # 장 시작/종료 시간 자동 확인 로직
+                # [수정] 대기 시간(is_waiting_period)이 아닐 때만 자동 시작 진행하여 무한 루프 방지
+                if self.pending_start and MarketHour.is_market_open_time() and not MarketHour.is_waiting_period():
+                    self.pending_start = False
+                    self.signals.log_signal.emit("🔔 장이 시작되었습니다. 감시를 자동으로 시작합니다!")
+                    self.schedule_command('start', getattr(self, 'pending_profile_info', None))
+                
+                await asyncio.sleep(1.0) # 체크 주기 조정
+                
+        except Exception as e:
+            self.signals.log_signal.emit(f"❌ 메인 루프 에러: {e}")
+
+    def load_initial_settings(self):
+        try:
+            with open('settings.json', 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                
+            # 시간 설정 적용 (settings.json에 시간이 없다면 기본값 사용)
+            start_time = settings.get('start_time', "09:00")
+            end_time = settings.get('end_time', "15:20") # 장 종료 10분전
+            
+            sh, sm = map(int, start_time.split(':'))
+            eh, em = map(int, end_time.split(':'))
+            
+            MarketHour.set_market_hours(sh, sm, eh, em)
+            self.signals.log_signal.emit(f"⚙️ 장 운영 시간 설정: {start_time} ~ {end_time}")
+            
+        except Exception as e:
+            self.signals.log_signal.emit(f"⚠️ 설정 로드 중 오류 (기본값 사용): {e}")
+
+    # MainApp의 로직 가져옴
+    last_update_id = 0
+    telegram_url = f"https://api.telegram.org/bot{telegram_token}/getUpdates"
+    today_started = False
+    today_stopped = False
+    last_check_date = None
+
+    def get_chat_updates(self):
+        """텔레그램에서 새로운 명령어를 가져옵니다."""
+        try:
+            params = {'offset': self.last_update_id + 1, 'timeout': 1}
+            response = requests.get(self.telegram_url, params=params, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                for update in data.get('result', []):
+                    self.last_update_id = update['update_id']
+                    if 'message' in update and 'text' in update['message']:
+                        chat_id = str(update['message']['chat']['id'])
+                        
+                        # [보안] 설정된 chat_id와 일치할 때만 실행
+                        from config import telegram_chat_id
+                        if chat_id == telegram_chat_id:
+                            return update['message']['text']
+                        else:
+                            print(f"⚠️ 권한 없는 사용자 접근 차단 (ID: {chat_id})")
+        except Exception as e:
+            # Polling 에러는 로그에만 간단히 기록
+            pass
+        return None
+            
+    # check_market_timing 메서드 제거 (자동 종료 충돌 방지)
+
+    # GUI에서 호출할 비동기 명령들
+    def schedule_command(self, cmd_type, *args):
+        asyncio.run_coroutine_threadsafe(self._execute_command(cmd_type, *args), self.loop)
+
+    async def _execute_command(self, cmd_type, *args):
+        try:
+            if cmd_type == 'start':
+                # [수정] 장외 시간 예약 시작 처리 (사용자 요청: 15:30 ~ 09:00 사이만 WAITING 처리)
+                # 낮 시간(09~15:30) 중에 사용자 종료 설정 등으로 시작이 안되는 경우는 READY 유지
+                if MarketHour.is_waiting_period():
+                    if not self.pending_start:
+                        self.pending_start = True
+                        self.pending_profile_info = args[0] if args else None
+                        
+                        # [수정] 안내 메시지에 실제 설정된 시간 표시 (main_window 위젯 접근 수정)
+                        st_str = self.main_window.input_start_time.text()
+                        et_str = self.main_window.input_end_time.text()
+                        self.signals.log_signal.emit(f"⏳ 현재 장외 대기 시간입니다. ({st_str}~{et_str})")
+                        self.signals.log_signal.emit("⌛ 장이 시작되면 자동으로 감시를 개시하겠습니다.")
+                        self.signals.status_signal.emit("WAITING")
+                    return
+                
+                # 낮 시간인데 시작 시도
+                profile_info = args[0] if args else None
+                success = await self.chat_command.start(profile_info=profile_info)
+                if success:
+                    self.pending_start = False
+                    self.signals.status_signal.emit("RUNNING")
+                else:
+                    self.signals.status_signal.emit("READY")
+                    self.signals.log_signal.emit("⚠️ 장 시작 조건을 만족하지 않습니다. 시간 설정을 확인하세요.")
+                    # [신규] 장외 시간 등 시작 실패 시 경고음
+                    try:
+                        import winsound
+                        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                    except: pass
+                return
+            elif cmd_type == 'stop':
+                self.pending_start = False # 예약 취소
+                await self.chat_command.stop(True)
+                self.signals.status_signal.emit("READY")
+            elif cmd_type == 'report':
+                await self.chat_command.report()
+            elif cmd_type == 'custom':
+                await self.chat_command.process_command(args[0])
+            elif cmd_type == 'update_setting':
+                # settings.json 업데이트
+                self.chat_command.update_setting(args[0], args[1])
+                self.signals.log_signal.emit(f"✅ 설정 변경: {args[0]} = {args[1]}")
+                
+            elif cmd_type == 'update_settings':
+                # [신규] 여러 설정을 한 번에 업데이트
+                updates = args[0]
+                quiet = args[1] if len(args) > 1 else False
+                self.chat_command.update_settings_batch(updates)
+                if not quiet:
+                    self.signals.log_signal.emit("✅ 일괄 설정 저장 완료")
+                
+            elif cmd_type == 'today':
+                await self.chat_command.today()
+                
+            elif cmd_type == 'condition_list':
+                quiet = args[0] if args else False
+                await self.chat_command.condition(quiet=quiet) # quiet 인자 전달
+
+        except Exception as e:
+            self.signals.log_signal.emit(f"❌ 명령 실행 오류: {e}")
+
+    def stop(self):
+        """안전한 종료 처리"""
+        self.keep_running = False
+        if self.loop and self.loop.is_running():
+             # 루프 내에서 정리 작업 수행 후 종료
+             self.loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown()))
+        
+        # 스레드 종료 대기 (최대 3초)
+        self.wait(3000)
+
+    async def shutdown(self):
+        """비동기 리소스 정리"""
+        if self.chat_command:
+            await self.chat_command.stop(True)
+        # 루프 정지 (pending task cancel은 생략함)
+        self.loop.stop()
+
+
+# ----------------- Main Window -----------------
+class KipoWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.3.9 (Automation Edition)")
+        # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
+        if getattr(sys, 'frozen', False):
+            # 실행 파일 위치 (settings.json, 로그 저장용)
+            self.script_dir = os.path.dirname(sys.executable)
+            # 임시 리소스 위치 (아이콘 등 번들된 파일용)
+            self.resource_dir = sys._MEIPASS
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.resource_dir = self.script_dir
+            
+        self.settings_file = os.path.join(self.script_dir, 'settings.json')
+
+        # 아이콘 설정 (리소스 경로에서 로드)
+        icon_path = os.path.join(self.resource_dir, 'icon.png')
+        icon_path_ico = os.path.join(self.resource_dir, 'icon.ico')
+        
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        elif os.path.exists(icon_path_ico):
+            self.setWindowIcon(QIcon(icon_path_ico))
+        else:
+            # Fallback checks in script directory
+            for ext in ['png', 'ico']:
+                p = os.path.join(self.script_dir, f'icon.{ext}')
+                if os.path.exists(p):
+                    self.setWindowIcon(QIcon(p))
+                    break
+                
+        self.resize(1000, 700)
+        
+        self.setup_ui()
+        self.setup_worker()
+        self.load_settings_to_ui()
+
+        # 알람 관련 초기화
+        self.alarm_playing = False
+        self.last_alarm_time = None # 이전 알람 발생 시간 (중복 발생 방지)
+        self.app_start_time = datetime.datetime.now() # 시작 시간 기록 (안전장치)
+        self.last_auto_start_time = None # [신규] 시작 알람 중복 방지용
+
+        # 알람 반복 타이머 제거 (소리 기능 완전 비활성화)
+        # self.sound_repeater = QTimer(self)
+        
+        self.alarm_timer = QTimer(self)
+        self.alarm_timer.setInterval(1000) # 1초마다 체크
+        self.alarm_timer.timeout.connect(self.check_alarm)
+        self.alarm_timer.start()
+
+        # 알람 버튼 깜빡임 타이머
+        self.blink_timer = QTimer(self)
+        self.blink_timer.setInterval(500) # 0.5초마다 반전
+        self.blink_timer.timeout.connect(self.toggle_blink)
+        self.is_blink_on = False
+
+        # 프로필 관련 초기화
+        self.is_save_mode = False
+        self.profile_blink_timer = QTimer(self)
+        self.profile_blink_timer.setInterval(400) # 점멸 속도
+        self.profile_blink_timer.timeout.connect(self.toggle_profile_blink)
+        self.is_profile_blink_on = False
+        self.current_profile_idx = None # 현재 선택된 프로필 인덱스
+
+    def setup_ui(self):
+        # --- Styles ---
+        self.setStyleSheet("""
+            QMainWindow { background-color: #f0f2f5; }
+            QGroupBox { font-weight: bold; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding-top: 15px; background-color: white; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 5px; }
+            QLabel { color: #333; }
+            QLineEdit { padding: 5px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9; }
+            
+            /* 버튼 스타일을 특정 클래스로 제한하거나 QMessageBox 버튼을 위한 예외 처리 */
+            QPushButton { padding: 8px 15px; border-radius: 5px; font-weight: bold; color: white; border: none; }
+            QPushButton:hover { opacity: 0.9; }
+            
+            /* QMessageBox 버튼 복구 */
+            QMessageBox QPushButton {
+                background-color: #007bff; /* 파란색 */
+                color: white;
+                border: 1px solid #0056b3;
+                min-width: 60px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #0056b3;
+            }
+            
+            QTextEdit { background-color: #1e1e1e; color: #00ff00; font-family: 'Consolas', 'Monospace'; border-radius: 5px; padding: 10px; }
+        """)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        # Root Layout: Vertical (Header + Body)
+        root_layout = QVBoxLayout(central_widget)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(10)
+
+        # === 0. Global Header ===
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 10)
+        
+        # Spacer to balance
+        left_spacer = QWidget()
+        left_spacer.setFixedWidth(40) 
+        
+        self.lbl_main_title = QLabel("🚀 KipoStock V5.1 (Stable)")
+        self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_main_title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        self.lbl_main_title.setStyleSheet("color: #2c3e50;")
+
+        # [신규] 상태 표시등 (READY / RUNNING)
+        self.lbl_status = QLabel("● READY")
+        self.lbl_status.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
+
+        # [신규] 현재 시간 표시 시계
+        self.lbl_clock = QLabel(datetime.datetime.now().strftime("%H:%M:%S"))
+        self.lbl_clock.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.lbl_clock.setStyleSheet("color: #2c3e50; margin-left: 10px;")
+        
+        # Always on Top Button (Pin icon)
+        self.btn_top = QPushButton("📍")
+        self.btn_top.setCheckable(True)
+        self.btn_top.setFixedSize(40, 40)
+        self.btn_top.setToolTip("항상 위에 고정")
+        self.btn_top.setStyleSheet("""
+            QPushButton { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; }
+            QPushButton:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
+            QPushButton:hover { background-color: #e2e6ea; }
+        """)
+        self.btn_top.clicked.connect(self.toggle_always_on_top)
+        
+        header_layout.addWidget(left_spacer)
+        header_layout.addStretch()
+        header_layout.addWidget(self.lbl_main_title)
+        header_layout.addWidget(self.lbl_status)
+        header_layout.addWidget(self.lbl_clock)
+        header_layout.addStretch()
+        header_layout.addWidget(self.btn_top)
+        
+        root_layout.addWidget(header_widget)
+
+        # === Body Layout (Left + Right) ===
+        body_layout = QHBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(10)
+        root_layout.addLayout(body_layout)
+
+        # === Left Panel: Settings ===
+        left_panel = QFrame()
+        left_panel.setFixedWidth(280)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 1. Settings Group
+        settings_group = QGroupBox("⚙️ Settings")
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(12)
+
+        # Condition Select (0-19) - 4 State Buttons
+        cond_label = QLabel("조건식 선택 (0-19)")
+        self.cond_btn_layout = QGridLayout() # [수정] Grid Layout 사용
+        self.cond_btn_layout.setSpacing(2)
+        self.cond_buttons = []
+        # State: 0 (Gray/Off), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
+        self.cond_states = [0] * 20 # [수정] 20개로 확장
+        
+        for i in range(20):
+            btn = QPushButton(str(i))
+            btn.setFixedSize(22, 22)
+            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 4px;")
+            btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
+            self.cond_buttons.append(btn)
+            # 2줄로 배치 (0~9: 1열, 10~19: 2열) -> 10개씩 끊어서 배치
+            row = i // 10
+            col = i % 10
+            self.cond_btn_layout.addWidget(btn, row, col)
+        
+        settings_layout.addWidget(cond_label)
+        settings_layout.addLayout(self.cond_btn_layout)
+
+        # Profit, Loss & Max Stocks (Horizontal)
+        top_settings_layout = QHBoxLayout()
+        
+        # Profit
+        top_settings_layout.addWidget(QLabel("익절"))
+        self.input_profit = QLineEdit()
+        self.input_profit.setFixedWidth(45)
+        self.input_profit.setStyleSheet("border: 2px solid #dc3545; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_profit)
+        
+        top_settings_layout.addSpacing(5)
+        
+        # Loss
+        top_settings_layout.addWidget(QLabel("손절"))
+        self.input_loss = QLineEdit()
+        self.input_loss.setFixedWidth(45)
+        self.input_loss.setStyleSheet("border: 2px solid #007bff; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_loss)
+
+        top_settings_layout.addSpacing(5)
+
+        # Max Stocks (Shortened label for horizontal fit)
+        top_settings_layout.addWidget(QLabel("종목수"))
+        self.input_max = QLineEdit()
+        self.input_max.setFixedWidth(35)
+        self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_max)
+        
+        top_settings_layout.addStretch()
+        settings_layout.addLayout(top_settings_layout)
+
+        # Time Settings (Horizontal)
+        time_layout = QHBoxLayout()
+        
+        # Start
+        time_layout.addWidget(QLabel("시작"))
+        self.input_start_time = QLineEdit()
+        self.input_start_time.setFixedWidth(50)
+        self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_layout.addWidget(self.input_start_time)
+        
+        time_layout.addSpacing(5)
+        
+        # End
+        time_layout.addWidget(QLabel("종료"))
+        self.input_end_time = QLineEdit()
+        self.input_end_time.setFixedWidth(50)
+        self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_layout.addWidget(self.input_end_time)
+        
+        # 🔔 알람 해제 버튼
+        self.btn_alarm_stop = QPushButton("🔕")
+        self.btn_alarm_stop.setToolTip("알람 해제")
+        self.btn_alarm_stop.setFixedWidth(40)
+        self.btn_alarm_stop.setFixedHeight(30)
+        self.btn_alarm_stop.clicked.connect(self.stop_alarm)
+        self.btn_alarm_stop.setEnabled(False)
+        self.btn_alarm_stop.setStyleSheet("""
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                color: #aaa;
+            }
+            QPushButton:enabled {
+                background-color: #ffc107; /* 종 모양이 울릴 때는 노란색 */
+                color: #000;
+                border: 1px solid #e0a800;
+            }
+        """)
+        time_layout.addSpacing(10)
+        time_layout.addWidget(self.btn_alarm_stop)
+        time_layout.addStretch()
+        settings_layout.addLayout(time_layout)
+
+        # 💎 Buying Strategy Group (Revised for Color Matching)
+        strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
+        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding: 10px; font-weight: bold; }")
+        strat_vbox = QVBoxLayout()
+        strat_vbox.setSpacing(8)
+
+        # 1. Qty Mode (Red Border)
+        qty_layout = QHBoxLayout()
+        lbl_qty = QLabel("🔴 1주")
+        lbl_qty.setFixedWidth(50)
+        self.input_qty_val = QLineEdit("1")
+        self.input_qty_val.setReadOnly(True) # [수정] 1주 고정 사양 반영 (수정 불가)
+        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 4px; font-weight: bold; color: #555;")
+        qty_layout.addWidget(lbl_qty)
+        qty_layout.addWidget(self.input_qty_val)
+        qty_layout.addWidget(QLabel("주"))
+        strat_vbox.addLayout(qty_layout)
+
+        # 2. Amount Mode (Green Border)
+        amt_layout = QHBoxLayout()
+        lbl_amt = QLabel("🟢 금액")
+        lbl_amt.setFixedWidth(50)
+        self.input_amt_val = QLineEdit("100,000")
+        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 4px; font-weight: bold;")
+        self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
+        amt_layout.addWidget(lbl_amt)
+        amt_layout.addWidget(self.input_amt_val)
+        amt_layout.addWidget(QLabel("원"))
+        strat_vbox.addLayout(amt_layout)
+
+        # 3. Percent Mode (Blue Border)
+        pct_layout = QHBoxLayout()
+        lbl_pct = QLabel("🔵 비율")
+        lbl_pct.setFixedWidth(50)
+        self.input_pct_val = QLineEdit("10")
+        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 4px; font-weight: bold;")
+        pct_layout.addWidget(lbl_pct)
+        pct_layout.addWidget(self.input_pct_val)
+        pct_layout.addWidget(QLabel("%"))
+        strat_vbox.addLayout(pct_layout)
+
+        strategy_group.setLayout(strat_vbox)
+        settings_layout.addWidget(strategy_group)
+
+        # Save & Profile Slots Layout
+        save_profile_layout = QHBoxLayout()
+        
+        self.btn_save = QPushButton("💾")
+        self.btn_save.setToolTip("설정 저장")
+        self.btn_save.setFixedSize(45, 45) # [수정] 크기 확대
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 28px;")
+        self.btn_save.clicked.connect(self.on_save_button_clicked)
+        save_profile_layout.addWidget(self.btn_save) # Ratio 제거
+
+        save_profile_layout.addSpacing(5)
+
+        # [수정] 시퀀스 자동 버튼 (체크박스 대체)
+        # 아이콘만 있는 체크 가능한 버튼으로 변경. 켜지면 ▶ 점멸
+        self.btn_seq_auto = QPushButton("▶")
+        self.btn_seq_auto.setCheckable(True)
+        self.btn_seq_auto.setFixedSize(45, 45) # [수정] 크기 확대
+        self.btn_seq_auto.setToolTip("시퀀스 자동 모드 (클릭하여 ON/OFF)\nON 시: ▶가 점멸하며 종료 시간 도달 시 다음 프로필로 전환\nOFF 시: 정지 상태, 알람만 울림")
+        self.btn_seq_auto.setStyleSheet("""
+            QPushButton { background-color: #ffffff; border: 1px solid #999; border-radius: 4px; color: #ccc; font-size: 28px; font-weight: bold; }
+            QPushButton:checked { background-color: #e0e0e0; border: 1px solid #666; color: #28a745; }
+        """)
+        self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
+        save_profile_layout.addWidget(self.btn_seq_auto)
+        
+        # 시퀀스 버튼용 타이머 (1초 간격 점멸)
+        self.seq_blink_timer = QTimer(self)
+        self.seq_blink_timer.setInterval(1000)
+        self.seq_blink_timer.timeout.connect(self.blink_seq_button)
+        self.is_seq_blink_on = False
+
+        save_profile_layout.addSpacing(10) # 간격 조정
+        
+        self.profile_buttons = []
+        for i in range(1, 4):
+            btn = QPushButton(str(i))
+            btn.setFixedSize(35, 35) # 크기 유지
+            # [수정] 텍스트가 안 보인다면: 폰트 강제 설정 및 텍스트 정렬, 색상 대비 강화
+            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 16px; font-family: 'Arial';")
+            btn.clicked.connect(lambda checked, idx=i: self.on_profile_clicked(idx))
+            save_profile_layout.addWidget(btn)
+            self.profile_buttons.append(btn)
+            
+        settings_layout.addLayout(save_profile_layout)
+        
+        settings_layout.addStretch()
+        settings_group.setLayout(settings_layout)
+        settings_group.setContentsMargins(5, 5, 5, 5) # 여백 축소
+        left_layout.addWidget(settings_group)
+
+        # 2. Real-time List
+        rt_group = QGroupBox("📋 실시간 조건식")
+        rt_layout = QVBoxLayout()
+        rt_layout.setContentsMargins(5, 5, 5, 5) # 여백 최소화
+        rt_layout.setSpacing(2)
+        self.rt_list = QTextEdit()
+        self.rt_list.setReadOnly(True)
+        self.rt_list.setStyleSheet("background-color: white; color: black; border: 1px solid #ddd;")
+        rt_layout.addWidget(self.rt_list)
+        
+        rt_group.setLayout(rt_layout)
+        left_layout.addWidget(rt_group)
+
+        # === Right Panel: Controls & Logs ===
+
+        right_panel = QFrame()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Header Layout Removed (Moved to Global)
+
+        # Control Buttons
+        btn_layout = QHBoxLayout()
+        
+        self.btn_start = QPushButton("▶ START")
+        self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        self.btn_start.clicked.connect(self.on_start_clicked)
+        
+        self.btn_stop = QPushButton("⏹ STOP")
+        self.btn_stop.setStyleSheet("background-color: #dc3545; height: 35px; font-size: 14px;")
+        def on_stop():
+            self.animate_button_click(self.btn_stop)
+            self.worker.schedule_command('stop')
+        self.btn_stop.clicked.connect(on_stop)
+        
+        self.btn_report = QPushButton("📊 REPORT")
+        self.btn_report.setStyleSheet("background-color: #17a2b8; height: 35px; font-size: 14px;")
+        def on_report():
+            self.animate_button_click(self.btn_report)
+            self.worker.schedule_command('report')
+        self.btn_report.clicked.connect(on_report)
+
+        btn_layout.addWidget(self.btn_start)
+        btn_layout.addWidget(self.btn_stop)
+        btn_layout.addWidget(self.btn_report)
+        right_layout.addLayout(btn_layout)
+
+        # System Log
+        log_group = QGroupBox("📄 System Logs")
+        log_layout = QVBoxLayout()
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        log_layout.addWidget(self.log_text)
+        log_group.setLayout(log_layout)
+        right_layout.addWidget(log_group)
+
+        # Command Input
+        input_layout = QHBoxLayout()
+        input_label = QLabel("명령어 입력:")
+        self.cmd_input = QLineEdit()
+        self.cmd_input.returnPressed.connect(self.send_command)
+        
+        btn_send = QPushButton("전송")
+        btn_send.setStyleSheet("background-color: #fff; color: #333; border: 1px solid #ccc;")
+        btn_send.clicked.connect(self.send_command)
+
+        input_layout.addWidget(input_label)
+        input_layout.addWidget(self.cmd_input)
+        input_layout.addWidget(btn_send)
+        right_layout.addLayout(input_layout)
+
+        # Add panels to body layout
+        body_layout.addWidget(left_panel)
+        body_layout.addWidget(right_panel)
+        body_layout.setStretch(1, 1) # Right panel takes remaining space
+
+    def animate_button_click(self, btn):
+        """버튼 클릭 시 색상 반전 애니메이션 효과"""
+        original_style = btn.styleSheet()
+        # [효과] 잠시 밝게/어둡게 변경
+        btn.setStyleSheet("background-color: #555; color: white; border: 2px solid white;")
+        QTimer.singleShot(150, lambda: btn.setStyleSheet(original_style))
+
+    def on_start_clicked(self, force=False):
+        # [신규] 버튼 애니메이션 및 중복 방지
+        self.animate_button_click(self.btn_start)
+        
+        # [수정] force가 True이면 버튼 상태와 관계없이 진행 (시퀀스 전환용)
+        if not force and not self.btn_start.isEnabled(): return
+        self.btn_start.setEnabled(False) # 즉시 비활성화하여 중복 클릭 방지
+
+        # 1. UI의 현재 모든 설정을 기본(root) 설정에 동기화
+        try:
+            # [수정] restart_if_running=False로 설정하여 on_start_clicked 내부에서의 무한 루프/중복 실행 방지
+            self.save_settings(restart_if_running=False) 
+            
+            # [수정] 로그 순서 조정 (엔진 시작 이후에 나오도록 정보를 전달)
+            target_profile = f"{self.current_profile_idx}번 프로필" if self.current_profile_idx else "기본 설정"
+            
+        except Exception as e:
+            self.append_log(f"⚠️ 설정 동기화 실패: {e}")
+            target_profile = None
+            self.btn_start.setEnabled(True) # 실패 시 다시 활성화
+            
+        # 2. 시작 명령 전달 (target_profile을 인자로 전달하여 엔진 가동 후 출력되게 함)
+        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile))
+
+    def setup_worker(self):
+        self.worker = AsyncWorker(self)
+        self.worker.signals.log_signal.connect(self.append_log)
+        self.worker.signals.status_signal.connect(self.update_status_ui)
+        self.worker.signals.clr_signal.connect(self.log_text.clear)
+        self.worker.signals.request_log_signal.connect(self.save_logs_to_file)
+        self.worker.start()
+
+    def update_status_ui(self, status):
+        if status == "RUNNING":
+            self.lbl_status.setText("● RUNNING")
+            self.lbl_status.setStyleSheet("color: #28a745; margin-left: 10px;")
+            self.btn_start.setEnabled(False)
+            self.btn_start.setStyleSheet("background-color: #6c757d; height: 35px; font-size: 14px;")
+        elif status == "WAITING":
+            self.lbl_status.setText("● WAITING")
+            self.lbl_status.setStyleSheet("color: #ffc107; margin-left: 10px;") # 노란색
+            # [수정] WAITING 상태에서도 사용자가 원하면 다시 START를 누를 수 있도록 활성화 (DEAD 버튼 방지)
+            self.btn_start.setEnabled(True) 
+            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        else:
+            self.lbl_status.setText("● READY")
+            self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
+            self.btn_start.setEnabled(True)
+            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+
+    def append_log(self, text):
+        # [추가] 불필요하거나 기술적인 로그 필터링
+        filter_keywords = [
+            "Disconnected from WebSocket server",
+            "Message sent:",
+            "실시간 시세 서버 응답 수신(data):",
+            "서버와 연결을 시도 중입니다.",
+            "실시간 시세 서버로 로그인 패킷을 전송합니다.",
+            "로그인 성공하였습니다.",
+            "Connection error:"
+        ]
+        
+        if any(keyword in text for keyword in filter_keywords):
+            return
+
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # [수정] 들여쓰기 및 정렬 처리
+        # 시간 영역([HH:MM:SS])을 고정 너비로 두고, 메시지는 그 너비만큼 왼쪽 마진을 주어 정렬
+        text_html = text.replace('\n', '<br>')
+        
+        # TABLE 형태의 레이아웃을 사용하여 시간과 메시지를 분리
+        full_html = f"""
+        <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 2px;">
+            <tr>
+                <td valign="top" style="width: 70px; color: #ccc; font-family: 'Courier New'; font-size: 11px; white-space: nowrap;">
+                    [{timestamp}]
+                </td>
+                <td valign="top" style="padding-left: 5px; color: #00ff00; font-family: 'Consolas', 'Monospace';">
+                    {text_html if '<font color' in text_html or '<span style' in text_html else f"<span>{text_html}</span>"}
+                </td>
+            </tr>
+        </table>
+        """
+        self.log_text.append(full_html)
+        
+        # 조건식 목록이면 왼쪽 패널에는 **선택된 조건식만** 필터링하여 표시
+        if "📋 [조건식 목록]" in text:
+            filtered_msg = ""
+            lines = text.split('\n')
+            
+            # 현재 UI에서 체크된 번호들 가져오기
+            checked_indices = [str(i) for i, btn in enumerate(self.cond_buttons) if btn.isChecked()]
+            
+            found_any = False
+            for line in lines:
+                if line.startswith('•'):
+                    # 포맷: "• 0: 조건식이름" -> ":" 기준으로 분리
+                    try:
+                        parts = line.split(':')
+                        idx = parts[0].replace('•', '').strip()
+                        
+                        if idx in checked_indices:
+                            filtered_msg += line + "\n"
+                            found_any = True
+                    except:
+                        pass
+            
+            if not found_any:
+                filtered_msg += "(선택된 조건식이 목록에 없습니다)"
+                
+            self.rt_list.setText(filtered_msg)
+            
+        # Auto scroll
+        sb = self.log_text.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def save_logs_to_file(self):
+        """현재 로그창의 내용을 Log_YYYYMMDD_y.txt 형식으로 저장합니다."""
+        try:
+            # 1. 일반 텍스트 추출 (HTML 제거된 퓨어 텍스트)
+            raw_text = self.log_text.toPlainText()
+            
+            # 2. 날짜 및 일렬번호 결정
+            today_str = datetime.datetime.now().strftime("%Y%m%d")
+            y = 1
+            while True:
+                filename = f"Log_{today_str}_{y}.txt"
+                filepath = os.path.join(self.script_dir, filename)
+                if not os.path.exists(filepath):
+                    break
+                y += 1
+            
+            # 3. 파일 저장
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(raw_text)
+            
+            msg = f"💾 로그 파일 저장 완료: {filename}"
+            self.append_log(msg)
+            
+            # 텔레그램으로도 알림 (tel_send 모듈 직접 사용)
+            from tel_send import tel_send
+            tel_send(msg)
+            
+        except Exception as e:
+            err_msg = f"❌ 로그 저장 실패: {e}"
+            self.append_log(err_msg)
+            from tel_send import tel_send
+            tel_send(err_msg)
+
+
+    def send_command(self):
+        cmd = self.cmd_input.text().strip()
+        if cmd:
+            if cmd.upper() == 'PRINT':
+                self.export_log()
+            elif cmd.lower() == 'clr':
+                self.log_text.clear()
+                self.append_log("🧹 로그가 초기화되었습니다.")
+            else:
+                self.worker.schedule_command('custom', cmd)
+            self.cmd_input.clear()
+
+    def export_log(self):
+        try:
+            now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"KIPOSTOCK_LOG_{now_str}.txt"
+            
+            # 현재 실행 파일 위치에 저장
+            log_path = os.path.join(self.script_dir, filename)
+            
+            content = self.log_text.toPlainText()
+            
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            # [수정] 로그 저장 메시지 스타일링: 들여쓰기, 이탤릭, 밑줄 적용
+            # HTML 태그는 append_log(html=True) 처리가 필요할 수 있으나 
+            # 현재 append_log가 모든 입력을 html_text로 감싸므로 수동으로 포맷팅
+            save_msg = f"💾 로그가 저장되었습니다:<br>" + "&nbsp;"*11 + f"<u><i>{filename}</i></u>"
+            self.append_log(save_msg)
+            
+            # 사용자에게 알림 (선택 사항)
+            # QMessageBox.information(self, "로그 저장", f"로그가 파일로 저장되었습니다.\n{filename}")
+            
+        except Exception as e:
+            self.append_log(f"❌ 로그 저장 실패: {e}")
+
+    def on_cond_clicked(self, idx):
+        # State: 0 (Off/Gray), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
+        self.cond_states[idx] = (self.cond_states[idx] + 1) % 4
+        self.update_button_style(idx)
+        # [신규] 리스트 즉시 갱신
+        self.refresh_condition_list_ui()
+        
+        # [신규] 동적 반영 (설정 저장 후 엔진에 알림)
+        self.save_settings(show_limit_warning=False, restart_if_running=False, quiet=True)
+        if self.lbl_status.text() == "● RUNNING":
+            # worker에 refresh_conditions 명령 전달 (settings.json을 다시 읽어서 반영)
+            self.worker.schedule_command('refresh_conditions')
+
+    def update_button_style(self, idx):
+        # [신규] 번호가 안 보이는 문제 해결을 위해 텍스트 강제 설정
+        self.cond_buttons[idx].setText(str(idx))
+        
+        # State colors: Off(Gray), 🔴(Red), 🟢(Green), 🔵(Blue)
+        colors = {0: "#e0e0e0", 1: "#dc3545", 2: "#28a745", 3: "#007bff"}
+        text_colors = {0: "#333", 1: "white", 2: "white", 3: "white"}
+        
+        c = colors.get(self.cond_states[idx], "#e0e0e0")
+        tc = text_colors.get(self.cond_states[idx], "#333")
+        
+        # [수정] 번호가 중앙에 잘 보이도록 폰트 크기와 패딩 조정
+        self.cond_buttons[idx].setStyleSheet(f"""
+            QPushButton {{ 
+                background-color: {c}; 
+                color: {tc}; 
+                font-weight: bold; 
+                border-radius: 4px;
+                border: 1px solid #999;
+                font-size: 11px;
+                padding: 0px;
+            }}
+        """)
+
+    def refresh_condition_list_ui(self):
+        """실시간 조건식 리스트 패널을 현재 선택된 상태에 맞춰 갱신"""
+        try:
+            # 1. 고유한 검색식 이름 사전 접근 (Worker -> ChatCommand -> RealTimeSearch)
+            condition_map = {}
+            if self.worker and hasattr(self.worker, 'chat_command') and hasattr(self.worker.chat_command, 'rt_search'):
+                 condition_map = self.worker.chat_command.rt_search.condition_map
+
+            # html = "<b>[ 현재 선택된 조건식 ]</b><br><br>" # 제거 요청
+            html = ""
+            active_count = 0
+            
+            # 2. 버튼 상태 순회
+            mode_names = {1: "1주", 2: "금액", 3: "비율"}
+            mode_colors = {1: "#dc3545", 2: "#28a745", 3: "#007bff"}
+            
+            for i, state in enumerate(self.cond_states):
+                if state > 0:
+                    active_count += 1
+                    name = condition_map.get(str(i), f"조건식 {i}")
+                    m_name = mode_names[state]
+                    m_color = mode_colors[state]
+                    
+                    # HTML 포맷: 색상 적용된 이름과 모드 표시
+                    html += f"&nbsp;• <span style='color:{m_color};'><b>{i}: {name}</b> ({m_name})</span><br>"
+            
+            if active_count == 0:
+                html = "<br><center>(선택된 조건식이 없습니다)</center>"
+                
+            self.rt_list.setHtml(html)
+            
+        except Exception as e:
+            print(f"⚠️ 리스트 갱신 실패: {e}")
+
+    def format_comma(self, line_edit):
+        text = line_edit.text().replace(',', '')
+        if not text: return
+        try:
+            val = int(text)
+            line_edit.setText(f"{val:,}")
+        except:
+            pass
+
+    def toggle_blink(self):
+        if not self.alarm_playing:
+            self.blink_timer.stop()
+            return
+            
+        self.is_blink_on = not self.is_blink_on
+        if self.is_blink_on:
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton { background-color: #ffc107; color: #000; border: 1px solid #e0a800; border-radius: 4px; font-size: 16px; }
+            """)
+        else:
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton { background-color: #dc3545; color: #fff; border: 1px solid #c82333; border-radius: 4px; font-size: 16px; }
+            """)
+
+    def check_alarm(self):
+        # 이미 울리고 있으면 패스
+        if self.alarm_playing:
+            return
+
+        # 프로그램 시작 후 5초간은 알람 체크 스킵 (초기화 안정화 대기)
+        if (datetime.datetime.now() - self.app_start_time).total_seconds() < 5:
+            return
+
+        # [신규] 상단 시계 업데이트
+        now = datetime.datetime.now()
+        self.lbl_clock.setText(now.strftime("%H:%M:%S"))
+
+        current_time_str = now.strftime("%H:%M")
+        
+        # -------------------------------------------------------------
+        # ✅ 1. 시작 시간 체크 (Start Time Check)
+        # -------------------------------------------------------------
+        # 설정된 시작 시간과 일치하고, 현재 상태가 READY라면 자동 시작
+        try:
+            start_time_str = self.input_start_time.text().strip()
+            # 시간 포맷 정규화
+            target_start = datetime.datetime.strptime(start_time_str, "%H:%M").strftime("%H:%M")
+        except:
+            target_start = start_time_str
+
+        if current_time_str == target_start:
+            # [수정] 분 단위 중복 실행 방지 (이미 실행한 시간대면 패스)
+            if self.last_auto_start_time != current_time_str:
+                # 중복 실행 방지 (분 단위 체크이므로 1분 동안 계속 실행될 수 있음 -> last_check_time 등으로 방지 필요하지만 
+                # 여기서는 상태가 READY일 때만 동작하므로 자연스럽게 방어됨)
+                if self.lbl_status.text() == "● READY":
+                    self.last_auto_start_time = current_time_str # 실행 시간 기록
+                    self.append_log(f"⏰ 시작 시간({target_start}) 도달: 자동 시작합니다.")
+                    # 짧은 비프음
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    # 시작 명령 실행
+                    self.on_start_clicked() # 저장 후 시작 로직 재사용
+
+        # -------------------------------------------------------------
+        # ✅ 2. 종료 시간 체크 (End Time Check)
+        # -------------------------------------------------------------
+        end_time_str = self.input_end_time.text().strip()
+        try:
+            target_end = datetime.datetime.strptime(end_time_str, "%H:%M").strftime("%H:%M")
+        except:
+            target_end = end_time_str
+
+        # 시간이 일치하고, 방금 끈 시간(last_alarm_time)이 아니라면
+        # [수정] 동일한 분에 시작과 종료가 동시에 일어나는 레이스 컨디션 방지
+        if current_time_str == target_end:
+            if self.last_alarm_time != current_time_str and self.last_auto_start_time != current_time_str:
+                self.handle_end_time_event(current_time_str)
+
+ 
+
+    # def play_subprocess_sound(self):  <-- 메서드 제거
+    #     pass
+
+    def stop_alarm(self):
+        if self.alarm_playing:
+            # 소리 중단
+            try:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except: pass
+            
+            self.alarm_playing = False
+            self.last_alarm_time = datetime.datetime.now().strftime("%H:%M") # 현재 분에는 다시 안 울림
+            
+            self.blink_timer.stop() # 깜빡임 중단
+            self.btn_alarm_stop.setEnabled(False)
+            self.btn_alarm_stop.setText("🔕")
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    color: #aaa;
+                }
+            """)
+            self.append_log("🔕 알람이 해제되었습니다.")
+
+    def update_strategy_ui(self, from_user_click=False):
+        # Legacy stub for backward compatibility if called elsewhere
+        pass
+
+    def format_input_value(self, text):
+        # Legacy stub
+        pass
+
+    def load_settings_to_ui(self, profile_idx=None, keep_seq_auto=False):
+        try:
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            target = settings
+            if profile_idx is not None:
+                profiles = settings.get('profiles', {})
+                target = profiles.get(str(profile_idx))
+                if not target:
+                    self.append_log(f"⚠️ 프로필 {profile_idx}번 데이터가 없습니다.")
+                    return
+                self.append_log(f"📂 프로필 {profile_idx}번 설정을 불러왔습니다.")
+
+            self.input_profit.setText(str(target.get('take_profit_rate', '12.0')))
+            self.input_loss.setText(str(target.get('stop_loss_rate', '-1.2')))
+            self.input_max.setText(str(target.get('max_stocks', '20')))
+            
+            # Condition Button Set
+            seq_data = target.get('search_seq', [])
+            if isinstance(seq_data, str):
+                try:
+                    parsed = ast.literal_eval(seq_data)
+                    seq_data = parsed if isinstance(parsed, list) else [seq_data]
+                except: seq_data = [seq_data]
+            elif isinstance(seq_data, int): seq_data = [str(seq_data)]
+                
+            seq_set = set(map(str, seq_data))
+            for i, btn in enumerate(self.cond_buttons):
+                btn.setChecked(str(i) in seq_set)
+            
+            self.input_start_time.setText(target.get('start_time', '09:00'))
+            self.input_end_time.setText(target.get('end_time', '15:20'))
+            self.input_qty_val.setText(str(target.get('qty_val', '1')))
+            
+            amt_val = target.get('amt_val', '100,000')
+            try: amt_val = f"{int(str(amt_val).replace(',', '')):,}"
+            except: pass
+            self.input_amt_val.setText(amt_val)
+            self.input_pct_val.setText(str(target.get('pct_val', '10')))
+            
+            # [수정] 시퀀스 버튼 로드 및 UI 반영 (전환 시에는 현재 상태 유지)
+            if not keep_seq_auto:
+                is_seq = target.get('sequence_auto', False)
+                self.btn_seq_auto.setChecked(is_seq)
+                self.on_seq_auto_toggled() # 상태에 따른 스타일 적용
+            
+            # Condition 4-State logic
+            strat_map = target.get('condition_strategies', {})
+            active_seqs = set(map(str, seq_data)) if isinstance(seq_data, (list, set)) else set()
+
+            for i in range(20): # [수정] 10개 -> 20개로 확장
+                mode = strat_map.get(str(i))
+                if mode == 'qty': self.cond_states[i] = 1
+                elif mode == 'amount': self.cond_states[i] = 2
+                elif mode == 'percent': self.cond_states[i] = 3
+                else:
+                    self.cond_states[i] = 1 if str(i) in active_seqs else 0
+                self.update_button_style(i)
+            
+            # [신규] 활성화된 프로필 버튼 강조 처리
+            self.current_profile_idx = profile_idx
+            self.update_profile_buttons_ui()
+
+            # [신규] 로드 직후 리스트 리프레시 및 운영 시간 동기화
+            QTimer.singleShot(500, self.refresh_condition_list_ui)
+            
+            # [신규] 로드된 설정에 맞춰 MarketHour 즉시 동기화 (WAITING 버그 해결)
+            try:
+                sh, sm = map(int, target.get('start_time', '09:00').split(':'))
+                eh, em = map(int, target.get('end_time', '15:20').split(':'))
+                MarketHour.set_market_hours(sh, sm, eh, em)
+            except: pass
+            
+        except Exception as e:
+            self.append_log(f"설정 불러오기 실패: {e}")
+
+    def save_settings(self, profile_idx=None, show_limit_warning=True, restart_if_running=True, quiet=False):
+        try:
+            # UI 값 읽기
+            tpr = self.input_profit.text()
+            slr = self.input_loss.text()
+            max_s = self.input_max.text()
+            st = self.input_start_time.text()
+            et = self.input_end_time.text()
+            
+            # [수정] 운영 시간 제한 (09:00 ~ 15:30)
+            def clamp_time(t_str, default_val):
+                try:
+                    h, m = map(int, t_str.strip().split(':'))
+                    t_val = h * 100 + m
+                    if t_val < 900: return "09:00"
+                    if t_val > 1530: return "15:30"
+                    return f"{h:02d}:{m:02d}"
+                except: return default_val
+            
+            st = clamp_time(st, "09:00")
+            et = clamp_time(et, "15:30")
+            
+            # UI 강제 갱신
+            self.input_start_time.setText(st)
+            self.input_end_time.setText(et)
+            
+            selected_seq = []
+            cond_strategies = {}
+            mode_map = {1: 'qty', 2: 'amount', 3: 'percent'}
+            
+            for i, state in enumerate(self.cond_states):
+                if state > 0:
+                    selected_seq.append(str(i))
+                    cond_strategies[str(i)] = mode_map[state]
+
+            # [신규] 10개 초과 경고 (증권사 정책)
+            if show_limit_warning and len(selected_seq) > 10:
+                msg = f"⚠️ [주의] 선택된 조건식이 {len(selected_seq)}개입니다.\n증권사 API 정책상 동시에 최대 10개까지만 실시간 감시가 가능합니다.\n초과된 항목은 서버에서 등록을 거부할 수 있습니다."
+                QMessageBox.warning(self, "조건식 개수 초과", msg)
+                self.append_log(msg.replace("\n", " "))
+
+            qty_val = self.input_qty_val.text()
+            amt_val = self.input_amt_val.text()
+            pct_val = self.input_pct_val.text()
+            
+            # 현재 설정을 딕셔너리로 구성
+            current_data = {
+                'take_profit_rate': float(tpr),
+                'stop_loss_rate': float(slr),
+                'max_stocks': int(max_s),
+                'start_time': st,
+                'end_time': et,
+                'qty_val': qty_val,
+                'amt_val': amt_val,
+                'pct_val': pct_val,
+                'condition_strategies': cond_strategies,
+                'search_seq': selected_seq,
+                'sequence_auto': self.btn_seq_auto.isChecked() # [수정] 시퀀스 버튼 상태 저장
+            }
+
+            if profile_idx is not None:
+                # 특정 프로필에 저장
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if 'profiles' not in settings: settings['profiles'] = {}
+                settings['profiles'][str(profile_idx)] = current_data
+                
+                with open(self.settings_file, 'w', encoding='utf-8') as f:
+                    json.dump(settings, f, ensure_ascii=False, indent=2)
+                
+                # [신규] 저장 시에도 MarketHour 즉시 동기화
+                try:
+                    sh, sm = map(int, st.split(':'))
+                    eh, em = map(int, et.split(':'))
+                    MarketHour.set_market_hours(sh, sm, eh, em)
+                except: pass
+
+                if not quiet:
+                    self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
+                    # [신규] 저장된 상세 설정값 출력
+                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    self.append_log(f"<font color='#28a745'>{summary}</font>")
+            else:
+                # [수정] 레이스 컨디션 방지를 위해 일괄 업데이트(update_settings) 사용
+                root_updates = {
+                    'qty_val': qty_val,
+                    'amt_val': amt_val,
+                    'pct_val': pct_val,
+                    'condition_strategies': cond_strategies,
+                    'search_seq': selected_seq,
+                    'take_profit_rate': float(tpr),
+                    'stop_loss_rate': float(slr),
+                    'max_stocks': int(max_s),
+                    'start_time': st,
+                    'end_time': et
+                }
+                self.worker.schedule_command('update_settings', root_updates, quiet)
+                
+                # 시간 설정 즉시 반영
+                try:
+                    sh, sm = map(int, st.split(':'))
+                    eh, em = map(int, et.split(':'))
+                    MarketHour.set_market_hours(sh, sm, eh, em)
+                except: pass
+                
+                self.worker.schedule_command('condition_list', quiet)
+                if hasattr(cached_setting, "_cache"): cached_setting._cache = {}
+                
+                # [수정] 엔진 재시작 여부 제어 (조건식 단순 변경 시에는 재시작 안 함)
+                if restart_if_running and "RUNNING" in self.lbl_status.text():
+                    self.worker.schedule_command('start')
+                
+                if not quiet:
+                    self.append_log("💾 기본 설정이 저장되었습니다.")
+                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    self.append_log(f"<font color='#28a745'>{summary}</font>")
+
+            self.refresh_condition_list_ui()
+            
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", "숫자 형식이 올바르지 않습니다.")
+        except Exception as e:
+             QMessageBox.critical(self, "오류", f"저장 중 오류 발생: {e}")
+
+    # [미씽 메서드 복구] 프로필 버튼 클릭 핸들러
+    def on_profile_clicked(self, idx):
+        # [신규] 로드 전 시퀀스 버튼 상태 백업
+        is_seq_before_load = self.btn_seq_auto.isChecked()
+
+        if self.is_save_mode:
+            # 저장 모드일 때: 클릭한 프로필에 저장
+            self.save_settings(profile_idx=idx)
+            self.stop_save_mode()
+        else:
+            # 일반 모드일 때: 프로필 로드 (현재 시퀀스 버튼 상태 강제 유지)
+            self.load_settings_to_ui(profile_idx=idx, keep_seq_auto=True)
+            self.current_profile_idx = idx
+            self.update_profile_buttons_ui()
+            
+            # [수정] 시퀀스 자동 모드 조건 강화 (기존에 이미 켜져 있었을 때만 로드 후 자동 시작)
+            # 로드된 설정(target)에 의해 켜지는 경우에는 바로 시작하지 않음 (사용자 확인 용도)
+            if is_seq_before_load and self.btn_seq_auto.isChecked():
+                self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 시작합니다.")
+                QTimer.singleShot(1000, self.on_start_clicked)
+
+    # [미씽 메서드 복구] 저장 모드 종료
+    def stop_save_mode(self):
+        self.is_save_mode = False
+        self.profile_blink_timer.stop()
+        self.is_profile_blink_on = False
+        
+        # 버튼 스타일 복구
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 20px;")
+        self.update_profile_buttons_ui()
+
+    # [미씽 메서드 복구] 프로필 버튼 UI 업데이트 (데이터 유무 표시)
+    def update_profile_buttons_ui(self):
+        try:
+            settings = {}
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+            
+            profiles = settings.get('profiles', {})
+            
+            for i, btn in enumerate(self.profile_buttons):
+                idx = i + 1
+                has_data = str(idx) in profiles
+                is_selected = (self.current_profile_idx == idx)
+                
+                # 기본 스타일
+                base_style = "border-radius: 4px; font-weight: 900; padding: 0px; font-size: 16px; font-family: 'Arial';"
+                
+                if is_selected:
+                    # 선택됨: 파란색 테두리 또는 배경
+                    style = f"background-color: #e3f2fd; border: 2px solid #007bff; color: #007bff; {base_style}"
+                elif has_data:
+                    # 데이터 있음: 회색 배경 (사용자 요청)
+                    style = f"background-color: #cccccc; border: 1px solid #999; color: #333; {base_style}"
+                else:
+                    # 비어있음: 흰색
+                    style = f"background-color: #ffffff; border: 1px solid #ddd; color: #ccc; {base_style}"
+                
+                btn.setStyleSheet(style)
+                    
+        except Exception as e:
+            self.append_log(f"UI 업데이트 오류: {e}")
+
+    def on_save_button_clicked(self):
+        """설정 저장 버튼 클릭 시: 저장 모드 진입 및 점멸 시작"""
+        if not self.is_save_mode:
+            self.is_save_mode = True
+            self.profile_blink_timer.start()
+            self.append_log("💡 저장할 번호(1~3)를 선택하세요. (다시 누르면 취소)")
+            self.btn_save.setStyleSheet("background-color: #ffc107; color: black; border-radius: 4px; font-weight: bold;")
+        else:
+            self.stop_save_mode()
+            self.append_log("❌ 저장 모드가 취소되었습니다.")
+
+    def on_seq_auto_toggled(self):
+        """시퀀스 자동 버튼 토글 시 처리"""
+        is_on = self.btn_seq_auto.isChecked()
+        if is_on:
+            self.seq_blink_timer.start()
+            self.append_log("🔄 시퀀스 자동 모드 ON: 종료 시간 도달 시 다음 프로필로 전환합니다.")
+        else:
+            self.seq_blink_timer.stop()
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #ffffff; border: 1px solid #999; border-radius: 4px; color: #ccc; font-size: 14px; font-weight: bold; }
+            """)
+            self.append_log("⏹ 시퀀스 자동 모드 OFF: 종료 시간 도달 시 알람만 울립니다.")
+            self.is_seq_blink_on = False
+        
+        # [신규] 시퀀스 작동 중 UI 잠금 처리
+        self.lock_ui_for_sequence(is_on)
+
+    def lock_ui_for_sequence(self, locked):
+        """시퀀스 자동 모드 활성화 시 오조작 방지를 위해 UI 잠금"""
+        # ... (생략) ...
+        # [수정] READY 상태일 때는 START 버튼을 잠그지 않음 (사용자가 시작할 수 있도록)
+        is_ready = "READY" in self.lbl_status.text()
+        
+        # 입력 필드 및 버튼 잠금
+        self.input_profit.setEnabled(not locked)
+        self.input_loss.setEnabled(not locked)
+        self.input_max.setEnabled(not locked)
+        self.input_start_time.setEnabled(not locked)
+        self.input_end_time.setEnabled(not locked)
+        self.input_qty_val.setEnabled(not locked)
+        self.input_amt_val.setEnabled(not locked)
+        self.input_pct_val.setEnabled(not locked)
+        
+        for btn in self.cond_buttons: btn.setEnabled(not locked)
+        for btn in self.profile_buttons: btn.setEnabled(not locked)
+        self.btn_save.setEnabled(not locked)
+        
+        # START 버튼은 READY 상태면 잠그지 않음
+        self.btn_start.setEnabled(not locked or is_ready)
+        self.btn_stop.setEnabled(not locked) 
+        
+        if locked:
+            self.append_log("🔒 UI 잠금: 시퀀스 작동 중에는 설정을 변경할 수 없습니다.")
+        else:
+            self.append_log("🔓 UI 잠금 해제: 설정을 변경할 수 있습니다.")
+            # [수정] 잠금 해제 시 현재 상태(RUNNING/READY)에 맞춰 버튼 활성화 상태 복구
+            current_status = self.lbl_status.text().replace("● ", "").strip()
+            self.update_status_ui(current_status)
+
+    def blink_seq_button(self):
+        """시퀀스 버튼 점멸 효과 (1초 단위)"""
+        # 체크된 상태여야만 점멸
+        if not self.btn_seq_auto.isChecked():
+            self.seq_blink_timer.stop()
+            return
+
+        self.is_seq_blink_on = not self.is_seq_blink_on
+        if self.is_seq_blink_on:
+            # 켜짐: 녹색 텍스트 & 약간 진한 배경
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #e8f5e9; border: 2px solid #28a745; border-radius: 4px; color: #28a745; font-size: 14px; font-weight: bold; }
+            """)
+        else:
+            # 꺼짐: 기본 체크 상태
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #e0e0e0; border: 1px solid #666; border-radius: 4px; color: #28a745; font-size: 14px; font-weight: bold; }
+            """)
+
+    def handle_end_time_event(self, current_time_str):
+        """종료 시간 도달 시 시퀀스 로직 처리"""
+        # 1. 시퀀스 자동 모드인지 확인
+        is_seq_auto = self.btn_seq_auto.isChecked() # [수정] 버튼 상태 확인
+        current_idx = self.current_profile_idx
+
+        if is_seq_auto and current_idx is not None:
+            # [시퀀스 ON] 다음 프로필로 전환 시도
+            next_idx = current_idx + 1
+            if next_idx <= 3: # 최대 3번 프로필까지만
+                # 다음 프로필 데이터 확인
+                try:
+                    if os.path.exists(self.settings_file):
+                        with open(self.settings_file, 'r', encoding='utf-8') as f:
+                            settings = json.load(f)
+                            if 'profiles' in settings and str(next_idx) in settings['profiles']:
+                                self.append_log(f"🔄 시퀀스 자동: 프로필 {current_idx}번 종료 -> {next_idx}번으로 전환합니다.")
+                                
+                                # 1) 현재 설정 저장
+                                self.save_settings(profile_idx=current_idx, restart_if_running=False) # 전환 중 중복 시작 방지
+                                
+                                # 2) 다음 프로필 로드 (UI와 내부 변수 동기화, 시퀀스 온 유지)
+                                self.load_settings_to_ui(profile_idx=next_idx, keep_seq_auto=True)
+                                
+                                # 3) 알람 발생 (다음 프로필 전환 알림)
+                                self.start_alarm(transition_to=next_idx)
+                                
+                                # 4) 설정 적용 및 엔진 재가동 (API 재등록 강제 수행)
+                                self.append_log("="*40)
+                                self.append_log(f"🛰️ [시퀀스] {next_idx}번 프로필로 전환: API 검색식 재등록을 시작합니다...")
+                                self.append_log("="*40)
+                                
+                                # [수정] 전환 중 중복 알람/이벤트 방지를 위해 즉시 시간 기록
+                                self.last_alarm_time = current_time_str
+                                
+                                # [수정] 시퀀스 전환 딜레이를 1초 -> 2.5초로 증가하여 R10001 중복 로그인 방지
+                                # 이전 프로필의 세션이 완전히 정리될 시간을 확보합니다.
+                                QTimer.singleShot(2500, lambda: self.on_start_clicked(force=True)) 
+                                return
+                except Exception as e:
+                    self.append_log(f"⚠️ 시퀀스 전환 중 오류: {e}")
+
+            # 다음 프로필이 없거나 데이터가 없으면 (최종 시퀀스 종료)
+            self.append_log("🏁 시퀀스 종료: 모든 프로필 단계가 완료되었습니다.")
+            
+            # 시퀀스 종료 시 버튼 끄기 및 UI 잠금 해제
+            self.btn_seq_auto.setChecked(False)
+            self.on_seq_auto_toggled() 
+            
+            # [추가] UI 완전 초기화 및 버튼 상태 복구
+            self.lock_ui_for_sequence(False)
+            self.update_status_ui("READY")
+            self.append_log("🔓 시퀀스 종료: 모든 UI 조작이 가능합니다.")
+            
+            self.start_alarm() # 마지막 종료 알람
+            self.worker.schedule_command('stop') # 매매 중단
+            
+            # [수정] 중단 후 약간의 여유를 두고 최종 보고 전송 (worker에 today 추가됨)
+            QTimer.singleShot(2500, lambda: self.worker.schedule_command('today'))
+            return
+
+        # [시퀀스 OFF]
+        self.start_alarm(just_sound=True)
+
+    def start_alarm(self, just_sound=False, transition_to=None):
+        # ... (기존 start_alarm 로직) ...
+        if self.alarm_playing:
+            return
+            
+        try:
+            self.alarm_playing = True
+            
+            # 버튼 상태 변경
+            self.btn_alarm_stop.setEnabled(True)
+            self.btn_alarm_stop.setText("🔔") 
+            self.blink_timer.start() # 깜빡임 시작
+            
+            if transition_to:
+                log_msg = f"🔄 시퀀스 전환: {transition_to}번 프로필로 이동합니다. (매매 계속)"
+            elif just_sound:
+                log_msg = f"⏰ 종료 시간({self.input_end_time.text()}) 도달! (매매는 계속됩니다)"
+            else:
+                log_msg = f"⏰ 알람 발생: 종료 시간({self.input_end_time.text()}) 도달!"
+                
+            self.append_log(log_msg)
+            
+            sound_path = os.path.join(self.script_dir, "StockAlarm.wav")
+            if os.path.exists(sound_path):
+                winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            else:
+                self.append_log(f"⚠️ 알람 파일 없음: {sound_path}")
+            
+        except Exception as e:
+            self.append_log(f"⚠️ 알람 처리 중 오류: {e}")
+            self.alarm_playing = False
+
+
+    def closeEvent(self, event):
+        reply = QMessageBox.question(self, '종료', '프로그램을 종료하시겠습니까?',
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                   QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.worker.stop()
+            event.accept()
+        else:
+            event.ignore()
+
+    def toggle_profile_blink(self):
+        """저장 모드 시 번호 버튼 점멸 효과"""
+        self.is_profile_blink_on = not self.is_profile_blink_on
+        color = "#ffc107" if self.is_profile_blink_on else "#f8f9fa"
+        for btn in self.profile_buttons:
+            btn.setStyleSheet(f"background-color: {color}; border: 2px solid #ffc107; border-radius: 4px; font-weight: bold; color: black; padding: 0px; font-size: 14px;")
+
+    # [복구] 항상 위 토글 메서드
+    def toggle_always_on_top(self, checked):
+        if checked:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.show()
+        else:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+            self.show()
+
+if __name__ == '__main__':
+    try:
+        # [추가] Windows 작업표시줄 아이콘 고정 및 표시를 위한 ID 설정
+        if sys.platform == 'win32':
+            import ctypes
+            myappid = 'kipo.buy.auto.4.2'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+        app = QApplication(sys.argv)
+        
+        # Font Setup
+        font = QFont("Malgun Gothic", 9)
+        app.setFont(font)
+        
+        window = KipoWindow()
+        window.show()
+        
+        retCode = app.exec()
+        sys.exit(retCode)
+        
+    except BaseException as e:
+        # BaseException을 통해 SystemExit까지 모두 캡처
+        with open("crash_report.txt", "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now()}] CRASH/EXIT LOGGED:\n")
+            f.write(traceback.format_exc())
+            f.write(f"Error Type: {type(e)}\n")
+            f.write("-" * 50 + "\n")
+        
+        if not isinstance(e, SystemExit):
+            # [수정] GUI 앱이므로 콘솔 입력(input) 제거 + 메시지 박스 시도
+            # Qt 앱이 살아있다면 메시지박스를 띄우지만, 죽었을 수도 있으므로 안전하게 패스 혹은 windows api 사용
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, f"Critical Error: {e}\nSee crash_report.txt", "Error", 0x10)
+            except:
+                pass
+===
+
+
+import sys
+import os
+import asyncio
+import json
+import datetime
+import traceback
+import ast
+import requests
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+                           QHBoxLayout, QLabel, QLineEdit, QPushButton, 
+                           QTextEdit, QFrame, QGridLayout, QMessageBox, QGroupBox,
+                           QScrollArea, QRadioButton, QButtonGroup, QCheckBox)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+from PyQt6.QtGui import QFont, QIcon, QColor, QPalette
+import winsound
+
+# 기존 모듈 임포트
+
+# 기존 모듈 임포트
+from config import telegram_token
+from chat_command import ChatCommand
+from get_setting import get_setting, cached_setting
+from market_hour import MarketHour
+
+# ----------------- Worker Thread for Asyncio Loop -----------------
+class WorkerSignals(QObject):
+    log_signal = pyqtSignal(str)
+    status_signal = pyqtSignal(str)  # 상태 표시줄 업데이트용
+    clr_signal = pyqtSignal()       # [신규] 로그 초기화용
+    request_log_signal = pyqtSignal() # [신규] 로그 파일 출력 요청
+
+class AsyncWorker(QThread):
+    def __init__(self, main_window):
+        super().__init__()
+        self.main_window = main_window
+        self.signals = WorkerSignals()
+        self.loop = None
+        self.chat_command = None
+        self.keep_running = True
+        self.pending_start = False # [추가] 장외 시간 예약 시작 기능용
+        self.pending_profile_info = None
+
+    def run(self):
+        # Create a new event loop for this thread
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+        
+        # 1. Override tel_send logic
+        import chat_command as chat_cmd_module
+        
+        def gui_log_send(text):
+            self.signals.log_signal.emit(text)
+        
+        # Patch tel_send in chat_command
+        chat_cmd_module.tel_send = gui_log_send
+        
+        # 2. Redirect stdout/stderr to capture prints from get_seq.py and others
+        class StreamRedirector:
+            def __init__(self, emitter):
+                self.emitter = emitter
+            def write(self, text):
+                text = text.strip()
+                if text:
+                    self.emitter(text)
+            def flush(self):
+                pass
+                
+        sys.stdout = StreamRedirector(gui_log_send)
+        sys.stderr = StreamRedirector(gui_log_send)
+
+        # Initialize ChatCommand
+        self.chat_command = ChatCommand()
+        self.chat_command.on_clear_logs = lambda: self.signals.clr_signal.emit()
+        self.chat_command.on_request_log_file = lambda: self.signals.request_log_signal.emit()
+        self.chat_command.rt_search.on_connection_closed = self._on_connection_closed_wrapper
+        
+        self.loop.run_until_complete(self.main_loop())
+        self.loop.close()
+
+    async def _on_connection_closed_wrapper(self):
+        self.signals.log_signal.emit("⚠️ 연결 끊김 감지. 재연결 시도 중...")
+        await self.chat_command._on_connection_closed()
+
+    async def main_loop(self):
+        self.signals.log_signal.emit("🚀 시스템 초기화 완료. 대기 중...")
+        
+        # 설정 로드 및 적용
+        self.load_initial_settings()
+        
+        # 시작 시 자동으로 조건식 목록 가져오기 (마지막 저장된 설정대로 필터링되어 표시됨)
+        self.signals.log_signal.emit("ℹ️ 저장된 조건식 목록을 불러옵니다...")
+        await self.chat_command.condition()
+        
+        # [추가] 자동 시작(auto_start) 설정 확인 및 실행
+        try:
+            settings_path = os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), 'settings.json')
+            if os.path.exists(settings_path):
+                with open(settings_path, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if settings.get('auto_start', False):
+                    self.signals.log_signal.emit("ℹ️ 자동 시작 설정이 활성화되어 있습니다.")
+                    # 약간의 딜레이 후 시작 시도 (초기화 안정성 확보)
+                    await asyncio.sleep(1.0)
+                    # 직접 await 호출 (같은 루프 내이므로 schedule_command 대신 직접 호출)
+                    await self._execute_command('start')
+        except Exception as e:
+            self.signals.log_signal.emit(f"⚠️ 자동 시작 확인 중 오류: {e}")
+        
+        try:
+            while self.keep_running:
+                # 텔레그램 메시지 확인 (GUI에서는 필수 아님, 텔레그램 제어 원할 시 유지)
+                message = self.get_chat_updates()
+                if message:
+                    await self.chat_command.process_command(message)
+                
+                
+                # [추가] 장 종료 시 자동 중단 및 보고 시퀀스 (15:30)
+                now = datetime.datetime.now()
+                if now.hour == 15 and now.minute == 30 and not self.today_stopped:
+                    self.today_stopped = True
+                    self.signals.log_signal.emit("🔔 장 종료 시간(15:30)이 되어 자동으로 정산 시퀀스를 시작합니다.")
+                    
+                    # 1. 중지 (STOP)
+                    await self.chat_command.stop(set_auto_start_false=False)
+                    # 2. 당일 일지 (TODAY)
+                    await self.chat_command.today()
+                    # 3. 계좌 보고 (REPORT)
+                    await self.chat_command.report()
+
+                # 날짜가 바뀌면 종료 플래그 초기화
+                current_date = now.date()
+                if self.last_check_date != current_date:
+                    self.last_check_date = current_date
+                    self.today_stopped = False
+
+                # 장 시작/종료 시간 자동 확인 로직
+                # [수정] 대기 시간(is_waiting_period)이 아닐 때만 자동 시작 진행하여 무한 루프 방지
+                if self.pending_start and MarketHour.is_market_open_time() and not MarketHour.is_waiting_period():
+                    self.pending_start = False
+                    self.signals.log_signal.emit("🔔 장이 시작되었습니다. 감시를 자동으로 시작합니다!")
+                    self.schedule_command('start', getattr(self, 'pending_profile_info', None))
+                
+                await asyncio.sleep(1.0) # 체크 주기 조정
+                
+        except Exception as e:
+            self.signals.log_signal.emit(f"❌ 메인 루프 에러: {e}")
+
+    def load_initial_settings(self):
+        try:
+            with open('settings.json', 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+                
+            # 시간 설정 적용 (settings.json에 시간이 없다면 기본값 사용)
+            start_time = settings.get('start_time', "09:00")
+            end_time = settings.get('end_time', "15:20") # 장 종료 10분전
+            
+            sh, sm = map(int, start_time.split(':'))
+            eh, em = map(int, end_time.split(':'))
+            
+            MarketHour.set_market_hours(sh, sm, eh, em)
+            self.signals.log_signal.emit(f"⚙️ 장 운영 시간 설정: {start_time} ~ {end_time}")
+            
+        except Exception as e:
+            self.signals.log_signal.emit(f"⚠️ 설정 로드 중 오류 (기본값 사용): {e}")
+
+    # MainApp의 로직 가져옴
+    last_update_id = 0
+    telegram_url = f"https://api.telegram.org/bot{telegram_token}/getUpdates"
+    today_started = False
+    today_stopped = False
+    last_check_date = None
+
+    def get_chat_updates(self):
+        """텔레그램에서 새로운 명령어를 가져옵니다."""
+        try:
+            params = {'offset': self.last_update_id + 1, 'timeout': 1}
+            response = requests.get(self.telegram_url, params=params, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                for update in data.get('result', []):
+                    self.last_update_id = update['update_id']
+                    if 'message' in update and 'text' in update['message']:
+                        chat_id = str(update['message']['chat']['id'])
+                        
+                        # [보안] 설정된 chat_id와 일치할 때만 실행
+                        from config import telegram_chat_id
+                        if chat_id == telegram_chat_id:
+                            return update['message']['text']
+                        else:
+                            print(f"⚠️ 권한 없는 사용자 접근 차단 (ID: {chat_id})")
+        except Exception as e:
+            # Polling 에러는 로그에만 간단히 기록
+            pass
+        return None
+            
+    # check_market_timing 메서드 제거 (자동 종료 충돌 방지)
+
+    # GUI에서 호출할 비동기 명령들
+    def schedule_command(self, cmd_type, *args):
+        asyncio.run_coroutine_threadsafe(self._execute_command(cmd_type, *args), self.loop)
+
+    async def _execute_command(self, cmd_type, *args):
+        try:
+            if cmd_type == 'start':
+                # [수정] 장외 시간 예약 시작 처리 (사용자 요청: 15:30 ~ 09:00 사이만 WAITING 처리)
+                # 낮 시간(09~15:30) 중에 사용자 종료 설정 등으로 시작이 안되는 경우는 READY 유지
+                if MarketHour.is_waiting_period():
+                    if not self.pending_start:
+                        self.pending_start = True
+                        self.pending_profile_info = args[0] if args else None
+                        
+                        # [수정] 안내 메시지에 실제 설정된 시간 표시 (main_window 위젯 접근 수정)
+                        st_str = self.main_window.input_start_time.text()
+                        et_str = self.main_window.input_end_time.text()
+                        self.signals.log_signal.emit(f"⏳ 현재 장외 대기 시간입니다. ({st_str}~{et_str})")
+                        self.signals.log_signal.emit("⌛ 장이 시작되면 자동으로 감시를 개시하겠습니다.")
+                        self.signals.status_signal.emit("WAITING")
+                    return
+                
+                # 낮 시간인데 시작 시도
+                profile_info = args[0] if args else None
+                success = await self.chat_command.start(profile_info=profile_info)
+                if success:
+                    self.pending_start = False
+                    self.signals.status_signal.emit("RUNNING")
+                else:
+                    self.signals.status_signal.emit("READY")
+                    self.signals.log_signal.emit("⚠️ 장 시작 조건을 만족하지 않습니다. 시간 설정을 확인하세요.")
+                    # [신규] 장외 시간 등 시작 실패 시 경고음
+                    try:
+                        import winsound
+                        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                    except: pass
+                return
+            elif cmd_type == 'stop':
+                self.pending_start = False # 예약 취소
+                await self.chat_command.stop(True)
+                self.signals.status_signal.emit("READY")
+            elif cmd_type == 'report':
+                await self.chat_command.report()
+            elif cmd_type == 'custom':
+                await self.chat_command.process_command(args[0])
+            elif cmd_type == 'update_setting':
+                # settings.json 업데이트
+                self.chat_command.update_setting(args[0], args[1])
+                self.signals.log_signal.emit(f"✅ 설정 변경: {args[0]} = {args[1]}")
+                
+            elif cmd_type == 'update_settings':
+                # [신규] 여러 설정을 한 번에 업데이트
+                updates = args[0]
+                quiet = args[1] if len(args) > 1 else False
+                self.chat_command.update_settings_batch(updates)
+                if not quiet:
+                    self.signals.log_signal.emit("✅ 일괄 설정 저장 완료")
+                
+            elif cmd_type == 'today':
+                await self.chat_command.today()
+                
+            elif cmd_type == 'condition_list':
+                quiet = args[0] if args else False
+                await self.chat_command.condition(quiet=quiet) # quiet 인자 전달
+
+        except Exception as e:
+            self.signals.log_signal.emit(f"❌ 명령 실행 오류: {e}")
+
+    def stop(self):
+        """안전한 종료 처리"""
+        self.keep_running = False
+        if self.loop and self.loop.is_running():
+             # 루프 내에서 정리 작업 수행 후 종료
+             self.loop.call_soon_threadsafe(lambda: asyncio.create_task(self.shutdown()))
+        
+        # 스레드 종료 대기 (최대 3초)
+        self.wait(3000)
+
+    async def shutdown(self):
+        """비동기 리소스 정리"""
+        if self.chat_command:
+            await self.chat_command.stop(True)
+        # 루프 정지 (pending task cancel은 생략함)
+        self.loop.stop()
+
+
+# ----------------- Main Window -----------------
+class KipoWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.3.9 (Automation Edition)")
+        # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
+        if getattr(sys, 'frozen', False):
+            # 실행 파일 위치 (settings.json, 로그 저장용)
+            self.script_dir = os.path.dirname(sys.executable)
+            # 임시 리소스 위치 (아이콘 등 번들된 파일용)
+            self.resource_dir = sys._MEIPASS
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
+            self.resource_dir = self.script_dir
+            
+        self.settings_file = os.path.join(self.script_dir, 'settings.json')
+
+        # 아이콘 설정 (리소스 경로에서 로드)
+        icon_path = os.path.join(self.resource_dir, 'icon.png')
+        icon_path_ico = os.path.join(self.resource_dir, 'icon.ico')
+        
+        if os.path.exists(icon_path):
+            self.setWindowIcon(QIcon(icon_path))
+        elif os.path.exists(icon_path_ico):
+            self.setWindowIcon(QIcon(icon_path_ico))
+        else:
+            # Fallback checks in script directory
+            for ext in ['png', 'ico']:
+                p = os.path.join(self.script_dir, f'icon.{ext}')
+                if os.path.exists(p):
+                    self.setWindowIcon(QIcon(p))
+                    break
+                
+        self.resize(1000, 700)
+        
+        self.setup_ui()
+        self.setup_worker()
+        self.load_settings_to_ui()
+
+        # 알람 관련 초기화
+        self.alarm_playing = False
+        self.last_alarm_time = None # 이전 알람 발생 시간 (중복 발생 방지)
+        self.app_start_time = datetime.datetime.now() # 시작 시간 기록 (안전장치)
+        self.last_auto_start_time = None # [신규] 시작 알람 중복 방지용
+
+        # 알람 반복 타이머 제거 (소리 기능 완전 비활성화)
+        # self.sound_repeater = QTimer(self)
+        
+        self.alarm_timer = QTimer(self)
+        self.alarm_timer.setInterval(1000) # 1초마다 체크
+        self.alarm_timer.timeout.connect(self.check_alarm)
+        self.alarm_timer.start()
+
+        # 알람 버튼 깜빡임 타이머
+        self.blink_timer = QTimer(self)
+        self.blink_timer.setInterval(500) # 0.5초마다 반전
+        self.blink_timer.timeout.connect(self.toggle_blink)
+        self.is_blink_on = False
+
+        # 프로필 관련 초기화
+        self.is_save_mode = False
+        self.profile_blink_timer = QTimer(self)
+        self.profile_blink_timer.setInterval(400) # 점멸 속도
+        self.profile_blink_timer.timeout.connect(self.toggle_profile_blink)
+        self.is_profile_blink_on = False
+        self.current_profile_idx = None # 현재 선택된 프로필 인덱스
+
+    def setup_ui(self):
+        # --- Styles ---
+        self.setStyleSheet("""
+            QMainWindow { background-color: #f0f2f5; }
+            QGroupBox { font-weight: bold; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding-top: 15px; background-color: white; }
+            QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 10px; padding: 0 5px; }
+            QLabel { color: #333; }
+            QLineEdit { padding: 5px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9; }
+            
+            /* 버튼 스타일을 특정 클래스로 제한하거나 QMessageBox 버튼을 위한 예외 처리 */
+            QPushButton { padding: 8px 15px; border-radius: 5px; font-weight: bold; color: white; border: none; }
+            QPushButton:hover { opacity: 0.9; }
+            
+            /* QMessageBox 버튼 복구 */
+            QMessageBox QPushButton {
+                background-color: #007bff; /* 파란색 */
+                color: white;
+                border: 1px solid #0056b3;
+                min-width: 60px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #0056b3;
+            }
+            
+            QTextEdit { background-color: #1e1e1e; color: #00ff00; font-family: 'Consolas', 'Monospace'; border-radius: 5px; padding: 10px; }
+        """)
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        # Root Layout: Vertical (Header + Body)
+        root_layout = QVBoxLayout(central_widget)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(10)
+
+        # === 0. Global Header ===
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(0, 0, 0, 10)
+        
+        # Spacer to balance
+        left_spacer = QWidget()
+        left_spacer.setFixedWidth(40) 
+        
+        self.lbl_main_title = QLabel("🚀 KipoStock V5.1 (Stable)")
+        self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_main_title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        self.lbl_main_title.setStyleSheet("color: #2c3e50;")
+
+        # [신규] 상태 표시등 (READY / RUNNING)
+        self.lbl_status = QLabel("● READY")
+        self.lbl_status.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
+
+        # [신규] 현재 시간 표시 시계
+        self.lbl_clock = QLabel(datetime.datetime.now().strftime("%H:%M:%S"))
+        self.lbl_clock.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        self.lbl_clock.setStyleSheet("color: #2c3e50; margin-left: 10px;")
+        
+        # Always on Top Button (Pin icon)
+        self.btn_top = QPushButton("📍")
+        self.btn_top.setCheckable(True)
+        self.btn_top.setFixedSize(40, 40)
+        self.btn_top.setToolTip("항상 위에 고정")
+        self.btn_top.setStyleSheet("""
+            QPushButton { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; }
+            QPushButton:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
+            QPushButton:hover { background-color: #e2e6ea; }
+        """)
+        self.btn_top.clicked.connect(self.toggle_always_on_top)
+        
+        header_layout.addWidget(left_spacer)
+        header_layout.addStretch()
+        header_layout.addWidget(self.lbl_main_title)
+        header_layout.addWidget(self.lbl_status)
+        header_layout.addWidget(self.lbl_clock)
+        header_layout.addStretch()
+        header_layout.addWidget(self.btn_top)
+        
+        root_layout.addWidget(header_widget)
+
+        # === Body Layout (Left + Right) ===
+        body_layout = QHBoxLayout()
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(10)
+        root_layout.addLayout(body_layout)
+
+        # === Left Panel: Settings ===
+        left_panel = QFrame()
+        left_panel.setFixedWidth(280)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 1. Settings Group
+        settings_group = QGroupBox("⚙️ Settings")
+        settings_layout = QVBoxLayout()
+        settings_layout.setSpacing(12)
+
+        # Condition Select (0-19) - 4 State Buttons
+        cond_label = QLabel("조건식 선택 (0-19)")
+        self.cond_btn_layout = QGridLayout() # [수정] Grid Layout 사용
+        self.cond_btn_layout.setSpacing(2)
+        self.cond_buttons = []
+        # State: 0 (Gray/Off), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
+        self.cond_states = [0] * 20 # [수정] 20개로 확장
+        
+        for i in range(20):
+            btn = QPushButton(str(i))
+            btn.setFixedSize(22, 22)
+            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 4px;")
+            btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
+            self.cond_buttons.append(btn)
+            # 2줄로 배치 (0~9: 1열, 10~19: 2열) -> 10개씩 끊어서 배치
+            row = i // 10
+            col = i % 10
+            self.cond_btn_layout.addWidget(btn, row, col)
+        
+        settings_layout.addWidget(cond_label)
+        settings_layout.addLayout(self.cond_btn_layout)
+
+        # Profit, Loss & Max Stocks (Horizontal)
+        top_settings_layout = QHBoxLayout()
+        
+        # Profit
+        top_settings_layout.addWidget(QLabel("익절"))
+        self.input_profit = QLineEdit()
+        self.input_profit.setFixedWidth(45)
+        self.input_profit.setStyleSheet("border: 2px solid #dc3545; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_profit)
+        
+        top_settings_layout.addSpacing(5)
+        
+        # Loss
+        top_settings_layout.addWidget(QLabel("손절"))
+        self.input_loss = QLineEdit()
+        self.input_loss.setFixedWidth(45)
+        self.input_loss.setStyleSheet("border: 2px solid #007bff; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_loss)
+
+        top_settings_layout.addSpacing(5)
+
+        # Max Stocks (Shortened label for horizontal fit)
+        top_settings_layout.addWidget(QLabel("종목수"))
+        self.input_max = QLineEdit()
+        self.input_max.setFixedWidth(35)
+        self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 3px; font-weight: bold;")
+        top_settings_layout.addWidget(self.input_max)
+        
+        top_settings_layout.addStretch()
+        settings_layout.addLayout(top_settings_layout)
+
+        # Time Settings (Horizontal)
+        time_layout = QHBoxLayout()
+        
+        # Start
+        time_layout.addWidget(QLabel("시작"))
+        self.input_start_time = QLineEdit()
+        self.input_start_time.setFixedWidth(50)
+        self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_layout.addWidget(self.input_start_time)
+        
+        time_layout.addSpacing(5)
+        
+        # End
+        time_layout.addWidget(QLabel("종료"))
+        self.input_end_time = QLineEdit()
+        self.input_end_time.setFixedWidth(50)
+        self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        time_layout.addWidget(self.input_end_time)
+        
+        # 🔔 알람 해제 버튼
+        self.btn_alarm_stop = QPushButton("🔕")
+        self.btn_alarm_stop.setToolTip("알람 해제")
+        self.btn_alarm_stop.setFixedWidth(40)
+        self.btn_alarm_stop.setFixedHeight(30)
+        self.btn_alarm_stop.clicked.connect(self.stop_alarm)
+        self.btn_alarm_stop.setEnabled(False)
+        self.btn_alarm_stop.setStyleSheet("""
+            QPushButton {
+                background-color: #f8f9fa;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 16px;
+                color: #aaa;
+            }
+            QPushButton:enabled {
+                background-color: #ffc107; /* 종 모양이 울릴 때는 노란색 */
+                color: #000;
+                border: 1px solid #e0a800;
+            }
+        """)
+        time_layout.addSpacing(10)
+        time_layout.addWidget(self.btn_alarm_stop)
+        time_layout.addStretch()
+        settings_layout.addLayout(time_layout)
+
+        # 💎 Buying Strategy Group (Revised for Color Matching)
+        strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
+        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding: 10px; font-weight: bold; }")
+        strat_vbox = QVBoxLayout()
+        strat_vbox.setSpacing(8)
+
+        # 1. Qty Mode (Red Border)
+        qty_layout = QHBoxLayout()
+        lbl_qty = QLabel("🔴 1주")
+        lbl_qty.setFixedWidth(50)
+        self.input_qty_val = QLineEdit("1")
+        self.input_qty_val.setReadOnly(True) # [수정] 1주 고정 사양 반영 (수정 불가)
+        self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 4px; font-weight: bold; color: #555;")
+        qty_layout.addWidget(lbl_qty)
+        qty_layout.addWidget(self.input_qty_val)
+        qty_layout.addWidget(QLabel("주"))
+        strat_vbox.addLayout(qty_layout)
+
+        # 2. Amount Mode (Green Border)
+        amt_layout = QHBoxLayout()
+        lbl_amt = QLabel("🟢 금액")
+        lbl_amt.setFixedWidth(50)
+        self.input_amt_val = QLineEdit("100,000")
+        self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 4px; font-weight: bold;")
+        self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
+        amt_layout.addWidget(lbl_amt)
+        amt_layout.addWidget(self.input_amt_val)
+        amt_layout.addWidget(QLabel("원"))
+        strat_vbox.addLayout(amt_layout)
+
+        # 3. Percent Mode (Blue Border)
+        pct_layout = QHBoxLayout()
+        lbl_pct = QLabel("🔵 비율")
+        lbl_pct.setFixedWidth(50)
+        self.input_pct_val = QLineEdit("10")
+        self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 4px; font-weight: bold;")
+        pct_layout.addWidget(lbl_pct)
+        pct_layout.addWidget(self.input_pct_val)
+        pct_layout.addWidget(QLabel("%"))
+        strat_vbox.addLayout(pct_layout)
+
+        strategy_group.setLayout(strat_vbox)
+        settings_layout.addWidget(strategy_group)
+
+        # Save & Profile Slots Layout
+        save_profile_layout = QHBoxLayout()
+        
+        self.btn_save = QPushButton("💾")
+        self.btn_save.setToolTip("설정 저장")
+        self.btn_save.setFixedSize(45, 45) # [수정] 크기 확대
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 28px;")
+        self.btn_save.clicked.connect(self.on_save_button_clicked)
+        save_profile_layout.addWidget(self.btn_save) # Ratio 제거
+
+        save_profile_layout.addSpacing(5)
+
+        # [수정] 시퀀스 자동 버튼 (체크박스 대체)
+        # 아이콘만 있는 체크 가능한 버튼으로 변경. 켜지면 ▶ 점멸
+        self.btn_seq_auto = QPushButton("▶")
+        self.btn_seq_auto.setCheckable(True)
+        self.btn_seq_auto.setFixedSize(45, 45) # [수정] 크기 확대
+        self.btn_seq_auto.setToolTip("시퀀스 자동 모드 (클릭하여 ON/OFF)\nON 시: ▶가 점멸하며 종료 시간 도달 시 다음 프로필로 전환\nOFF 시: 정지 상태, 알람만 울림")
+        self.btn_seq_auto.setStyleSheet("""
+            QPushButton { background-color: #ffffff; border: 1px solid #999; border-radius: 4px; color: #ccc; font-size: 28px; font-weight: bold; }
+            QPushButton:checked { background-color: #e0e0e0; border: 1px solid #666; color: #28a745; }
+        """)
+        self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
+        save_profile_layout.addWidget(self.btn_seq_auto)
+        
+        # 시퀀스 버튼용 타이머 (1초 간격 점멸)
+        self.seq_blink_timer = QTimer(self)
+        self.seq_blink_timer.setInterval(1000)
+        self.seq_blink_timer.timeout.connect(self.blink_seq_button)
+        self.is_seq_blink_on = False
+
+        save_profile_layout.addSpacing(10) # 간격 조정
+        
+        self.profile_buttons = []
+        for i in range(1, 4):
+            btn = QPushButton(str(i))
+            btn.setFixedSize(35, 35) # 크기 유지
+            # [수정] 텍스트가 안 보인다면: 폰트 강제 설정 및 텍스트 정렬, 색상 대비 강화
+            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 16px; font-family: 'Arial';")
+            btn.clicked.connect(lambda checked, idx=i: self.on_profile_clicked(idx))
+            save_profile_layout.addWidget(btn)
+            self.profile_buttons.append(btn)
+            
+        settings_layout.addLayout(save_profile_layout)
+        
+        settings_layout.addStretch()
+        settings_group.setLayout(settings_layout)
+        settings_group.setContentsMargins(5, 5, 5, 5) # 여백 축소
+        left_layout.addWidget(settings_group)
+
+        # 2. Real-time List
+        rt_group = QGroupBox("📋 실시간 조건식")
+        rt_layout = QVBoxLayout()
+        rt_layout.setContentsMargins(5, 5, 5, 5) # 여백 최소화
+        rt_layout.setSpacing(2)
+        self.rt_list = QTextEdit()
+        self.rt_list.setReadOnly(True)
+        self.rt_list.setStyleSheet("background-color: white; color: black; border: 1px solid #ddd;")
+        rt_layout.addWidget(self.rt_list)
+        
+        rt_group.setLayout(rt_layout)
+        left_layout.addWidget(rt_group)
+
+        # === Right Panel: Controls & Logs ===
+
+        right_panel = QFrame()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Header Layout Removed (Moved to Global)
+
+        # Control Buttons
+        btn_layout = QHBoxLayout()
+        
+        self.btn_start = QPushButton("▶ START")
+        self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        self.btn_start.clicked.connect(self.on_start_clicked)
+        
+        self.btn_stop = QPushButton("⏹ STOP")
+        self.btn_stop.setStyleSheet("background-color: #dc3545; height: 35px; font-size: 14px;")
+        def on_stop():
+            self.animate_button_click(self.btn_stop)
+            self.worker.schedule_command('stop')
+        self.btn_stop.clicked.connect(on_stop)
+        
+        self.btn_report = QPushButton("📊 REPORT")
+        self.btn_report.setStyleSheet("background-color: #17a2b8; height: 35px; font-size: 14px;")
+        def on_report():
+            self.animate_button_click(self.btn_report)
+            self.worker.schedule_command('report')
+        self.btn_report.clicked.connect(on_report)
+
+        btn_layout.addWidget(self.btn_start)
+        btn_layout.addWidget(self.btn_stop)
+        btn_layout.addWidget(self.btn_report)
+        right_layout.addLayout(btn_layout)
+
+        # System Log
+        log_group = QGroupBox("📄 System Logs")
+        log_layout = QVBoxLayout()
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        log_layout.addWidget(self.log_text)
+        log_group.setLayout(log_layout)
+        right_layout.addWidget(log_group)
+
+        # Command Input
+        input_layout = QHBoxLayout()
+        input_label = QLabel("명령어 입력:")
+        self.cmd_input = QLineEdit()
+        self.cmd_input.returnPressed.connect(self.send_command)
+        
+        btn_send = QPushButton("전송")
+        btn_send.setStyleSheet("background-color: #fff; color: #333; border: 1px solid #ccc;")
+        btn_send.clicked.connect(self.send_command)
+
+        input_layout.addWidget(input_label)
+        input_layout.addWidget(self.cmd_input)
+        input_layout.addWidget(btn_send)
+        right_layout.addLayout(input_layout)
+
+        # Add panels to body layout
+        body_layout.addWidget(left_panel)
+        body_layout.addWidget(right_panel)
+        body_layout.setStretch(1, 1) # Right panel takes remaining space
+
+    def animate_button_click(self, btn):
+        """버튼 클릭 시 색상 반전 애니메이션 효과"""
+        original_style = btn.styleSheet()
+        # [효과] 잠시 밝게/어둡게 변경
+        btn.setStyleSheet("background-color: #555; color: white; border: 2px solid white;")
+        QTimer.singleShot(150, lambda: btn.setStyleSheet(original_style))
+
+    def on_start_clicked(self, force=False):
+        # [신규] 버튼 애니메이션 및 중복 방지
+        self.animate_button_click(self.btn_start)
+        
+        # [수정] force가 True이면 버튼 상태와 관계없이 진행 (시퀀스 전환용)
+        if not force and not self.btn_start.isEnabled(): return
+        self.btn_start.setEnabled(False) # 즉시 비활성화하여 중복 클릭 방지
+
+        # 1. UI의 현재 모든 설정을 기본(root) 설정에 동기화
+        try:
+            # [수정] restart_if_running=False로 설정하여 on_start_clicked 내부에서의 무한 루프/중복 실행 방지
+            self.save_settings(restart_if_running=False) 
+            
+            # [수정] 로그 순서 조정 (엔진 시작 이후에 나오도록 정보를 전달)
+            target_profile = f"{self.current_profile_idx}번 프로필" if self.current_profile_idx else "기본 설정"
+            
+        except Exception as e:
+            self.append_log(f"⚠️ 설정 동기화 실패: {e}")
+            target_profile = None
+            self.btn_start.setEnabled(True) # 실패 시 다시 활성화
+            
+        # 2. 시작 명령 전달 (target_profile을 인자로 전달하여 엔진 가동 후 출력되게 함)
+        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile))
+
+    def setup_worker(self):
+        self.worker = AsyncWorker(self)
+        self.worker.signals.log_signal.connect(self.append_log)
+        self.worker.signals.status_signal.connect(self.update_status_ui)
+        self.worker.signals.clr_signal.connect(self.log_text.clear)
+        self.worker.signals.request_log_signal.connect(self.save_logs_to_file)
+        self.worker.start()
+
+    def update_status_ui(self, status):
+        if status == "RUNNING":
+            self.lbl_status.setText("● RUNNING")
+            self.lbl_status.setStyleSheet("color: #28a745; margin-left: 10px;")
+            self.btn_start.setEnabled(False)
+            self.btn_start.setStyleSheet("background-color: #6c757d; height: 35px; font-size: 14px;")
+        elif status == "WAITING":
+            self.lbl_status.setText("● WAITING")
+            self.lbl_status.setStyleSheet("color: #ffc107; margin-left: 10px;") # 노란색
+            # [수정] WAITING 상태에서도 사용자가 원하면 다시 START를 누를 수 있도록 활성화 (DEAD 버튼 방지)
+            self.btn_start.setEnabled(True) 
+            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        else:
+            self.lbl_status.setText("● READY")
+            self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
+            self.btn_start.setEnabled(True)
+            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+
+    def append_log(self, text):
+        # [추가] 불필요하거나 기술적인 로그 필터링
+        filter_keywords = [
+            "Disconnected from WebSocket server",
+            "Message sent:",
+            "실시간 시세 서버 응답 수신(data):",
+            "서버와 연결을 시도 중입니다.",
+            "실시간 시세 서버로 로그인 패킷을 전송합니다.",
+            "로그인 성공하였습니다.",
+            "Connection error:"
+        ]
+        
+        if any(keyword in text for keyword in filter_keywords):
+            return
+
+        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+        
+        # [수정] 들여쓰기 및 정렬 처리
+        # 시간 영역([HH:MM:SS])을 고정 너비로 두고, 메시지는 그 너비만큼 왼쪽 마진을 주어 정렬
+        text_html = text.replace('\n', '<br>')
+        
+        # TABLE 형태의 레이아웃을 사용하여 시간과 메시지를 분리
+        full_html = f"""
+        <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 2px;">
+            <tr>
+                <td valign="top" style="width: 70px; color: #ccc; font-family: 'Courier New'; font-size: 11px; white-space: nowrap;">
+                    [{timestamp}]
+                </td>
+                <td valign="top" style="padding-left: 5px; color: #00ff00; font-family: 'Consolas', 'Monospace';">
+                    {text_html if '<font color' in text_html or '<span style' in text_html else f"<span>{text_html}</span>"}
+                </td>
+            </tr>
+        </table>
+        """
+        self.log_text.append(full_html)
+        
+        # 조건식 목록이면 왼쪽 패널에는 **선택된 조건식만** 필터링하여 표시
+        if "📋 [조건식 목록]" in text:
+            filtered_msg = ""
+            lines = text.split('\n')
+            
+            # 현재 UI에서 체크된 번호들 가져오기
+            checked_indices = [str(i) for i, btn in enumerate(self.cond_buttons) if btn.isChecked()]
+            
+            found_any = False
+            for line in lines:
+                if line.startswith('•'):
+                    # 포맷: "• 0: 조건식이름" -> ":" 기준으로 분리
+                    try:
+                        parts = line.split(':')
+                        idx = parts[0].replace('•', '').strip()
+                        
+                        if idx in checked_indices:
+                            filtered_msg += line + "\n"
+                            found_any = True
+                    except:
+                        pass
+            
+            if not found_any:
+                filtered_msg += "(선택된 조건식이 목록에 없습니다)"
+                
+            self.rt_list.setText(filtered_msg)
+            
+        # Auto scroll
+        sb = self.log_text.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
+    def save_logs_to_file(self):
+        """현재 로그창의 내용을 Log_YYYYMMDD_y.txt 형식으로 저장합니다."""
+        try:
+            # 1. 일반 텍스트 추출 (HTML 제거된 퓨어 텍스트)
+            raw_text = self.log_text.toPlainText()
+            
+            # 2. 날짜 및 일렬번호 결정
+            today_str = datetime.datetime.now().strftime("%Y%m%d")
+            y = 1
+            while True:
+                filename = f"Log_{today_str}_{y}.txt"
+                filepath = os.path.join(self.script_dir, filename)
+                if not os.path.exists(filepath):
+                    break
+                y += 1
+            
+            # 3. 파일 저장
+            with open(filepath, 'w', encoding='utf-8') as f:
+                f.write(raw_text)
+            
+            msg = f"💾 로그 파일 저장 완료: {filename}"
+            self.append_log(msg)
+            
+            # 텔레그램으로도 알림 (tel_send 모듈 직접 사용)
+            from tel_send import tel_send
+            tel_send(msg)
+            
+        except Exception as e:
+            err_msg = f"❌ 로그 저장 실패: {e}"
+            self.append_log(err_msg)
+            from tel_send import tel_send
+            tel_send(err_msg)
+
+
+    def send_command(self):
+        cmd = self.cmd_input.text().strip()
+        if cmd:
+            if cmd.upper() == 'PRINT':
+                self.export_log()
+            elif cmd.lower() == 'clr':
+                self.log_text.clear()
+                self.append_log("🧹 로그가 초기화되었습니다.")
+            else:
+                self.worker.schedule_command('custom', cmd)
+            self.cmd_input.clear()
+
+    def export_log(self):
+        try:
+            now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"KIPOSTOCK_LOG_{now_str}.txt"
+            
+            # 현재 실행 파일 위치에 저장
+            log_path = os.path.join(self.script_dir, filename)
+            
+            content = self.log_text.toPlainText()
+            
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+                
+            # [수정] 로그 저장 메시지 스타일링: 들여쓰기, 이탤릭, 밑줄 적용
+            # HTML 태그는 append_log(html=True) 처리가 필요할 수 있으나 
+            # 현재 append_log가 모든 입력을 html_text로 감싸므로 수동으로 포맷팅
+            save_msg = f"💾 로그가 저장되었습니다:<br>" + "&nbsp;"*11 + f"<u><i>{filename}</i></u>"
+            self.append_log(save_msg)
+            
+            # 사용자에게 알림 (선택 사항)
+            # QMessageBox.information(self, "로그 저장", f"로그가 파일로 저장되었습니다.\n{filename}")
+            
+        except Exception as e:
+            self.append_log(f"❌ 로그 저장 실패: {e}")
+
+    def on_cond_clicked(self, idx):
+        # State: 0 (Off/Gray), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
+        self.cond_states[idx] = (self.cond_states[idx] + 1) % 4
+        self.update_button_style(idx)
+        # [신규] 리스트 즉시 갱신
+        self.refresh_condition_list_ui()
+        
+        # [신규] 동적 반영 (설정 저장 후 엔진에 알림)
+        self.save_settings(show_limit_warning=False, restart_if_running=False, quiet=True)
+        if self.lbl_status.text() == "● RUNNING":
+            # worker에 refresh_conditions 명령 전달 (settings.json을 다시 읽어서 반영)
+            self.worker.schedule_command('refresh_conditions')
+
+    def update_button_style(self, idx):
+        # [신규] 번호가 안 보이는 문제 해결을 위해 텍스트 강제 설정
+        self.cond_buttons[idx].setText(str(idx))
+        
+        # State colors: Off(Gray), 🔴(Red), 🟢(Green), 🔵(Blue)
+        colors = {0: "#e0e0e0", 1: "#dc3545", 2: "#28a745", 3: "#007bff"}
+        text_colors = {0: "#333", 1: "white", 2: "white", 3: "white"}
+        
+        c = colors.get(self.cond_states[idx], "#e0e0e0")
+        tc = text_colors.get(self.cond_states[idx], "#333")
+        
+        # [수정] 번호가 중앙에 잘 보이도록 폰트 크기와 패딩 조정
+        self.cond_buttons[idx].setStyleSheet(f"""
+            QPushButton {{ 
+                background-color: {c}; 
+                color: {tc}; 
+                font-weight: bold; 
+                border-radius: 4px;
+                border: 1px solid #999;
+                font-size: 11px;
+                padding: 0px;
+            }}
+        """)
+
+    def refresh_condition_list_ui(self):
+        """실시간 조건식 리스트 패널을 현재 선택된 상태에 맞춰 갱신"""
+        try:
+            # 1. 고유한 검색식 이름 사전 접근 (Worker -> ChatCommand -> RealTimeSearch)
+            condition_map = {}
+            if self.worker and hasattr(self.worker, 'chat_command') and hasattr(self.worker.chat_command, 'rt_search'):
+                 condition_map = self.worker.chat_command.rt_search.condition_map
+
+            # html = "<b>[ 현재 선택된 조건식 ]</b><br><br>" # 제거 요청
+            html = ""
+            active_count = 0
+            
+            # 2. 버튼 상태 순회
+            mode_names = {1: "1주", 2: "금액", 3: "비율"}
+            mode_colors = {1: "#dc3545", 2: "#28a745", 3: "#007bff"}
+            
+            for i, state in enumerate(self.cond_states):
+                if state > 0:
+                    active_count += 1
+                    name = condition_map.get(str(i), f"조건식 {i}")
+                    m_name = mode_names[state]
+                    m_color = mode_colors[state]
+                    
+                    # HTML 포맷: 색상 적용된 이름과 모드 표시
+                    html += f"&nbsp;• <span style='color:{m_color};'><b>{i}: {name}</b> ({m_name})</span><br>"
+            
+            if active_count == 0:
+                html = "<br><center>(선택된 조건식이 없습니다)</center>"
+                
+            self.rt_list.setHtml(html)
+            
+        except Exception as e:
+            print(f"⚠️ 리스트 갱신 실패: {e}")
+
+    def format_comma(self, line_edit):
+        text = line_edit.text().replace(',', '')
+        if not text: return
+        try:
+            val = int(text)
+            line_edit.setText(f"{val:,}")
+        except:
+            pass
+
+    def toggle_blink(self):
+        if not self.alarm_playing:
+            self.blink_timer.stop()
+            return
+            
+        self.is_blink_on = not self.is_blink_on
+        if self.is_blink_on:
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton { background-color: #ffc107; color: #000; border: 1px solid #e0a800; border-radius: 4px; font-size: 16px; }
+            """)
+        else:
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton { background-color: #dc3545; color: #fff; border: 1px solid #c82333; border-radius: 4px; font-size: 16px; }
+            """)
+
+    def check_alarm(self):
+        # 이미 울리고 있으면 패스
+        if self.alarm_playing:
+            return
+
+        # 프로그램 시작 후 5초간은 알람 체크 스킵 (초기화 안정화 대기)
+        if (datetime.datetime.now() - self.app_start_time).total_seconds() < 5:
+            return
+
+        # [신규] 상단 시계 업데이트
+        now = datetime.datetime.now()
+        self.lbl_clock.setText(now.strftime("%H:%M:%S"))
+
+        current_time_str = now.strftime("%H:%M")
+        
+        # -------------------------------------------------------------
+        # ✅ 1. 시작 시간 체크 (Start Time Check)
+        # -------------------------------------------------------------
+        # 설정된 시작 시간과 일치하고, 현재 상태가 READY라면 자동 시작
+        try:
+            start_time_str = self.input_start_time.text().strip()
+            # 시간 포맷 정규화
+            target_start = datetime.datetime.strptime(start_time_str, "%H:%M").strftime("%H:%M")
+        except:
+            target_start = start_time_str
+
+        if current_time_str == target_start:
+            # [수정] 분 단위 중복 실행 방지 (이미 실행한 시간대면 패스)
+            if self.last_auto_start_time != current_time_str:
+                # 중복 실행 방지 (분 단위 체크이므로 1분 동안 계속 실행될 수 있음 -> last_check_time 등으로 방지 필요하지만 
+                # 여기서는 상태가 READY일 때만 동작하므로 자연스럽게 방어됨)
+                if self.lbl_status.text() == "● READY":
+                    self.last_auto_start_time = current_time_str # 실행 시간 기록
+                    self.append_log(f"⏰ 시작 시간({target_start}) 도달: 자동 시작합니다.")
+                    # 짧은 비프음
+                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    # 시작 명령 실행
+                    self.on_start_clicked() # 저장 후 시작 로직 재사용
+
+        # -------------------------------------------------------------
+        # ✅ 2. 종료 시간 체크 (End Time Check)
+        # -------------------------------------------------------------
+        end_time_str = self.input_end_time.text().strip()
+        try:
+            target_end = datetime.datetime.strptime(end_time_str, "%H:%M").strftime("%H:%M")
+        except:
+            target_end = end_time_str
+
+        # 시간이 일치하고, 방금 끈 시간(last_alarm_time)이 아니라면
+        # [수정] 동일한 분에 시작과 종료가 동시에 일어나는 레이스 컨디션 방지
+        if current_time_str == target_end:
+            if self.last_alarm_time != current_time_str and self.last_auto_start_time != current_time_str:
+                self.handle_end_time_event(current_time_str)
+
+ 
+
+    # def play_subprocess_sound(self):  <-- 메서드 제거
+    #     pass
+
+    def stop_alarm(self):
+        if self.alarm_playing:
+            # 소리 중단
+            try:
+                winsound.PlaySound(None, winsound.SND_PURGE)
+            except: pass
+            
+            self.alarm_playing = False
+            self.last_alarm_time = datetime.datetime.now().strftime("%H:%M") # 현재 분에는 다시 안 울림
+            
+            self.blink_timer.stop() # 깜빡임 중단
+            self.btn_alarm_stop.setEnabled(False)
+            self.btn_alarm_stop.setText("🔕")
+            self.btn_alarm_stop.setStyleSheet("""
+                QPushButton {
+                    background-color: #f8f9fa;
+                    border: 1px solid #ddd;
+                    border-radius: 4px;
+                    font-size: 16px;
+                    color: #aaa;
+                }
+            """)
+            self.append_log("🔕 알람이 해제되었습니다.")
+
+    def update_strategy_ui(self, from_user_click=False):
+        # Legacy stub for backward compatibility if called elsewhere
+        pass
+
+    def format_input_value(self, text):
+        # Legacy stub
+        pass
+
+    def load_settings_to_ui(self, profile_idx=None, keep_seq_auto=False):
+        try:
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            target = settings
+            if profile_idx is not None:
+                profiles = settings.get('profiles', {})
+                target = profiles.get(str(profile_idx))
+                if not target:
+                    self.append_log(f"⚠️ 프로필 {profile_idx}번 데이터가 없습니다.")
+                    return
+                self.append_log(f"📂 프로필 {profile_idx}번 설정을 불러왔습니다.")
+
+            self.input_profit.setText(str(target.get('take_profit_rate', '12.0')))
+            self.input_loss.setText(str(target.get('stop_loss_rate', '-1.2')))
+            self.input_max.setText(str(target.get('max_stocks', '20')))
+            
+            # Condition Button Set
+            seq_data = target.get('search_seq', [])
+            if isinstance(seq_data, str):
+                try:
+                    parsed = ast.literal_eval(seq_data)
+                    seq_data = parsed if isinstance(parsed, list) else [seq_data]
+                except: seq_data = [seq_data]
+            elif isinstance(seq_data, int): seq_data = [str(seq_data)]
+                
+            seq_set = set(map(str, seq_data))
+            for i, btn in enumerate(self.cond_buttons):
+                btn.setChecked(str(i) in seq_set)
+            
+            self.input_start_time.setText(target.get('start_time', '09:00'))
+            self.input_end_time.setText(target.get('end_time', '15:20'))
+            self.input_qty_val.setText(str(target.get('qty_val', '1')))
+            
+            amt_val = target.get('amt_val', '100,000')
+            try: amt_val = f"{int(str(amt_val).replace(',', '')):,}"
+            except: pass
+            self.input_amt_val.setText(amt_val)
+            self.input_pct_val.setText(str(target.get('pct_val', '10')))
+            
+            # [수정] 시퀀스 버튼 로드 및 UI 반영 (전환 시에는 현재 상태 유지)
+            if not keep_seq_auto:
+                is_seq = target.get('sequence_auto', False)
+                self.btn_seq_auto.setChecked(is_seq)
+                self.on_seq_auto_toggled() # 상태에 따른 스타일 적용
+            
+            # Condition 4-State logic
+            strat_map = target.get('condition_strategies', {})
+            active_seqs = set(map(str, seq_data)) if isinstance(seq_data, (list, set)) else set()
+
+            for i in range(20): # [수정] 10개 -> 20개로 확장
+                mode = strat_map.get(str(i))
+                if mode == 'qty': self.cond_states[i] = 1
+                elif mode == 'amount': self.cond_states[i] = 2
+                elif mode == 'percent': self.cond_states[i] = 3
+                else:
+                    self.cond_states[i] = 1 if str(i) in active_seqs else 0
+                self.update_button_style(i)
+            
+            # [신규] 활성화된 프로필 버튼 강조 처리
+            self.current_profile_idx = profile_idx
+            self.update_profile_buttons_ui()
+
+            # [신규] 로드 직후 리스트 리프레시 및 운영 시간 동기화
+            QTimer.singleShot(500, self.refresh_condition_list_ui)
+            
+            # [신규] 로드된 설정에 맞춰 MarketHour 즉시 동기화 (WAITING 버그 해결)
+            try:
+                sh, sm = map(int, target.get('start_time', '09:00').split(':'))
+                eh, em = map(int, target.get('end_time', '15:20').split(':'))
+                MarketHour.set_market_hours(sh, sm, eh, em)
+            except: pass
+            
+        except Exception as e:
+            self.append_log(f"설정 불러오기 실패: {e}")
+
+    def save_settings(self, profile_idx=None, show_limit_warning=True, restart_if_running=True, quiet=False):
+        try:
+            # UI 값 읽기
+            tpr = self.input_profit.text()
+            slr = self.input_loss.text()
+            max_s = self.input_max.text()
+            st = self.input_start_time.text()
+            et = self.input_end_time.text()
+            
+            # [수정] 운영 시간 제한 (09:00 ~ 15:30)
+            def clamp_time(t_str, default_val):
+                try:
+                    h, m = map(int, t_str.strip().split(':'))
+                    t_val = h * 100 + m
+                    if t_val < 900: return "09:00"
+                    if t_val > 1530: return "15:30"
+                    return f"{h:02d}:{m:02d}"
+                except: return default_val
+            
+            st = clamp_time(st, "09:00")
+            et = clamp_time(et, "15:30")
+            
+            # UI 강제 갱신
+            self.input_start_time.setText(st)
+            self.input_end_time.setText(et)
+            
+            selected_seq = []
+            cond_strategies = {}
+            mode_map = {1: 'qty', 2: 'amount', 3: 'percent'}
+            
+            for i, state in enumerate(self.cond_states):
+                if state > 0:
+                    selected_seq.append(str(i))
+                    cond_strategies[str(i)] = mode_map[state]
+
+            # [신규] 10개 초과 경고 (증권사 정책)
+            if show_limit_warning and len(selected_seq) > 10:
+                msg = f"⚠️ [주의] 선택된 조건식이 {len(selected_seq)}개입니다.\n증권사 API 정책상 동시에 최대 10개까지만 실시간 감시가 가능합니다.\n초과된 항목은 서버에서 등록을 거부할 수 있습니다."
+                QMessageBox.warning(self, "조건식 개수 초과", msg)
+                self.append_log(msg.replace("\n", " "))
+
+            qty_val = self.input_qty_val.text()
+            amt_val = self.input_amt_val.text()
+            pct_val = self.input_pct_val.text()
+            
+            # 현재 설정을 딕셔너리로 구성
+            current_data = {
+                'take_profit_rate': float(tpr),
+                'stop_loss_rate': float(slr),
+                'max_stocks': int(max_s),
+                'start_time': st,
+                'end_time': et,
+                'qty_val': qty_val,
+                'amt_val': amt_val,
+                'pct_val': pct_val,
+                'condition_strategies': cond_strategies,
+                'search_seq': selected_seq,
+                'sequence_auto': self.btn_seq_auto.isChecked() # [수정] 시퀀스 버튼 상태 저장
+            }
+
+            if profile_idx is not None:
+                # 특정 프로필에 저장
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+                
+                if 'profiles' not in settings: settings['profiles'] = {}
+                settings['profiles'][str(profile_idx)] = current_data
+                
+                with open(self.settings_file, 'w', encoding='utf-8') as f:
+                    json.dump(settings, f, ensure_ascii=False, indent=2)
+                
+                # [신규] 저장 시에도 MarketHour 즉시 동기화
+                try:
+                    sh, sm = map(int, st.split(':'))
+                    eh, em = map(int, et.split(':'))
+                    MarketHour.set_market_hours(sh, sm, eh, em)
+                except: pass
+
+                if not quiet:
+                    self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
+                    # [신규] 저장된 상세 설정값 출력
+                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    self.append_log(f"<font color='#28a745'>{summary}</font>")
+            else:
+                # [수정] 레이스 컨디션 방지를 위해 일괄 업데이트(update_settings) 사용
+                root_updates = {
+                    'qty_val': qty_val,
+                    'amt_val': amt_val,
+                    'pct_val': pct_val,
+                    'condition_strategies': cond_strategies,
+                    'search_seq': selected_seq,
+                    'take_profit_rate': float(tpr),
+                    'stop_loss_rate': float(slr),
+                    'max_stocks': int(max_s),
+                    'start_time': st,
+                    'end_time': et
+                }
+                self.worker.schedule_command('update_settings', root_updates, quiet)
+                
+                # 시간 설정 즉시 반영
+                try:
+                    sh, sm = map(int, st.split(':'))
+                    eh, em = map(int, et.split(':'))
+                    MarketHour.set_market_hours(sh, sm, eh, em)
+                except: pass
+                
+                self.worker.schedule_command('condition_list', quiet)
+                if hasattr(cached_setting, "_cache"): cached_setting._cache = {}
+                
+                # [수정] 엔진 재시작 여부 제어 (조건식 단순 변경 시에는 재시작 안 함)
+                if restart_if_running and "RUNNING" in self.lbl_status.text():
+                    self.worker.schedule_command('start')
+                
+                if not quiet:
+                    self.append_log("💾 기본 설정이 저장되었습니다.")
+                    summary = f"📋 [저장값] 익절:{tpr}% | 손절:{slr}% | 종목수:{max_s} | 시간:{st}~{et} | 선택:{len(selected_seq)}종목"
+                    self.append_log(f"<font color='#28a745'>{summary}</font>")
+
+            self.refresh_condition_list_ui()
+            
+        except ValueError:
+            QMessageBox.warning(self, "입력 오류", "숫자 형식이 올바르지 않습니다.")
+        except Exception as e:
+             QMessageBox.critical(self, "오류", f"저장 중 오류 발생: {e}")
+
+    # [미씽 메서드 복구] 프로필 버튼 클릭 핸들러
+    def on_profile_clicked(self, idx):
+        # [신규] 로드 전 시퀀스 버튼 상태 백업
+        is_seq_before_load = self.btn_seq_auto.isChecked()
+
+        if self.is_save_mode:
+            # 저장 모드일 때: 클릭한 프로필에 저장
+            self.save_settings(profile_idx=idx)
+            self.stop_save_mode()
+        else:
+            # 일반 모드일 때: 프로필 로드 (현재 시퀀스 버튼 상태 강제 유지)
+            self.load_settings_to_ui(profile_idx=idx, keep_seq_auto=True)
+            self.current_profile_idx = idx
+            self.update_profile_buttons_ui()
+            
+            # [수정] 시퀀스 자동 모드 조건 강화 (기존에 이미 켜져 있었을 때만 로드 후 자동 시작)
+            # 로드된 설정(target)에 의해 켜지는 경우에는 바로 시작하지 않음 (사용자 확인 용도)
+            if is_seq_before_load and self.btn_seq_auto.isChecked():
+                self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 시작합니다.")
+                QTimer.singleShot(1000, self.on_start_clicked)
+
+    # [미씽 메서드 복구] 저장 모드 종료
+    def stop_save_mode(self):
+        self.is_save_mode = False
+        self.profile_blink_timer.stop()
+        self.is_profile_blink_on = False
+        
+        # 버튼 스타일 복구
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 20px;")
+        self.update_profile_buttons_ui()
+
+    # [미씽 메서드 복구] 프로필 버튼 UI 업데이트 (데이터 유무 표시)
+    def update_profile_buttons_ui(self):
+        try:
+            settings = {}
+            if os.path.exists(self.settings_file):
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
+                    settings = json.load(f)
+            
+            profiles = settings.get('profiles', {})
+            
+            for i, btn in enumerate(self.profile_buttons):
+                idx = i + 1
+                has_data = str(idx) in profiles
+                is_selected = (self.current_profile_idx == idx)
+                
+                # 기본 스타일
+                base_style = "border-radius: 4px; font-weight: 900; padding: 0px; font-size: 16px; font-family: 'Arial';"
+                
+                if is_selected:
+                    # 선택됨: 파란색 테두리 또는 배경
+                    style = f"background-color: #e3f2fd; border: 2px solid #007bff; color: #007bff; {base_style}"
+                elif has_data:
+                    # 데이터 있음: 회색 배경 (사용자 요청)
+                    style = f"background-color: #cccccc; border: 1px solid #999; color: #333; {base_style}"
+                else:
+                    # 비어있음: 흰색
+                    style = f"background-color: #ffffff; border: 1px solid #ddd; color: #ccc; {base_style}"
+                
+                btn.setStyleSheet(style)
+                    
+        except Exception as e:
+            self.append_log(f"UI 업데이트 오류: {e}")
+
+    def on_save_button_clicked(self):
+        """설정 저장 버튼 클릭 시: 저장 모드 진입 및 점멸 시작"""
+        if not self.is_save_mode:
+            self.is_save_mode = True
+            self.profile_blink_timer.start()
+            self.append_log("💡 저장할 번호(1~3)를 선택하세요. (다시 누르면 취소)")
+            self.btn_save.setStyleSheet("background-color: #ffc107; color: black; border-radius: 4px; font-weight: bold;")
+        else:
+            self.stop_save_mode()
+            self.append_log("❌ 저장 모드가 취소되었습니다.")
+
+    def on_seq_auto_toggled(self):
+        """시퀀스 자동 버튼 토글 시 처리"""
+        is_on = self.btn_seq_auto.isChecked()
+        if is_on:
+            self.seq_blink_timer.start()
+            self.append_log("🔄 시퀀스 자동 모드 ON: 종료 시간 도달 시 다음 프로필로 전환합니다.")
+            
+            # [신규] 현재 이후의 시퀀스 정보 출력
+            try:
+                if os.path.exists(self.settings_file):
+                    with open(self.settings_file, 'r', encoding='utf-8') as f:
+                        settings = json.load(f)
+                    
+                    profiles = settings.get('profiles', {})
+                    # 현재 프로필 번호를 기준으로 (없으면 1번)
+                    current_idx = self.current_profile_idx if self.current_profile_idx is not None else 1
+                    
+                    self.append_log("="*50)
+                    self.append_log("📋 [시퀀스 작동 예약 목록]")
+                    
+                    found_any = False
+                    for i in range(current_idx, 4):
+                        p = profiles.get(str(i))
+                        if p:
+                            st = p.get('start_time', '09:00')
+                            et = p.get('end_time', '15:20')
+                            seqs = p.get('search_seq', [])
+                            cond_count = len(seqs)
+                            
+                            # 조건식 개수 정보 포함
+                            log_msg = f"  - 프로필 {i}번: {st} ~ {et} (조건식 {cond_count}개 감시)"
+                            if i == current_idx:
+                                log_msg += " [현재]"
+                            self.append_log(log_msg)
+                            found_any = True
+                    
+                    if not found_any:
+                        self.append_log("  (예약된 프로필 정보가 없습니다)")
+                    
+                    self.append_log("="*50)
+            except Exception as e:
+                self.append_log(f"⚠️ 시퀀스 정보 로드 중 오류: {e}")
+        else:
+            self.seq_blink_timer.stop()
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #ffffff; border: 1px solid #999; border-radius: 4px; color: #ccc; font-size: 14px; font-weight: bold; }
+            """)
+            self.append_log("⏹ 시퀀스 자동 모드 OFF: 종료 시간 도달 시 알람만 울립니다.")
+            self.is_seq_blink_on = False
+        
+        # [신규] 시퀀스 작동 중 UI 잠금 처리
+        self.lock_ui_for_sequence(is_on)
+
+    def lock_ui_for_sequence(self, locked):
+        """시퀀스 자동 모드 활성화 시 오조작 방지를 위해 UI 잠금"""
+        # ... (생략) ...
+        # [수정] READY 상태일 때는 START 버튼을 잠그지 않음 (사용자가 시작할 수 있도록)
+        is_ready = "READY" in self.lbl_status.text()
+        
+        # 입력 필드 및 버튼 잠금
+        self.input_profit.setEnabled(not locked)
+        self.input_loss.setEnabled(not locked)
+        self.input_max.setEnabled(not locked)
+        self.input_start_time.setEnabled(not locked)
+        self.input_end_time.setEnabled(not locked)
+        self.input_qty_val.setEnabled(not locked)
+        self.input_amt_val.setEnabled(not locked)
+        self.input_pct_val.setEnabled(not locked)
+        
+        for btn in self.cond_buttons: btn.setEnabled(not locked)
+        for btn in self.profile_buttons: btn.setEnabled(not locked)
+        self.btn_save.setEnabled(not locked)
+        
+        # START 버튼은 READY 상태면 잠그지 않음
+        self.btn_start.setEnabled(not locked or is_ready)
+        self.btn_stop.setEnabled(not locked) 
+        
+        if locked:
+            self.append_log("🔒 UI 잠금: 시퀀스 작동 중에는 설정을 변경할 수 없습니다.")
+        else:
+            self.append_log("🔓 UI 잠금 해제: 설정을 변경할 수 있습니다.")
+            # [수정] 잠금 해제 시 현재 상태(RUNNING/READY)에 맞춰 버튼 활성화 상태 복구
+            current_status = self.lbl_status.text().replace("● ", "").strip()
+            self.update_status_ui(current_status)
+
+    def blink_seq_button(self):
+        """시퀀스 버튼 점멸 효과 (1초 단위)"""
+        # 체크된 상태여야만 점멸
+        if not self.btn_seq_auto.isChecked():
+            self.seq_blink_timer.stop()
+            return
+
+        self.is_seq_blink_on = not self.is_seq_blink_on
+        if self.is_seq_blink_on:
+            # 켜짐: 녹색 텍스트 & 약간 진한 배경
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #e8f5e9; border: 2px solid #28a745; border-radius: 4px; color: #28a745; font-size: 14px; font-weight: bold; }
+            """)
+        else:
+            # 꺼짐: 기본 체크 상태
+            self.btn_seq_auto.setStyleSheet("""
+                QPushButton { background-color: #e0e0e0; border: 1px solid #666; border-radius: 4px; color: #28a745; font-size: 14px; font-weight: bold; }
+            """)
+
+    def handle_end_time_event(self, current_time_str):
+        """종료 시간 도달 시 시퀀스 로직 처리"""
+        # 1. 시퀀스 자동 모드인지 확인
+        is_seq_auto = self.btn_seq_auto.isChecked() # [수정] 버튼 상태 확인
+        current_idx = self.current_profile_idx
+
+        if is_seq_auto and current_idx is not None:
+            # [시퀀스 ON] 다음 프로필로 전환 시도
+            next_idx = current_idx + 1
+            if next_idx <= 3: # 최대 3번 프로필까지만
+                # 다음 프로필 데이터 확인
+                try:
+                    if os.path.exists(self.settings_file):
+                        with open(self.settings_file, 'r', encoding='utf-8') as f:
+                            settings = json.load(f)
+                            if 'profiles' in settings and str(next_idx) in settings['profiles']:
+                                self.append_log(f"🔄 시퀀스 자동: 프로필 {current_idx}번 종료 -> {next_idx}번으로 전환합니다.")
+                                
+                                # 1) 현재 설정 저장
+                                self.save_settings(profile_idx=current_idx, restart_if_running=False) # 전환 중 중복 시작 방지
+                                
+                                # 2) 다음 프로필 로드 (UI와 내부 변수 동기화, 시퀀스 온 유지)
+                                self.load_settings_to_ui(profile_idx=next_idx, keep_seq_auto=True)
+                                
+                                # 3) 알람 발생 (다음 프로필 전환 알림)
+                                self.start_alarm(transition_to=next_idx)
+                                
+                                # 4) 설정 적용 및 엔진 재가동 (API 재등록 강제 수행)
+                                self.append_log("="*40)
+                                self.append_log(f"🛰️ [시퀀스] {next_idx}번 프로필로 전환: API 검색식 재등록을 시작합니다...")
+                                self.append_log("="*40)
+                                
+                                # [수정] 전환 중 중복 알람/이벤트 방지를 위해 즉시 시간 기록
+                                self.last_alarm_time = current_time_str
+                                
+                                # [수정] 시퀀스 전환 딜레이를 2.5초 -> 5초로 증가하여 R10001 중복 로그인 방지
+                                # 이전 프로필의 세션이 완전히 정리될 시간을 확보합니다.
+                                QTimer.singleShot(5000, lambda: self.on_start_clicked(force=True)) 
+                                return
+                except Exception as e:
+                    self.append_log(f"⚠️ 시퀀스 전환 중 오류: {e}")
+
+            # 다음 프로필이 없거나 데이터가 없으면 (최종 시퀀스 종료)
+            self.append_log("🏁 시퀀스 종료: 모든 프로필 단계가 완료되었습니다.")
+            
+            # 시퀀스 종료 시 버튼 끄기 및 UI 잠금 해제
+            self.btn_seq_auto.setChecked(False)
+            self.on_seq_auto_toggled() 
+            
+            # [추가] UI 완전 초기화 및 버튼 상태 복구
+            self.lock_ui_for_sequence(False)
+            self.update_status_ui("READY")
+            self.append_log("🔓 시퀀스 종료: 모든 UI 조작이 가능합니다.")
+            
+            self.start_alarm() # 마지막 종료 알람
+            self.worker.schedule_command('stop') # 매매 중단
+            
+            # [수정] 중단 후 약간의 여유를 두고 최종 보고 전송 (worker에 today 추가됨)
+            QTimer.singleShot(5000, lambda: self.worker.schedule_command('today'))
+            return
+
+        # [시퀀스 OFF]
+        self.start_alarm(just_sound=True)
+
+    def start_alarm(self, just_sound=False, transition_to=None):
+        # ... (기존 start_alarm 로직) ...
+        if self.alarm_playing:
+            return
+            
+        try:
+            self.alarm_playing = True
+            
+            # 버튼 상태 변경
+            self.btn_alarm_stop.setEnabled(True)
+            self.btn_alarm_stop.setText("🔔") 
+            self.blink_timer.start() # 깜빡임 시작
+            
+            if transition_to:
+                log_msg = f"🔄 시퀀스 전환: {transition_to}번 프로필로 이동합니다. (매매 계속)"
+            elif just_sound:
+                log_msg = f"⏰ 종료 시간({self.input_end_time.text()}) 도달! (매매는 계속됩니다)"
+            else:
+                log_msg = f"⏰ 알람 발생: 종료 시간({self.input_end_time.text()}) 도달!"
+                
+            self.append_log(log_msg)
+            
+            sound_path = os.path.join(self.script_dir, "StockAlarm.wav")
+            if os.path.exists(sound_path):
+                winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+            else:
+                self.append_log(f"⚠️ 알람 파일 없음: {sound_path}")
+            
+        except Exception as e:
+            self.append_log(f"⚠️ 알람 처리 중 오류: {e}")
+            self.alarm_playing = False
+
+
+    def closeEvent(self, event):
+        reply = QMessageBox.question(self, '종료', '프로그램을 종료하시겠습니까?',
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, 
+                                   QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            self.worker.stop()
+            event.accept()
+        else:
+            event.ignore()
+
+    def toggle_profile_blink(self):
+        """저장 모드 시 번호 버튼 점멸 효과"""
+        self.is_profile_blink_on = not self.is_profile_blink_on
+        color = "#ffc107" if self.is_profile_blink_on else "#f8f9fa"
+        for btn in self.profile_buttons:
+            btn.setStyleSheet(f"background-color: {color}; border: 2px solid #ffc107; border-radius: 4px; font-weight: bold; color: black; padding: 0px; font-size: 14px;")
+
+    # [복구] 항상 위 토글 메서드
+    def toggle_always_on_top(self, checked):
+        if checked:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.show()
+        else:
+            self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, False)
+            self.show()
+
+if __name__ == '__main__':
+    try:
+        # [추가] Windows 작업표시줄 아이콘 고정 및 표시를 위한 ID 설정
+        if sys.platform == 'win32':
+            import ctypes
+            myappid = 'kipo.buy.auto.4.2'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+
+        app = QApplication(sys.argv)
+        
+        # Font Setup
+        font = QFont("Malgun Gothic", 9)
+        app.setFont(font)
+        
+        window = KipoWindow()
+        window.show()
+        
+        retCode = app.exec()
+        sys.exit(retCode)
+        
+    except BaseException as e:
+        # BaseException을 통해 SystemExit까지 모두 캡처
+        with open("crash_report.txt", "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now()}] CRASH/EXIT LOGGED:\n")
+            f.write(traceback.format_exc())
+            f.write(f"Error Type: {type(e)}\n")
+            f.write("-" * 50 + "\n")
+        
+        if not isinstance(e, SystemExit):
+            # [수정] GUI 앱이므로 콘솔 입력(input) 제거 + 메시지 박스 시도
+            # Qt 앱이 살아있다면 메시지박스를 띄우지만, 죽었을 수도 있으므로 안전하게 패스 혹은 windows api 사용
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, f"Critical Error: {e}\nSee crash_report.txt", "Error", 0x10)
+            except:
+                pass
+```

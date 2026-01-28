@@ -1,0 +1,20 @@
+# 비차단 알림창 버그 수정 및 안정화 계획
+
+[show_timed_message](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#796-805)가 2초 후에 자동으로 닫히지 않는 문제를 해결하고, 시각적 인지력을 높입니다.
+
+## 제안된 변경 사항
+
+### 1. [UI] 알림창 인스턴스 관리 및 타이머 로직 수정
+#### [수정] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+ - **문제 원인**: `QMessageBox`가 로컬 변수로 선언되어 가비지 컬렉션에 의해 객체가 소멸되거나, `msg.close` 바인딩이 유실되었을 가능성이 큽니다.
+ - **해결책**: 
+    - `QMessageBox`를 클래스 속성(`self.active_alert`)으로 할당하여 안정성을 높입니다.
+    - `QTimer.singleShot` 내부에서 명확하게 `self.active_alert.close()`를 호출하도록 람다식을 보강합니다.
+    - 창을 띄울 때 이미 창이 떠 있다면 이전 창을 닫고 새로 띄워 중첩 문제를 방지합니다.
+
+### 2. [UI] 시각적 보조
+ - 메시지에 "남은 시간 고정" 대신 "잠시 후 사라집니다" 문구를 더 명확히 표시합니다.
+
+## 검증 계획
+ - 시퀀스 버튼 연타 시 알림창이 중첩되지 않고 2초 뒤에 확실히 사라지는지 확인합니다.
+ - 알림창이 떠 있는 동안 CPU 점유율이나 프로그램 프리징 현상이 없는지 모니터링합니다.

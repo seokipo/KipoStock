@@ -1,0 +1,35 @@
+# Walkthrough: KipoStock V3.8.2 UI Refinements
+
+In this update, we focused on enhancing the user interface for condition selection and improving the visibility of active monitoring states.
+
+## Changes Made
+
+### 1. Restored Condition Button Numbering
+The condition selection buttons (0-9) now clearly display their respective numbers. The styling was adjusted to ensure the text is centered and remains visible regardless of the button's color state.
+
+### 2. Dynamic Real-time Condition List
+The "Real-time Condition List" (실시간 조건식) panel now updates automatically whenever a condition's monitoring state is changed.
+- **Toggle Sync**: Selecting or deselecting a condition via the 10 buttons immediately reflects in the list.
+- **Color Coding**: Conditions in the list are displayed with their assigned strategy color:
+  - 🔴 **Red**: 1-Share Strategy
+  - 🟢 **Green**: Amount Strategy
+  - 🔵 **Blue**: Percent Strategy
+
+### 3. Smart Loading
+When the application starts, it automatically populates the condition list based on your last saved settings, including the correct names from the Kiwoom search list.
+
+## Verification Results
+
+### UI Interaction
+- Tested cycling through all 4 states for buttons 0-9.
+- Verified that the list panel adds/removes items instantly.
+- Verified that saving and restarting restores both the button colors and the list content.
+
+### Build
+- Successfully generated: `KipoStock_V3.8.2_MULTI.exe`
+
+## How to use the new UI
+
+1. Click a condition button (0-9) to assign a strategy.
+2. Watch the "Real-time Condition List" update instantly with the search name.
+3. Save settings to apply these changes to the trading engine.

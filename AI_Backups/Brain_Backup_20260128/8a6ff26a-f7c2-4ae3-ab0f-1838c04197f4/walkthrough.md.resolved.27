@@ -1,0 +1,22 @@
+# V5.3.4 아이콘 복구 및 최종 빌드 완료
+
+실행 파일 상단 타이틀바와 작업표시줄의 아이콘이 보이지 않던 문제를 해결한 **V5.3.4** 버전입니다.
+
+## 주요 수정 사항 (V5.3.4)
+
+### 1. 윈도우 타이틀바 아이콘 복구
+- **현상**: 빌드된 실행 파일에서 왼쪽 상단 미사일(로켓) 아이콘이 보이지 않고 기본 아이콘으로 노출됨.
+- **해결**: PyInstaller 빌드 시 아이콘 파일을 내부 리소스로 포함(`--add-data`)하고, GUI 코드에서 이를 안정적으로 불러오도록 수정했습니다.
+
+### 2. 빌드 프로세스 개선
+- **기능**: 이제 [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/build_exe.py)를 실행하면 [settings.json](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/settings.json)뿐만 아니라 [icon.ico](file:///d:/Work/Python/AutoBuy/KipoStockNow/icon.ico), `icon.png` 파일도 자동으로 `dist` 폴더로 복사됩니다.
+- **안정성**: 파일이 외부에도 존재해야 하는 상황과 내부에 번들링된 상황을 모두 고려하여 아이콘 로딩 로직을 강화했습니다.
+
+## 변경된 파일
+- [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/build_exe.py)
+- [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+
+## 빌드 결과물
+- **실행 파일**: [dist/KipoStock_V5.3.4_Auto.exe](file:///d:/Work/Python/AutoBuy/KipoStockNow/dist/KipoStock_V5.3.4_Auto.exe)
+
+이제 아이콘까지 완벽하게 복구되었습니다. 최종 결과물을 확인해 보시기 바랍니다!

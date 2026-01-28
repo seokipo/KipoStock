@@ -1,0 +1,6 @@
+# Task: Create Executable for kipo_main.py
+
+- [ ] Analyze existing build configuration (`build_exe.py`) <!-- id: 0 -->
+- [x] Create a new build script or update `build_exe.py` for `kipo_main.py` <!-- id: 1 -->
+- [x] Run the build process <!-- id: 2 -->
+- [x] Verify the executable creation <!-- id: 3 -->

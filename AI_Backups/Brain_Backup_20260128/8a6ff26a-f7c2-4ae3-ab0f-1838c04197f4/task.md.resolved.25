@@ -1,0 +1,8 @@
+# 작업 목록 (Task List)
+
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 명령어 매수 시간 표시 오류 수정 (폴백 로직 추가)
+- [x] `daily_buy_times.json` 로딩 효율화 및 디버그 로그 추가
+- [x] [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy_1ju.py) 파일 제거 및 `check_n_buy.py`로 리팩토링 확인
+- [x] V5.1 Stable 버전 빌드 (`KipoStock_V5.1_Stable.exe`)
+- [/] 사용자 테스트 및 검증 (진행 중)
+  - [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-384) 명령어 출력 확인 (`[ ? ]` 또는 시간 표시)

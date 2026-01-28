@@ -1,0 +1,33 @@
+# Walkthrough - Adding Search Formula Number and Name to Logs
+
+I have updated the system to display both the **number** and **name** of the search formula that triggered a buy signal.
+
+## Changes Made
+
+### Component Updates
+
+#### [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.알람/KipoBuy_Gui/check_n_buy_1ju.py)
+- Modified the success log to display the formula index and name in the format: `🔍 검색: {seq}. {seq_name}`.
+
+render_diffs(file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.알람/KipoBuy_Gui/check_n_buy_1ju.py)
+
+#### [rt_search.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.알람/KipoBuy_Gui/rt_search.py)
+- Passing the formula name along with the sequence number to the buy logic.
+
+render_diffs(file:///d:/Work/Python/AutoBuy/KipoBuy_Gui_3.알람/KipoBuy_Gui/rt_search.py)
+
+## Verification Results
+
+### Console Log Preview
+When a buy signal is triggered, the log will look like this:
+
+```text
+==================================================
+⚡  매 수 체 결  성 공  ⚡
+📦 종목: 삼성전자
+🔍 검색: 1. 급당주 돌파
+⏰ 시간: 09:51:15
+==================================================
+```
+
+The system now clearly identifies both the index and description of the triggering strategy.

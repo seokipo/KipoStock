@@ -1,0 +1,25 @@
+# 시퀀스 제어 명령어 고도화 계획 (auto 0 포함)
+
+명령어창이나 텔레그램을 통해 시퀀스를 시작(`auto 1~3`)하거나 중지(`auto 0`)할 수 있도록 기능을 확장합니다.
+
+## 제안된 변경 사항
+
+### 1. [명령어 엔진] stop 익스텐션 및 도움말
+#### [수정] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+ - **`auto 0` 처리**: [auto](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1376-1460) 뒤에 0이 오면 시퀀스 중단 신호를 GUI로 보냅니다.
+ - **도움말**: `auto {번호}` (1~3: 시작, 0: 중지) 설명을 추가합니다.
+
+### 2. [UI 로직] 원격 시퀀스 제어 완성
+#### [수정] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+ - **[on_remote_auto_sequence(idx)](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#760-777)**: 
+    - `idx in [1, 2, 3]`: 기존처럼 해당 프로필 로드 후 시퀀스 ON.
+    - `idx == 0`: `btn_seq_auto`를 OFF 처리하고 중단 로직 실행.
+ - **복구**: 이전 수정 중 누락된 [update_status_ui](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#778-795) 메서드 정의부를 완벽히 복구합니다.
+
+### 3. 클린 빌드
+ - 모든 기능이 통합된 최신 실행 파일을 생성합니다.
+
+## 검증 계획
+ - 명령어창에 `auto 1` 입력 시 1번 프로필로 전환되며 시퀀스가 켜지는지 확인.
+ - 명령어창에 `auto 0` 입력 시 시퀀스 버튼이 꺼지며 중단되는지 확인.
+ - 텔레그램 명령어로도 동일하게 작동하는지 확인.

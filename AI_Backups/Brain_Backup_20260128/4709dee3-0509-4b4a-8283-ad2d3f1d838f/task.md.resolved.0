@@ -1,0 +1,10 @@
+# Task: Fix Tax Data and Sorting in Trade Log
+
+- [/] Planning Fixes
+    - [ ] Create implementation plan
+- [ ] Implementing Fixes
+    - [ ] Add more tax field candidates in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py)
+    - [ ] Implement sorting by condition name in [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.2/chat_command.py#233-323) method
+- [ ] Verifying Fixes
+    - [ ] Verify code changes
+    - [ ] (Manual) User verification

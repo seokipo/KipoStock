@@ -1,0 +1,23 @@
+# [V5.3.6] 로그 내보내기 명령어 (Log Command)
+
+텔레그램에서 [log](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py#108-119) 명령어를 입력하면 현재 GUI에 출력된 모든 로그를 텍스트 파일로 저장하는 기능을 추가합니다.
+
+## 제안된 변경 사항
+
+### [chat_command.py]
+- [ChatCommand](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#21-506) 클래스에 `on_request_log_file` 콜백 변수 추가
+- [process_command](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#501-522)에서 [log](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py#108-119) 입력 시 해당 콜백 호출
+
+### [Kipo_GUI_main.py]
+- [WorkerSignals](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#28-31)에 `request_log_signal` 추가
+- [AsyncWorker](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#33-280)에서 [ChatCommand](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#21-506)의 `on_request_log_file`을 시그널 발생으로 연결
+- [KipoWindow](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#283-1524) 클래스에 `save_logs_to_file` 메서드 구현
+    - `log_text`의 내용을 일반 텍스트로 추출
+    - `Log_YYYYMMDD_y.txt` 형식으로 일렬번호 자동 증가하며 저장
+    - 저장 위치는 실행 파일 경로 (또는 `dist` 내 로그 폴더)
+
+## 검증 계획
+### 자동 테스트
+- 텔레그램으로 [log](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py#108-119) 명령어 전송 시 파일 생성 여부 확인
+- 동일 날짜에 여러 번 실행 시 일렬번호(y)가 1, 2, 3... 으로 증가하는지 확인
+- 생성된 텍스트 파일의 가독성 및 HTML 태그 제거 여부 확인

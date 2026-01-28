@@ -1,0 +1,36 @@
+# Implementation Plan - Fix Connection Loop & Start Alarm
+
+## Goal Description
+Fix the "Connection closed by the server" infinite log flood and ensure the start-time alarm plays only once.
+
+## User Review Required
+> [!NOTE]
+> The "Connection closed by the server" error will now stop the process instead of retrying infinitely. This prevents the log flood but might require the user to manually retry if the connection is truly unstable.
+
+## Proposed Changes
+
+### Fix Connection Error Loop
+#### [MODIFY] [get_seq.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/get_seq.py)
+- In [receive_messages](file:///d:/Work/Python/AutoBuy/KipoStockNow/get_seq.py#52-84) method, inside the `except websockets.ConnectionClosed:` block:
+    - Add `self.keep_running = False` to stop the loop.
+
+### Fix Start Alarm Repetition
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- In [__init__](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#59-61):
+    - Initialize `self.last_auto_start_time = None`.
+- In [check_alarm](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#915-964):
+    - Add a check to ensure the start logic runs only if `current_time_str != self.last_auto_start_time`.
+    - Update `self.last_auto_start_time = current_time_str` after successful trigger.
+
+## Verification Plan
+
+### Automated Tests
+- None. These are runtime behavior fixes.
+
+### Manual Verification
+1. **Connection Error**: 
+    - Simulate a connection close (if possible) or observe if the log flood stops when the error occurs. (Since I cannot easily simulate the server closing connection, I will verify the code logic ensures the loop breaks).
+2. **Start Alarm**:
+    - Set the "Start" time to 1 minute from now.
+    - Wait for the time to reach.
+    - Verify that the beep sounds ONLY ONCE and the "Start" logic is triggered ONLY ONCE (checking logs).

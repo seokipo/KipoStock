@@ -1,0 +1,36 @@
+# 자동 시퀀스 전환 로직 개선 및 UI 동기화 플랜
+
+상태 표시가 `READY`임에도 UI가 잠겨있거나, 매매 중 시퀀스 전환 시 발생할 수 있는 '꼬임(Race Condition)' 현상을 방지하기 위해 로직을 개선합니다.
+
+## Proposed Changes
+
+### [Kipo_GUI_main.py](file:///d:/Work/Python\AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+
+#### 1. 명령어-GUI 상태 동기화 (`ChatCommand` & `AsyncWorker`)
+- **콜백 추가**: `ChatCommand`에 `on_start`, `on_stop` 콜백 변수를 추가합니다.
+- **명령어 처리 연동**: `ChatCommand.process_command`에서 `start` 또는 `stop` 명령 처리 시 해당 콜백을 호출하도록 수정합니다.
+- **UI 시그널 발행**: `AsyncWorker`에서 이 콜백들을 받아 `status_signal`을 쏘도록 연결합니다. 이렇게 하면 타이핑으로 `stop`을 쳐도 GUI의 상태가 `READY`로 즉시 바뀝니다.
+
+#### 2. 시퀀스 활성화 시 자동 시작 보완
+- **현상**: V5.4.15에서 `auto 2` 입력 시 설정은 불러와지지만 매매 엔진이 자동으로 돌아가지 않는 현상이 발견되었습니다.
+- **원인**: 프로필 로드(UI 업데이트)와 엔진 시작 간의 순서가 꼬였거나 명시적인 시작 트리거가 부족했습니다.
+- **해결**: `on_seq_auto_toggled`에서 상태가 `READY`이고 ON되는 시점이라면 1초 뒤에 반드시 `on_start_clicked`를 호출하도록 강제합니다.
+
+#### 3. 중복 로직 정리
+- `Kipo_GUI_main.py` 내의 `custom` 명령 처리부와 `start`/`stop` 처리부의 역할을 명확히 하여 상태 업데이트가 누락되지 않도록 합니다.
+
+## Verification Plan
+
+### Automated Tests
+- 없음 (GUI 기반 로직이므로 수동 검증 위주로 진행)
+
+### Manual Verification
+1. **매매 중 전환 테스트**:
+   - 프로그램을 `START` 시킨 후 (`RUNNING` 상태), 명령어 창에 `auto 2`를 입력합니다.
+   - 즉시 `STOP` 애니메이션이 작동하고 상태가 `READY`로 변하는지 확인합니다.
+   - 로그에 "5초 대기" 메시지가 뜨고, 정확히 5초 뒤에 프로필 2번으로 자동 시작되는지 확인합니다.
+2. **UI 잠금 해제 테스트**:
+   - 시퀀스 자동 모드를 켠 상태에서 `STOP`을 눌러 엔진을 멈춥니다.
+   - 상태가 `READY`일 때 입력창(익절/손절 등)을 수정할 수 있는지 확인합니다.
+3. **버전 업 확인**:
+   - `V5.4.13`으로 정상 표시되는지 확인합니다.

@@ -1,0 +1,16 @@
+# 작업 목록
+
+- [x] GUI 조건식 버튼 확장 (20개)
+- [x] 동적 설정 반영 구현
+- [x] Today 매수 시간 표시 (로컬 저장)
+- [x] 최종 검증
+- [x] 버전 5.0 업그레이드
+- [x] 조건식 10개 제한 처리
+- [x] 경고 메시지 노출 시점 조정
+    - [x] [save_settings](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1079-1183)에 `show_limit_warning` 파라미터 추가
+    - [x] 조건식 버튼 클릭 시 `False` 전달 (경고 끄기)
+    - [x] 저장/시작 시에는 `True` 유지
+- [ ] Today 명령어 무반응 디버깅
+    - [ ] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py): 진입 로그 및 예외 처리 강화
+    - [ ] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#233-368) 함수 내부 로직 점검
+- [ ] 최종 빌드 (V5.1)

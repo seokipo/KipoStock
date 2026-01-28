@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "매수 전략별(수량, 금액, 비율) 고유 색상을 시스템 전체(예약 목록, 매수 로그, 매도 로그)에 일관되게 적용하는 계획입니다. 텍스트 없이 색상만으로 전략을 구분할 수 있게 합니다.",
+  "updatedAt": "2026-01-24T00:33:30.498272400Z",
+  "version": "4"
+}

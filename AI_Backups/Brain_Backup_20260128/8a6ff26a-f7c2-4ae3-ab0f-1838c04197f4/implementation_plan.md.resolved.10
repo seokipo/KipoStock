@@ -1,0 +1,25 @@
+# 시퀀스 안정화 및 중복 로그인 방지 계획
+
+사용자가 보고한 장외 시간 표시 오류를 수정하고, 시퀀스 모드에서의 엔진 시작 로직을 개선하며, R10001 중복 로그인 에러를 근본적으로 방지합니다.
+
+## 변경 사항
+
+### 1. 장외 대기 메시지 교정
+- **파일**: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- **내용**: `AsyncWorker._execute_command` 내부의 장외 대기 로그에서 [(종료~시작)](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#403-407)으로 나오던 부분을 [(시작~종료)](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#403-407) 순서로 바꿉니다.
+
+### 2. 시퀀스 모드 내부 시작 허용
+- **파일**: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- **내용**: 
+  - 시퀀스 모드에서 버튼이 잠겨 있어도 [on_start_clicked(force=True)](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#720-742)를 통해 내부적인 엔진 가동이 가능하도록 보완합니다.
+
+### 3. R10001 (중복 로그인) 방지 강화
+- **파일**: [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- **내용**:
+  - [start](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#106-153) 메서드 진입 시 `self.is_starting` 플래그를 사용하여 짧은 시간 내 중복 호출을 차단합니다.
+  - 기존 연결 종료(`rt_search.stop`) 후 세션이 완전히 정리될 때까지의 대기 시간을 최적화합니다.
+
+## 검증 계획
+1. 장외 시간 예약 시 로그에 [(시작시간~종료시간)](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#403-407) 순서로 나오는지 확인.
+2. 시퀀스 1번 로드 후 자동으로 매매 엔진이 가동되는지 확인.
+3. 로그창에 R10001 에러가 더 이상 발생하지 않는지 모니터링.

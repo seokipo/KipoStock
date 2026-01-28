@@ -1,0 +1,31 @@
+# 수정 사항 완료 보고
+
+## 변경된 내용
+
+### 1. 연결 끊김 오류 무한 반복 수정
+- **파일**: [get_seq.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/get_seq.py)
+- **변경 사항**: 서버로부터 연결이 끊어졌을 때 (`ConnectionClosed`), 무한히 재연결을 시도하며 로그를 폭주시키는 대신, 안전하게 연결을 종료하고 루프를 빠져나오도록 수정했습니다.
+
+```python
+except websockets.ConnectionClosed:
+    print('Connection closed by the server')
+    self.connected = False
+    self.keep_running = False  # 무한 루프 방지 로직 추가
+    await self.websocket.close()
+```
+
+### 2. 시작 알람 중복 울림 수정
+- **파일**: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- **변경 사항**: 설정된 시작 시간에 도달했을 때, 1분 동안 매초마다 알람이 울리고 시작 명령이 반복되는 문제를 수정했습니다. 이제 해당 분에 단 한 번만 실행됩니다.
+
+```python
+# [수정] 분 단위 중복 실행 방지
+if self.last_auto_start_time != current_time_str:
+    if self.lbl_status.text() == "● READY":
+        self.last_auto_start_time = current_time_str # 실행 시간 기록
+        # ... (알람 및 시작 로직 1회 실행)
+```
+
+## 검증 결과
+- 코드를 검토하여 논리적으로 무한 루프가 차단되고, 알람 중복 실행이 방지됨을 확인했습니다.
+- 이제 에러 발생 시 프로그램이 멈추거나 종료될 수 있으므로, 연결 상태를 확인해 주세요.

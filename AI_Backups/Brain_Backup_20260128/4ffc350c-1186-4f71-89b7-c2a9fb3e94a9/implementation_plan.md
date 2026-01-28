@@ -1,0 +1,20 @@
+# Implementation Plan - Fix Persistent Alarm Crash
+
+The application crashes when the alarm time is reached due to uninitialized variables and leftover code after sound removal.
+
+## Proposed Changes
+
+### GUI Main
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py)
+- Initialize `self.last_alarm_time` in `KipoWindow.__init__` to avoid `AttributeError` in `check_alarm`.
+- Remove the broken `else:` block in `start_alarm` which references an undefined `sound_file` variable.
+
+## Verification Plan
+
+### Manual Verification
+1. Open the application.
+2. Set the "End Time" (종료) to 1 minute after the current time.
+3. Wait for the time to reach the set end time.
+4. Verify that the application does NOT crash.
+5. Verify that the alarm button (🔕) turns into (🔔) and a log message appears.
+6. Click the alarm button to stop it and verify it resets correctly.

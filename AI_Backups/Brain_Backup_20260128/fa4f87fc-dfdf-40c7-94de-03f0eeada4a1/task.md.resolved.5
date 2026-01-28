@@ -1,0 +1,26 @@
+# Task: Add [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) command for daily trading log
+
+## Research
+- [x] Find where commands are processed in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Identify the API call for "당일매매일지조회" (Confirmed: [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53))
+- [x] Check if [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/Kipo_GUI_main.py) has a log display function
+
+## Implementation
+- [x] Create [acc_diary.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py) using [ka10170](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/acc_diary.py#7-53)
+- [x] Update [check_n_buy_1ju.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/check_n_buy_1ju.py) to persist stock-condition mapping
+- [x] Implement [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) command in [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py)
+- [x] Implement Excel export feature (CSV)
+- [x] Format the output with lines and requested columns
+
+## UI Polishing & Final Fixes
+- [x] Restore 'Save Settings' button to UI
+- [x] Brighten log timestamp color
+- [x] Fix icon loading and bundling
+- [x] Silence `[조건식 목록]` in log when saving settings
+- [x] Implement auto-start logic for off-market hours (WAITING status)
+- [x] Re-build final executable (V4.0 GOLD)
+
+## Verification
+- [x] Verify the [today](file:///d:/Work/Python/AutoBuy/KipoBuy4.0/chat_command.py#231-301) command prints the log correctly
+- [x] Verify the CSV file is generated correctly
+- [x] Verify the icon and UI layout refinements

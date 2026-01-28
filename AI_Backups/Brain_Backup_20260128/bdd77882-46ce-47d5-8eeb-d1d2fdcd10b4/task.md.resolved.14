@@ -1,0 +1,6 @@
+# 작업: 매수 전략 음성 안내 추가
+
+- [x] 음성 출력 함수 구현 (윈도우 기본 TTS 활용) <!-- id: 0 -->
+- [x] [check_n_buy.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py) 수정: 매수 성공 시 전략별 음성 출력 로직 추가 ("한주" 멘트 반영) <!-- id: 1 -->
+- [x] 기능 테스트 및 검증 <!-- id: 2 -->
+- [x] GitHub에 최종 코드 백업 <!-- id: 3 -->

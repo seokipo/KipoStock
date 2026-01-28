@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_WALKTHROUGH",
+  "summary": "V5.4.10 배포 완료. 손익 정렬(`today son`) 및 입력값 부호 자동 보정 기능 적용.Base64",
+  "updatedAt": "2026-01-27T03:43:24.420678700Z",
+  "version": "11"
+}

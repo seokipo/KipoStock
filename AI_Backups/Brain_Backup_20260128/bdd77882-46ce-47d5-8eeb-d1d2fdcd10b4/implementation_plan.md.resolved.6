@@ -1,0 +1,29 @@
+# 텔레그램 전송 오류 수정 계획
+
+이 계획은 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-402) 명령어 실행 시 텔레그램 메시지가 전송되지 않는 문제를 해결하기 위한 수정 방안을 담고 있습니다.
+
+## 원인 분석
+*   **HTML 미지원**: Telegram API는 `<font>` 태그를 지원하지 않습니다. 현재 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-402) 결과에 색상용 HTML 태그가 포함되어 전송에 실패하고 있습니다.
+*   **길이 제한**: Telegram 메시지는 건당 4096자 제한이 있어, 매매 내역이 많을 경우 전송이 거부될 수 있습니다.
+
+## 제안된 변경 사항
+
+### [메시지 전송 엔진]
+
+#### [MODIFY] [tel_send.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/tel_send.py)
+*   **HTML 모드 지원**: `parse_mode='HTML'` 옵션을 인자로 받아 `<b>`, `<i>` 등 기본 태그를 사용할 수 있게 합니다.
+*   **자동 분할**: 메시지가 4000자를 초과할 경우 자동으로 여러 번에 나누어 전송하도록 개선합니다.
+
+### [명령어 로직]
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+*   **출력 분리**: 
+    *   GUI 로그용([append_log](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#834-898)): 색상 태그가 포함된 HTML 유지.
+    *   텔레그램용([tel_send](file:///d:/Work/Python/AutoBuy/KipoStockNow/tel_send.py#6-20)): HTML 태그를 제거한 순수 텍스트(Plain Text) 생성.
+*   **Summary 개선**: `tel today` 요약 리포트 시에는 `<b>` 태그 등을 사용하여 가독성을 높입니다.
+
+## 확인 계획
+
+### 수동 확인
+*   [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-402) 입력 시 GUI에는 색상이 나오고, 텔레그램에는 텍스트 리스트가 오는지 확인합니다.
+*   `tel today` 입력 시 요약된 굵은 글씨 메시지가 오는지 확인합니다.

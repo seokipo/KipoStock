@@ -1,0 +1,16 @@
+# 작업 목록: 오류 수정 및 UI 안정화
+
+- [x] 코드 분석 및 계획 수립
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-448) 명령어 `NameError` 수정 및 역순 정렬(`-`) 구현
+- [x] 압정 핀 깜빡임 및 위치 이동 문제 해결 (Win32 API 적용 실패 후 Qt 복구/미세조정)
+- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-448) 중복 로그("조회 결과") 제거 및 통합
+- [x] 최종 테스트 및 재빌드 
+
+# 작업: UI 디자인 및 기능 개선
+
+- [/] UI 디자인 수정 계획 수립 [/]
+- [ ] 버튼 디자인 변경 ([Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)) [ ]
+    - [ ] 저장(디스크) 버튼: 크기 확대 및 정사각형화
+    - [ ] 시퀀스 버튼: 삼각형 아이콘 확대, 배경색(연한 노랑) 및 점멸색(파랑) 적용
+- [ ] 압정(항상 위) 기능 깜빡임 최소화 재시도 [ ]
+- [ ] 최종 테스트 및 재빌드 [ ]

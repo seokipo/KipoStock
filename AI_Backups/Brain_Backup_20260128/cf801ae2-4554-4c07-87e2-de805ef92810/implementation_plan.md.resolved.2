@@ -1,0 +1,21 @@
+# 로그 UI 개선 - 라인 전체 색상 적용
+
+이 계획은 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 명령어 실행 시 생성되는 매매 일지 로그에서, 매수 전략에 따른 색상을 해당 라인 전체에 적용하는 것을 목표로 합니다.
+
+## 제안된 변경 사항
+
+### [컴포넌트]
+
+#### [수정] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 메서드에서 전략별 색상을 추출한 후, 해당 라인의 문자열 전체를 `<font color='...'>` 태그로 감싸도록 수정합니다.
+- 특정 전략이 없는 경우 기본 색상(흰색 또는 녹색)이 유지되도록 처리합니다.
+- 기존에 `strat_display`나 `cond_display`에 개별적으로 적용되었던 색상 태그를 정리하여 중첩을 방지합니다.
+
+## 검증 계획
+
+### 자동화 테스트
+- GUI 외형은 자동화 테스트가 어려우므로 코드 로직의 정확성을 검토합니다.
+
+### 수동 검증
+- 애플리케이션에서 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 명령어를 실행하여 종목명, 금액, 손익 등 해당 라인의 모든 텍스트가 전략에 맞는 색상으로 표시되는지 확인합니다.
+- 헤더와 요약 라인이 가독성 있게 표시되는지 확인합니다.

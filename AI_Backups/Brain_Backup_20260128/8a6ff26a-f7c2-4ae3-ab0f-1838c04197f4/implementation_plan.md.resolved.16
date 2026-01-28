@@ -1,0 +1,31 @@
+# Sequence Automation Stability & Error Handling (V5.2.5)
+
+시퀀스 자동 매매 중 발생하는 '시작 오류(received 1000 Bye)'와 중복 로그인 문제를 해결합니다.
+
+## 핵심 원인 분석
+1. **재전송 콜백 간섭**: 엔진 재시작 시 기존 연결을 끊으면 [_on_connection_closed](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#186-191) 콜백이 실행되는데, 이때 자동으로 [stop](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#162-174)과 [start](file:///d:/Work/Python/AutoBuy/KipoStockNow/rt_search.py#261-313)를 다시 호출하여 새로운 시작 로직과 충복 충돌을 일으킵니다.
+2. **알람 중복 트리거**: 시작 시간과 종료 시간이 같거나, 전환 시점이 겹칠 때 알람 로직과 시퀀스 전환 로직이 동시에 [start](file:///d:/Work/Python/AutoBuy/KipoStockNow/rt_search.py#261-313) 명령을 내려 중복 요청이 발생합니다.
+3. **불명확한 로그**: 전환 후 다음 프로필의 시간을 종료 시간으로 표시하여 사용자에게 혼동을 줍니다.
+
+## Proposed Changes
+
+### [Component] Chat Command Layer
+
+#### [MODIFY] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)
+- [_on_connection_closed](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#186-191)에서 `is_starting` 플래그를 확인하여, 엔진이 시작 중일 때는 자동 재연결 로직이 간섭하지 않도록 수정합니다.
+- [tel_send](file:///d:/Work/Python/AutoBuy/KipoStockNow/tel_send.py#6-20)에서 전송하는 시스템 중지 메시지가 의도치 않은 상황에서 GUI 로그를 어지럽히지 않도록 보완합니다.
+
+### [Component] GUI / Alarm Logic
+
+#### [MODIFY] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)
+- [start_alarm](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1324-1353) 메시지를 수정하여 시퀀스 전환 시에는 "종료 시간 도달" 대신 "XX번 프로필로 전환됨"을 명확히 표시합니다.
+- [check_alarm](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#915-964)에서 시작/종료 로직이 동일 분 내에서 상호 간섭하지 않도록 상태 체크를 강화합니다.
+
+## Verification Plan
+
+### Automated Tests
+- 장 시작 시간과 종료 시간을 동일하게 설정하여 시퀀스 전환 테스트.
+- 매매 중 강제로 연결을 끊었을 때 재연결이 정상 작동하는지 확인.
+
+### Manual Verification
+- 사용자 로그 이미지에서 발견된 시나리오(15:16 시작/종료) 재현 테스트.

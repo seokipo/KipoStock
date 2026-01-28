@@ -1,0 +1,6 @@
+{
+  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
+  "summary": "Plan to fix missing tax/commission data in CSV by expanding key mapping and improving visibility.",
+  "updatedAt": "2026-01-22T04:14:10.728003Z",
+  "version": "5"
+}

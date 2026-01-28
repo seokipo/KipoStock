@@ -1,0 +1,6 @@
+# Task: Create Executable for kipo_main.py
+
+- [ ] Analyze existing build configuration ([build_exe.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/build_exe.py)) <!-- id: 0 -->
+- [ ] Create a new build script or update [build_exe.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/build_exe.py) for `kipo_main.py` <!-- id: 1 -->
+- [ ] Run the build process <!-- id: 2 -->
+- [ ] Verify the executable creation <!-- id: 3 -->
