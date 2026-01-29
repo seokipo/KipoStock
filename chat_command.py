@@ -178,6 +178,8 @@ class ChatCommand:
                 # [신규] 수동 모드 플래그 활성화 -> is_waiting_period() 무시
                 MarketHour.set_manual_mode(True)
             else:
+                # [Fix] 오토 시퀀스(자동) 시작인 경우, 혹시 남아있을 수 있는 수동 모드 플래그를 확실히 해제
+                MarketHour.set_manual_mode(False)
                 # 일반 시퀀스 시작 등은 기존처럼 사용자 설정 시간(Waiting Period) 체크
                 if MarketHour.is_waiting_period():
                     now_str = datetime.now().strftime('%H:%M:%S')
@@ -217,6 +219,9 @@ class ChatCommand:
     async def stop(self, set_auto_start_false=True, quiet=False):
         """시스템 중지"""
         try:
+            # [Fix] 엔진 정지 시 수동 모드 플래그 무조건 해제 (다음 자동 시작을 위해)
+            MarketHour.set_manual_mode(False)
+            
             if set_auto_start_false:
                 self.update_setting('auto_start', False)
             await self._cancel_tasks()

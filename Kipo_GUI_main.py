@@ -876,11 +876,18 @@ class KipoWindow(QMainWindow):
         btn.setStyleSheet("background-color: #555; color: white; border: 2px solid white;")
         QTimer.singleShot(150, lambda: btn.setStyleSheet(original_style))
 
-    def on_start_clicked(self, force=False):
+    def on_start_clicked(self, force=False, manual=None):
         # [신규] 버튼 애니메이션 및 중복 방지
         self.animate_button_click(self.btn_start)
         
         # [수정] force가 True이면 버튼 상태와 관계없이 진행 (시퀀스 전환용)
+        # force는 이제 '수동 강제 시작(manual)'의 의미도 포함함
+        # manual 인자가 명시적으로 전달되면 그 값을 따르고, 없으면 버튼 클릭으로 간주하여 True(수동) 처리
+        if manual is None:
+            manual_override = True # 기본값: 직접 클릭은 수동 모드
+        else:
+            manual_override = manual
+
         if not force and not self.btn_start.isEnabled(): return
         self.btn_start.setEnabled(False) # 즉시 비활성화하여 중복 클릭 방지
 
@@ -897,9 +904,9 @@ class KipoWindow(QMainWindow):
             target_profile = None
             self.btn_start.setEnabled(True) # 실패 시 다시 활성화
             
-        # 2. 시작 명령 전달 (target_profile을 인자로 전달하여 엔진 가동 후 출력되게 함)
-        # [수정] START 버튼을 통한 직접 클릭은 manual=True로 전달하여 사용자 설정 시간을 무시함
-        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile, True))
+        # 2. 시작 명령 전달 (target_profile, manual_override 전달)
+        # [수정] START 버튼을 통한 직접 클릭은 manual=True이지만, 오토 시퀀스는 manual=False로 전달됨
+        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile, manual_override))
 
     def on_stop_clicked(self):
         """STOP 버튼 클릭 핸들러 (메서드로 분리)"""
@@ -1584,7 +1591,8 @@ class KipoWindow(QMainWindow):
             if is_seq_before_load and self.btn_seq_auto.isChecked():
                 self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 재기동합니다.")
                 # [수정] 이미 실행 중일 수도 있으므로 force=True로 재시작 강제 (원격에서 온 경우 이미 READY 체크됨)
-                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True))
+                # [중요] 오토 시퀀스에 의한 자동 시작이므로 manual=False로 시간 체크를 강제함!
+                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True, manual=False))
 
     # [미씽 메서드 복구] 저장 모드 종료
     def stop_save_mode(self):
@@ -1721,7 +1729,8 @@ class KipoWindow(QMainWindow):
             # [신규] READY 상태에서 시퀀스를 켰다면 엔진도 함께 자동 시작
             if "READY" in self.lbl_status.text():
                 self.log_and_tel("🚀 시퀀스 모드 활성화: 엔진을 자동으로 시작합니다.")
-                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True))
+                # [중요] 오토 시퀀스 시작이므로 manual=False (시간 체크 필수)
+                QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True, manual=False))
             
             # [신규] 현재 이후의 시퀀스 정보 출력
             try:
@@ -1975,6 +1984,8 @@ class KipoWindow(QMainWindow):
             sound_path = os.path.join(self.script_dir, "StockAlarm.wav")
             if os.path.exists(sound_path):
                 winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC | winsound.SND_LOOP)
+                # [신규] 10초 후 자동 정지 (사용자 요청)
+                QTimer.singleShot(10000, self.stop_alarm)
             else:
                 self.append_log(f"⚠️ 알람 파일 없음: {sound_path}")
             
