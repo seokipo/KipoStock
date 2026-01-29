@@ -100,3 +100,47 @@ class MarketHour:
 		if now_time >= market_end_time or now_time < market_start_time:
 			return True
 		return False
+
+	@staticmethod
+	def is_actual_market_open_time():
+		"""사용자 설정과 관계없이 실제 한국 거래소 운영 시간(09:00~15:30)인지 확인합니다."""
+		now = datetime.datetime.now()
+		if now.weekday() >= 5: # 주말 제외
+			return False
+		# 공휴일 체크는 기존 is_holiday 활용 가능하도록 정적 메서드로 호출하거나 상위 클래스 로직 활용
+		# 여기서는 단순화를 위해 시간만 체크하거나 기존 is_holiday를 가져와서 사용
+		now_val = now.hour * 100 + now.minute
+		return 900 <= now_val <= 1530
+
+	# [신규] 수동 시작 오버라이드 플래그
+	_MANUAL_OVERRIDE = False
+
+	@classmethod
+	def set_manual_mode(cls, enabled: bool):
+		"""수동 시작 모드 활성화/비활성화 (설정 시간 무시)"""
+		cls._MANUAL_OVERRIDE = enabled
+		if enabled:
+			print("🕐 [MarketHour] 수동 모드 활성화: 설정된 시작/종료 시간을 무시합니다.")
+		else:
+			print("🕐 [MarketHour] 수동 모드 해제: 설정된 시간을 준수합니다.")
+
+	@classmethod
+	def is_waiting_period(cls):
+		"""장 종료 시간 ~ 익일 오전 9:00 사이인지 확인합니다."""
+		
+		# [수정] 수동 모드일 경우: 실제 장 운영 시간이면 대기 시간이 아님 (무조건 통과)
+		if cls._MANUAL_OVERRIDE:
+			if cls.is_actual_market_open_time():
+				return False # 장중이면 대기 아님 -> 매매 진행
+			# 수동 모드라도 장 시간이 아니면(밤 등) 대기
+		
+		now = datetime.datetime.now()
+		now_time = now.hour * 100 + now.minute
+		
+		market_end_time = cls.MARKET_END_HOUR * 100 + cls.MARKET_END_MINUTE
+		market_start_time = cls.MARKET_START_HOUR * 100 + cls.MARKET_START_MINUTE
+		
+		# 설정된 종료 시간 이후거나 설정된 시작 시간 이전이면 True
+		if now_time >= market_end_time or now_time < market_start_time:
+			return True
+		return False

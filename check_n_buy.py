@@ -314,6 +314,13 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
                 strategy_voice = voice_map.get(mode, '매수')
                 voice_msg = f"{seq_name} {strategy_voice}" if seq_name else strategy_voice
                 say_text(voice_msg)
+            else:
+                # [신규] 음성 끔(Voice Off)일 때 짧은 비프음 재생 (beep_sound 설정 확인)
+                if get_setting('beep_sound', True):
+                    try:
+                        import winsound
+                        winsound.Beep(800, 200) # 800Hz, 200ms
+                    except: pass
             
         else:
             s_name = get_stock_name_safe(stk_cd, token)

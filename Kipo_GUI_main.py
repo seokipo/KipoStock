@@ -19,10 +19,11 @@ import winsound
 # 기존 모듈 임포트
 
 # 기존 모듈 임포트
-from config import telegram_token
+from config import telegram_token, telegram_chat_id
 from tel_send import tel_send as real_tel_send
 from chat_command import ChatCommand
 from get_setting import get_setting, cached_setting
+import ctypes # [신규] 윈도우 API 호출용
 from market_hour import MarketHour
 
 # ----------------- Worker Thread for Asyncio Loop -----------------
@@ -221,15 +222,18 @@ class AsyncWorker(QThread):
     async def _execute_command(self, cmd_type, *args):
         try:
             if cmd_type == 'start':
-                # [수정] 장외 시간 예약 시작 처리 (사용자 요청: 15:30 ~ 09:00 사이만 WAITING 처리)
-                # 낮 시간(09~15:30) 중에 사용자 종료 설정 등으로 시작이 안되는 경우는 READY 유지
-                if MarketHour.is_waiting_period():
+                # [수정] manual 플래그 추출 (기본값 False)
+                profile_info = args[0] if len(args) > 0 else None
+                manual = args[1] if len(args) > 1 else False
+                
+                # [수정] 수동 시작(manual=True)인 경우 사용자 설정 시간 체크(Waiting Period)를 건너뜀
+                if not manual and MarketHour.is_waiting_period():
                     # [신규] 대기 상태 진입 시 기존 엔진이 있다면 확실히 정기 (좀비 매매 방지)
                     await self.chat_command.stop(set_auto_start_false=False, quiet=True)
                     
                     if not self.pending_start:
                         self.pending_start = True
-                        self.pending_profile_info = args[0] if args else None
+                        self.pending_profile_info = profile_info
                         
                         # [수정] 안내 메시지에 실제 설정된 시간 표시 (main_window 위젯 접근 수정)
                         st_str = self.main_window.input_start_time.text()
@@ -239,20 +243,23 @@ class AsyncWorker(QThread):
                         self.signals.status_signal.emit("WAITING")
                     return
                 
-                # 낮 시간인데 시작 시도
-                profile_info = args[0] if args else None
-                success = await self.chat_command.start(profile_info=profile_info)
+                # 수동 시작이거나 낮 시간인데 시작 시도
+                success = await self.chat_command.start(profile_info=profile_info, manual=manual)
                 if success:
                     self.pending_start = False
                     self.signals.status_signal.emit("RUNNING")
                 else:
                     self.signals.status_signal.emit("READY")
-                    self.signals.log_signal.emit("⚠️ 장 시작 조건을 만족하지 않습니다. 시간 설정을 확인하세요.")
-                    # [신규] 장외 시간 등 시작 실패 시 경고음
-                    try:
-                        import winsound
-                        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-                    except: pass
+                    if manual:
+                        self.signals.log_signal.emit("⚠️ 실제 장 운영 시간이 아닙니다. (09:00~15:30 사이에만 가능)")
+                    else:
+                        self.signals.log_signal.emit("⚠️ 장 시작 조건을 만족하지 않습니다. 시간 설정을 확인하세요.")
+                    # [신규] 장외 시간 등 시작 실패 시 경고음 (설정값 확인)
+                    if get_setting('beep_sound', True):
+                        try:
+                            import winsound
+                            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                        except: pass
                 return
             elif cmd_type == 'stop':
                 self.pending_start = False # 예약 취소
@@ -319,7 +326,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoBuy Auto Trading System - V5.5.3 (Final Edition)")
+        self.setWindowTitle("🚀 KipoStock_Lite_V1_0")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -392,7 +399,15 @@ class KipoWindow(QMainWindow):
         # [신규] 안전한 알림 종료를 위한 단일 타이머 (SingleShot 대체)
         self.alert_close_timer = QTimer(self)
         self.alert_close_timer.setSingleShot(True)
+        self.alert_close_timer = QTimer(self)
+        self.alert_close_timer.setSingleShot(True)
         self.alert_close_timer.timeout.connect(self._close_active_alert)
+
+    # [신규] 툴팁 스타일 통일용 헬퍼 메서드
+    def _style_tooltip(self, text):
+        """툴팁 텍스트에 HTML 스타일을 적용하여 폰트와 크기를 강제합니다."""
+        # 폰트: 맑은 고딕, 크기: 9pt (약 12px), 색상: #333
+        return f"<html><head/><body><p style='font-family:\"Malgun Gothic\"; font-size:9pt; color:#333; margin:0;'>{text.replace(chr(10), '<br>')}</p></body></html>"
 
     def setup_ui(self):
         # --- Styles ---
@@ -419,7 +434,34 @@ class KipoWindow(QMainWindow):
             }
             
             QTextEdit { background-color: #1e1e1e; color: #00ff00; font-family: 'Consolas', 'Monospace'; border-radius: 5px; padding: 10px; }
+            
+            /* [신규] 툴팁 기본 박스 스타일 (내부 텍스트는 HTML로 제어) */
+            QToolTip { 
+                background-color: #ffffff; 
+                border: 1px solid #767676; 
+                padding: 1px; 
+                border-radius: 2px;
+                opacity: 230; 
+            }
         """)
+
+        # [신규] Voice 안내 기본값 보장 (사용자가 끈 적 없으면 켜기)
+        if get_setting('voice_guidance', None) is None:
+             # 설정 파일에 키 자체가 없으면 True로 초기화
+             try:
+                 import json
+                 s_path = os.path.join(self.script_dir, 'settings.json')
+                 s_data = {}
+                 if os.path.exists(s_path):
+                     with open(s_path, 'r', encoding='utf-8') as f: s_data = json.load(f)
+                 
+                 if 'voice_guidance' not in s_data:
+                     s_data['voice_guidance'] = True
+                     with open(s_path, 'w', encoding='utf-8') as f:
+                         json.dump(s_data, f, ensure_ascii=False, indent=4)
+             except Exception as e:
+                 print(f"Error setting default voice_guidance: {e}") # 디버깅용
+                 pass
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -437,7 +479,7 @@ class KipoWindow(QMainWindow):
         left_spacer = QWidget()
         left_spacer.setFixedWidth(40) 
         
-        self.lbl_main_title = QLabel("🚀 KipoBuy Auto Trading System")
+        self.lbl_main_title = QLabel("🚀 KipoStock_Lite_V1_0")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_main_title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
@@ -456,7 +498,7 @@ class KipoWindow(QMainWindow):
         self.btn_top = QPushButton("📍")
         self.btn_top.setCheckable(True)
         self.btn_top.setFixedSize(40, 40)
-        self.btn_top.setToolTip("항상 위에 고정")
+        self.btn_top.setToolTip(self._style_tooltip("📍 [핀 고정: 항상 위에]\n창을 맨 앞으로 고정"))
         self.btn_top.setStyleSheet("""
             QPushButton { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; }
             QPushButton:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
@@ -507,6 +549,7 @@ class KipoWindow(QMainWindow):
         self.input_max.setFixedWidth(35)
         self.input_max.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.input_max.setStyleSheet("border: 2px solid black; border-radius: 4px; padding: 2px; font-weight: bold;")
+        self.input_max.setToolTip(self._style_tooltip("🎯 [최대 종목수]\n계좌 최대 보유 개수"))
         cond_row_layout.addWidget(self.input_max)
         
         self.cond_btn_layout = QGridLayout() # [Lite V1.0] 10개 원형 레이아웃
@@ -520,6 +563,7 @@ class KipoWindow(QMainWindow):
             # [Lite] 원형 버튼 디자인: 지름 36px, Border-radius 18px (완전한 원형)
             btn.setFixedSize(36, 36) 
             btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 18px; padding: 0px; font-size: 14px;")
+            btn.setToolTip(self._style_tooltip(f"🔍 [조건식 {i}번]\n클릭하여 전략 변경"))
             btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
             self.cond_buttons.append(btn)
             
@@ -547,6 +591,7 @@ class KipoWindow(QMainWindow):
         self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # [수정] 폰트 크기 확대 (15px) 및 볼드
         self.input_start_time.setStyleSheet("border: 1px solid #ccc; border-radius: 4px; font-weight: bold; font-size: 15px; padding: 1px;")
+        self.input_start_time.setToolTip(self._style_tooltip("⏰ [시작 시간]\n자동 매매 시작 (예: 09:00)"))
         time_layout.addWidget(self.input_start_time)
         
         time_layout.addSpacing(5)
@@ -559,11 +604,12 @@ class KipoWindow(QMainWindow):
         self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         # [수정] 폰트 크기 확대 (15px) 및 볼드
         self.input_end_time.setStyleSheet("border: 1px solid #ccc; border-radius: 4px; font-weight: bold; font-size: 15px; padding: 1px;")
+        self.input_end_time.setToolTip(self._style_tooltip("🏁 [종료 시간]\n자동 매매 종료 (예: 15:20)"))
         time_layout.addWidget(self.input_end_time)
         
         # 🔔 알람 해제 버튼
         self.btn_alarm_stop = QPushButton("🔕")
-        self.btn_alarm_stop.setToolTip("알람 해제")
+        self.btn_alarm_stop.setToolTip(self._style_tooltip("🔕 [알람 정지]\n종료 알람 끄기"))
         self.btn_alarm_stop.setFixedWidth(40)
         self.btn_alarm_stop.setFixedHeight(30)
         self.btn_alarm_stop.clicked.connect(self.stop_alarm)
@@ -602,12 +648,14 @@ class KipoWindow(QMainWindow):
             tp.setAlignment(Qt.AlignmentFlag.AlignCenter)
             # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
             tp.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #dc3545; padding: 1px;")
+            tp.setToolTip(self._style_tooltip("📈 [익절 (%)]\n목표 수익률 달성 시 매도"))
             
             sl = QLineEdit("-1.2")
             sl.setFixedWidth(45) # [수정] 너비 확장 (35 -> 45)
             sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
             sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #007bff; padding: 1px;")
+            sl.setToolTip(self._style_tooltip("📉 [손절 (%)]\n손실 제한 수익률 도달 시 매도"))
             return tp, sl
 
         # Strategy UI Header
@@ -639,6 +687,7 @@ class KipoWindow(QMainWindow):
         self.input_qty_val.setReadOnly(True)
         self.input_qty_val.setFixedWidth(60)
         self.input_qty_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #dc3545; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #555;")
+        self.input_qty_val.setToolTip(self._style_tooltip("🔴 [1주 매수]\n조건 만족 시 1주 주문"))
         self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
         self.input_qty_tp.setFixedWidth(45); self.input_qty_sl.setFixedWidth(45)
         
@@ -657,6 +706,7 @@ class KipoWindow(QMainWindow):
         self.input_amt_val = QLineEdit("100,000")
         self.input_amt_val.setFixedWidth(90) # [수정] 너비 더 확장 (85->90)
         self.input_amt_val.setStyleSheet("border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
+        self.input_amt_val.setToolTip(self._style_tooltip("🟢 [금액 매수]\n설정 금액만큼 주문 (예: 100만)"))
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
         self.input_amt_tp.setFixedWidth(45); self.input_amt_sl.setFixedWidth(45)
@@ -676,6 +726,7 @@ class KipoWindow(QMainWindow):
         self.input_pct_val = QLineEdit("10")
         self.input_pct_val.setFixedWidth(60)
         self.input_pct_val.setStyleSheet("border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px;")
+        self.input_pct_val.setToolTip(self._style_tooltip("🔵 [비율 매수]\n예수금 대비 % 비율 주문"))
         self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
         self.input_pct_tp.setFixedWidth(45); self.input_pct_sl.setFixedWidth(45)
         
@@ -697,10 +748,10 @@ class KipoWindow(QMainWindow):
         self.btn_seq_auto = QPushButton("▶")
         self.btn_seq_auto.setCheckable(True)
         self.btn_seq_auto.setFixedSize(35, 35) # 35x35 통일
-        self.btn_seq_auto.setToolTip("시퀀스 자동 모드 (클릭하여 ON/OFF)")
-        # [수정] 정지 시 바탕색(#f8f9fa), 시작 시 밝은 노란색 점멸 시작
+        self.btn_seq_auto.setToolTip(self._style_tooltip("🔄 [자동 항법: 오토시퀀스]\n시간표에 따라 프로필 자동 전환"))
+        # [수정] 버튼 폰트 크기 조정 (24px -> 18px) 하여 다른 버튼과 균형 확보
         self.btn_seq_auto.setStyleSheet("""
-            QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
+            QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 18px; font-weight: bold; padding: 0px; text-align: center; }
             QPushButton:checked { background-color: #fff59d; color: #0000ff; }
         """)
         self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
@@ -708,9 +759,10 @@ class KipoWindow(QMainWindow):
 
         # 2. 설정 저장 버튼 (그 다음)
         self.btn_save = QPushButton("💾")
-        self.btn_save.setToolTip("설정 저장")
+        self.btn_save.setToolTip(self._style_tooltip("💾 [설정 저장: 보관소]\n1~3번 슬롯에 현재 설정 저장"))
         self.btn_save.setFixedSize(35, 35) # 35x35 통일
-        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 24px; padding: 0px; text-align: center;")
+        # [수정] 버튼 폰트 크기 조정 (20px -> 18px)
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 18px; padding: 0px; text-align: center;")
         self.btn_save.clicked.connect(self.on_save_button_clicked)
         save_profile_layout.addWidget(self.btn_save)
         
@@ -724,8 +776,9 @@ class KipoWindow(QMainWindow):
         for i in range(1, 4):
             btn = QPushButton(str(i))
             btn.setFixedSize(35, 35) # 크기 유지
-            # [수정] 텍스트가 안 보인다면: 폰트 강제 설정 및 텍스트 정렬, 색상 대비 강화
-            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 16px; font-family: 'Arial';")
+            # [수정] 다른 버튼들과 폰트 크기(18px) 통일
+            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 18px; font-family: 'Arial';")
+            btn.setToolTip(self._style_tooltip(f"📂 [프로필 {i}번: 슬롯]\n설정 불러오기 또는 저장"))
             btn.clicked.connect(lambda checked, idx=i: self.on_profile_clicked(idx))
             save_profile_layout.addWidget(btn)
             self.profile_buttons.append(btn)
@@ -762,14 +815,19 @@ class KipoWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         
         self.btn_start = QPushButton("▶ START")
+        self.btn_start = QPushButton("▶ START")
+        self.btn_start.setToolTip(self._style_tooltip("🚀 [START: 수동 점화]\n설정된 값으로 즉시 매매 시작"))
         self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
         self.btn_start.clicked.connect(self.on_start_clicked)
         
         self.btn_stop = QPushButton("⏹ STOP")
+        self.btn_stop = QPushButton("⏹ STOP")
+        self.btn_stop.setToolTip(self._style_tooltip("⏹ [STOP: 긴급 정지]\n모든 매매 감시 즉시 중단"))
         self.btn_stop.setStyleSheet("background-color: #dc3545; height: 35px; font-size: 14px;")
         self.btn_stop.clicked.connect(self.on_stop_clicked)
         
         self.btn_report = QPushButton("📊 REPORT")
+        self.btn_report.setToolTip(self._style_tooltip("📊 [REPORT: 실시간 성과]\n매매 손익/계좌 현황 요약"))
         self.btn_report.setStyleSheet("background-color: #17a2b8; height: 35px; font-size: 14px;")
         def on_report():
             self.animate_button_click(self.btn_report)
@@ -794,6 +852,7 @@ class KipoWindow(QMainWindow):
         input_layout = QHBoxLayout()
         input_label = QLabel("명령어 입력:")
         self.cmd_input = QLineEdit()
+        self.cmd_input.setToolTip(self._style_tooltip("⌨️ [명령어 직접 입력]\nstart, stop 등 텍스트 명령"))
         self.cmd_input.returnPressed.connect(self.send_command)
         
         btn_send = QPushButton("전송")
@@ -839,7 +898,8 @@ class KipoWindow(QMainWindow):
             self.btn_start.setEnabled(True) # 실패 시 다시 활성화
             
         # 2. 시작 명령 전달 (target_profile을 인자로 전달하여 엔진 가동 후 출력되게 함)
-        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile))
+        # [수정] START 버튼을 통한 직접 클릭은 manual=True로 전달하여 사용자 설정 시간을 무시함
+        QTimer.singleShot(500, lambda: self.worker.schedule_command('start', target_profile, True))
 
     def on_stop_clicked(self):
         """STOP 버튼 클릭 핸들러 (메서드로 분리)"""
@@ -1201,8 +1261,9 @@ class KipoWindow(QMainWindow):
                 if self.lbl_status.text() == "● READY":
                     self.last_auto_start_time = current_time_str # 실행 시간 기록
                     self.append_log(f"⏰ 시작 시간({target_start}) 도달: 자동 시작합니다.")
-                    # 짧은 비프음
-                    winsound.MessageBeep(winsound.MB_ICONASTERISK)
+                    # 짧은 비프음 (설정값 확인)
+                    if get_setting('beep_sound', True):
+                         winsound.MessageBeep(winsound.MB_ICONASTERISK)
                     # 시작 명령 실행
                     self.on_start_clicked() # 저장 후 시작 로직 재사용
 
@@ -1531,8 +1592,8 @@ class KipoWindow(QMainWindow):
         self.profile_blink_timer.stop()
         self.is_profile_blink_on = False
         
-        # 버튼 스타일 복구
-        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 20px;")
+        # 버튼 스타일 복구 (18px로 통일)
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 18px; padding: 0px; text-align: center;")
         self.update_profile_buttons_ui()
 
     # [미씽 메서드 복구] 프로필 버튼 UI 업데이트 (데이터 유무 표시)
@@ -1940,22 +2001,59 @@ class KipoWindow(QMainWindow):
         for btn in self.profile_buttons:
             btn.setStyleSheet(f"background-color: {color}; border: 2px solid #ffc107; border-radius: 4px; font-weight: bold; color: black; padding: 0px; font-size: 14px;")
 
-    # [복구] 항상 위 토글 메서드
+    # [수정] 항상 위 토글 메서드 (Windows API 사용으로 플리커 제거)
     def toggle_always_on_top(self, checked):
-        """압정 핀: 항상 위에 고정 (깜빡임 최소화 최종 버전)"""
-        if (self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) == checked:
-            return 
-
-        # 위치 정보를 픽셀 단위로 정확히 저장
-        pos = self.pos()
-        
-        # [핵심] setWindowFlag는 특정 플래그만 안전하게 변경하려 하지만, 
-        # Qt 6에서는 플래그 변경 시 창이 숨겨지는 것이 기본 동작입니다.
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)
-        
-        # 위치 유지하며 다시 표시
-        self.move(pos)
-        self.setVisible(True)
+        """압정 핀: 항상 위에 고정 (SetWindowPos 타입 명시로 기능 복구)"""
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            hwnd = int(self.winId()) # 핸들 가져오기
+            
+            # Windows API 준비
+            user32 = ctypes.windll.user32
+            
+            # SetWindowPos 함수 시그니처 정의 (64비트 호환성 확보)
+            user32.SetWindowPos.argtypes = [
+                wintypes.HWND, # hWnd
+                wintypes.HWND, # hWndInsertAfter
+                ctypes.c_int,  # X
+                ctypes.c_int,  # Y
+                ctypes.c_int,  # cx
+                ctypes.c_int,  # cy
+                ctypes.c_uint  # uFlags
+            ]
+            user32.SetWindowPos.restype = wintypes.BOOL
+            
+            # 상수 정의
+            HWND_TOPMOST = -1
+            HWND_NOTOPMOST = -2
+            SWP_NOMOVE = 0x0002
+            SWP_NOSIZE = 0x0001
+            SWP_NOACTIVATE = 0x0010
+            
+            # InsertAfter 핸들 결정 (캐스팅 필요할 수 있음)
+            # 파이썬 int -1을 64비트 포인터/핸들로 변환하는 것이 까다로울 수 있으므로
+            # ctypes가 처리하도록 일반 정수로 넘기되, argtypes가 HWND이므로 자동 변환 기대
+            # 안전하게 c_void_p로 변환
+            insert_after = ctypes.c_void_p(HWND_TOPMOST) if checked else ctypes.c_void_p(HWND_NOTOPMOST)
+            
+            # 실행
+            ret = user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, 
+                                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            
+            if not ret:
+                 self.append_log(f"⚠️ 핀 고정 API 실패 (Code: {ctypes.GetLastError()})")
+            
+            state = "ON" if checked else "OFF"
+            self.btn_top.setToolTip(self._style_tooltip(f"📌 항상 위에 고정 ({state})"))
+            
+        except Exception as e:
+            self.append_log(f"⚠️ 핀 고정 오류: {e}")
+            # 실패 시 Qt 기본 방식 폴백 (플리커 감수)
+            if (self.windowFlags() & Qt.WindowType.WindowStaysOnTopHint) != checked:
+                self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked)
+                self.show()
         self.show()
         self.raise_()
 

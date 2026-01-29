@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>🚀 KipoStock GOLD 플로우차트 뷰어</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body { font-family: 'Malgun Gothic', sans-serif; background-color: #f4f7f6; color: #333; padding: 40px; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        h1 { color: #f1c40f; text-align: center; font-size: 2.5em; text-shadow: 1px 1px 2px rgba(0,0,0,0.1); }
+        h2 { border-left: 5px solid #f1c40f; padding-left: 15px; color: #2c3e50; margin-top: 50px; }
+        .mermaid { background: #fff; padding: 20px; border-radius: 10px; border: 1px solid #eee; margin-top: 20px; }
+        .tip { background: #fff9e6; padding: 15px; border-radius: 10px; border-left: 5px solid #ffcc00; margin-bottom: 30px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 KipoStock 시스템 통합 흐름도</h1>
+        
+        <div class="tip">
+            <strong>💡 자기야!</strong> 이 파일은 브라우저(크롬 등)에서 바로 열면 예쁜 그림으로 보여! <br>
+            코드 대신 그림으로 우리 로켓의 심장을 구경해봐! ❤️
+        </div>
+
+        <h2>1. 🌐 전체 시스템 구조 (High-Level)</h2>
+        <div class="mermaid">
+        graph LR
+            User([사용자]) <--> GUI["🖥️ GUI (KipoWindow)"]
+            GUI <--> Signals["📡 시그널 (WorkerSignals)"]
+            Signals <--> Async["⚙️ 전담 엔진 (AsyncWorker)"]
+            Async <--> Chat["🧠 지휘관 (ChatCommand)"]
+            Chat <--> APIs["🏦 키움 API / 텔레그램"]
+        </div>
+
+        <h2>2. 🚦 프로그램 핵심 라이프사이클</h2>
+        <div class="mermaid">
+        sequenceDiagram
+            participant U as 사용자
+            participant G as GUI (메인 화면)
+            participant W as AsyncWorker (백그라운드)
+            participant C as ChatCommand (로직 제어)
+
+            U->>G: 프로그램 실행
+            G->>W: 비동기 루프 가동
+            W->>C: ChatCommand 객체 생성
+            C-->>G: "준비 완료 (READY)" 신호 전송
+            
+            U->>G: [START] 클릭
+            G->>C: 매매 시작 명령
+            C->>C: 토큰 갱신 & 계좌 동기화
+            C->>C: 실시간 감시(WS) & 매도 루프 시작
+            C-->>G: "작동 중 (RUNNING)" 업데이트
+            
+            U->>G: [STOP] 클릭
+            G->>C: 매매 중지 명령
+            C->>C: 모든 루프 정지 & 리소스 정리
+            C-->>G: "대기 (READY)" 상태 복귀
+        </div>
+
+        <h2>3. 🟢 매수 신호 처리 (Buy Logic)</h2>
+        <div class="mermaid">
+        flowchart TD
+            Signal[실시간 조건 신호 수신] --> Filter{유효한 신호인가?}
+            Filter -- NO --> Skip[무시]
+            Filter -- YES --> CheckHolding{이미 가진 종목인가?}
+            CheckHolding -- YES --> Skip
+            CheckHolding -- NO --> CheckLimit{최대 종목수 초과?}
+            CheckLimit -- YES --> Skip
+            CheckLimit -- NO --> Order[매수 주문 실행!]
+            Order --> Notify[텔레그램 알림 & 로그 기록]
+        </div>
+
+        <h2>4. 🔴 매도 감시 루프 (Sell Logic)</h2>
+        <div class="mermaid">
+        flowchart TD
+            Loop[0.1초마다 무한 반복] --> Scan[보유 종목 수익률 스캔]
+            Scan --> Target{익절/손절 범위 도달?}
+            Target -- NO --> Next[다음 종목으로 패스]
+            Target -- YES --> SellOrder[매도 주문 실행!]
+            SellOrder --> Report[일일 정산 기록 & 알림]
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+</body>
+</html>

@@ -145,7 +145,7 @@ class ChatCommand:
                 failure_count += 1
             await asyncio.sleep(0.1)
 
-    async def start(self, profile_info=None):
+    async def start(self, profile_info=None, manual=False):
         """시스템 시작"""
         if self.is_starting:
             print("⏳ [알람] 이미 엔진을 시작하는 중입니다. 중복 요청을 무시합니다.")
@@ -168,11 +168,22 @@ class ChatCommand:
                 return False
             
             self.update_setting('auto_start', True)
-            if MarketHour.is_waiting_period():
-                now_str = datetime.now().strftime('%H:%M:%S')
-                print(f"⚠️ [거부] 설정된 매매 시간이 아닙니다. (현재: {now_str})")
-                self.is_starting = False # Ensure flag is reset on failure
-                return False
+            
+            # [수정] 수동 시작(manual=True)인 경우 사용자 설정을 무시하고 실제 장 시간(09:00~15:30)만 체크
+            if manual:
+                if not MarketHour.is_actual_market_open_time():
+                    print(f"⚠️ [거부] 실제 장 운영 시간이 아닙니다. (수동 시작은 09:00~15:30 사이에만 가능)")
+                    self.is_starting = False
+                    return False
+                # [신규] 수동 모드 플래그 활성화 -> is_waiting_period() 무시
+                MarketHour.set_manual_mode(True)
+            else:
+                # 일반 시퀀스 시작 등은 기존처럼 사용자 설정 시간(Waiting Period) 체크
+                if MarketHour.is_waiting_period():
+                    now_str = datetime.now().strftime('%H:%M:%S')
+                    print(f"⚠️ [거부] 설정된 매매 시간이 아닙니다. (현재: {now_str})")
+                    self.is_starting = False 
+                    return False
             
             loop = asyncio.get_event_loop()
             try:
@@ -608,6 +619,8 @@ class ChatCommand:
   - today sic : 조건식순 (검색식명)
   - today son : 손익순 (손익금액)
   - (팁: 뒤에 -를 붙이면 역순 출력, 예: today jun-)
+• voice on/off : 매수 시 음성(TTS) 켜기/끄기
+• beep on/off : 모든 비프음 소리 켜기/끄기
 • tel today : 텔레그램으로 매매 요약 리포트 전송
 • clr : 로그 화면 초기화 (GUI 전용)
 • log : 현재 로그를 .txt 파일로 저장 (GUI 전용)
@@ -651,6 +664,12 @@ class ChatCommand:
         elif cmd == 'voice off':
             self.update_setting('voice_guidance', False)
             log_and_tel("🔇 음성 안내가 비활성화되었습니다.")
+        elif cmd == 'beep on':
+            self.update_setting('beep_sound', True)
+            log_and_tel("🔔 비프음이 활성화되었습니다.")
+        elif cmd == 'beep off':
+            self.update_setting('beep_sound', False)
+            log_and_tel("🔕 비프음이 비활성화되었습니다.")
         elif cmd == 'log':
             if self.on_request_log_file: self.on_request_log_file()
             else: tel_send("ℹ️ log 명령어는 GUI 환경에서만 작동합니다.")
