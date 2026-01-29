@@ -1179,10 +1179,12 @@ class KipoWindow(QMainWindow):
     def refresh_condition_list_ui(self):
         """실시간 조건식 리스트 패널을 현재 선택된 상태에 맞춰 갱신"""
         try:
-            # 1. 고유한 검색식 이름 사전 접근 (Worker -> ChatCommand -> RealTimeSearch)
+            # 1. 고유한 검색식 이름 사전 및 활성 상태 접근
             condition_map = {}
+            active_set = set()
             if self.worker and hasattr(self.worker, 'chat_command') and hasattr(self.worker.chat_command, 'rt_search'):
                  condition_map = self.worker.chat_command.rt_search.condition_map
+                 active_set = self.worker.chat_command.rt_search.active_conditions
 
             # html = "<b>[ 현재 선택된 조건식 ]</b><br><br>" # 제거 요청
             html = ""
@@ -1199,8 +1201,11 @@ class KipoWindow(QMainWindow):
                     m_name = mode_names[state]
                     m_color = mode_colors[state]
                     
-                    # HTML 포맷: 색상 적용된 이름과 모드 표시
-                    html += f"&nbsp;• <span style='color:{m_color};'><b>{i}: {name}</b> ({m_name})</span><br>"
+                    # [신규] 활성 상태(API 등록 완료) 아이콘
+                    status_icon = " 📡" if str(i) in active_set else ""
+                    
+                    # HTML 포맷: 색상 적용된 이름과 모드 표시 + 아이콘
+                    html += f"&nbsp;• <span style='color:{m_color};'><b>{i}: {name}</b> ({m_name}){status_icon}</span><br>"
             
             if active_count == 0:
                 html = "<br><center>(선택된 조건식이 없습니다)</center>"

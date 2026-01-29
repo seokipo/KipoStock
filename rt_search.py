@@ -24,6 +24,9 @@ class RealTimeSearch:
         
         # [신규] 종목별 출처(조건식 번호) 매핑
         self.stock_origin_map = {}
+        
+        # [신규] 현재 서버에 등록 성공하여 감시 중인 조건식 번호 집합
+        self.active_conditions = set()
 
     async def connect(self, token):
         try:
@@ -225,10 +228,17 @@ class RealTimeSearch:
                     name = self.condition_map.get(seq, '')
                     
                     if str(rc) in ['0', '1']:
-                         # 너무 빠르면 로그가 겹칠 수 있으니 짧게 출력
+                         # [신규] 활성 목록에 추가하고 GUI 갱신 요청
+                         if seq not in self.active_conditions:
+                             self.active_conditions.add(seq)
+                             if self.on_condition_loaded: self.on_condition_loaded()
                          # print(f"✅ 등록: {seq}번({name})")
                          pass
                     elif str(rc) == '900002':
+                        # [신규] 실패 시 목록에서 제거
+                        if seq in self.active_conditions:
+                            self.active_conditions.discard(seq)
+                            if self.on_condition_loaded: self.on_condition_loaded()
                         print(f"⛔ [등록실패] {seq}번({name}): 동시 감시 한도(10개) 초과! (증권사 정책)")
                     else:
                         print(f"⚠️ 실패: {seq}번 {response}")
@@ -279,6 +289,7 @@ class RealTimeSearch:
 
     async def start(self, token):
         try:
+            self.active_conditions.clear() # [신규] 시작 시 초기화
             self.token = token
             print("💰 계좌 정보 로딩...")
             
@@ -333,6 +344,8 @@ class RealTimeSearch:
     async def disconnect(self):
         self.keep_running = False
         self.connected = False
+        self.active_conditions.clear() # [신규] 종료 시 초기화
+        if self.on_condition_loaded: self.on_condition_loaded()
         if self.websocket:
             await self.websocket.close()
 
