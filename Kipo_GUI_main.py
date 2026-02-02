@@ -11,7 +11,8 @@ import requests
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                            QHBoxLayout, QLabel, QLineEdit, QPushButton, 
                            QTextEdit, QFrame, QGridLayout, QMessageBox, QGroupBox,
-                           QScrollArea, QRadioButton, QButtonGroup, QCheckBox)
+                           QScrollArea, QRadioButton, QButtonGroup, QCheckBox,
+                           QSystemTrayIcon)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont, QIcon, QColor, QPalette
 import winsound
