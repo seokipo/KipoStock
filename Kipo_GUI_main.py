@@ -328,6 +328,7 @@ class KipoWindow(QMainWindow):
         super().__init__()
         # [신규] 로그 변수는 최우선 초기화 (load_settings_to_ui 호출 시 사용됨)
         self.last_log_message = None
+        self.log_buffer = [] # [신규] 파일 저장용 클린 로그 버퍼
         
         self.setWindowTitle("🚀 KipoStock_Lite_V1.5A")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
@@ -1100,7 +1101,25 @@ class KipoWindow(QMainWindow):
         # 시간 영역([HH:MM:SS])을 고정 너비로 두고, 메시지는 그 너비만큼 왼쪽 마진을 주어 정렬
         text_html = text.replace('\n', '<br>')
         
-        # TABLE 형태의 레이아웃을 사용하여 시간과 메시지를 분리
+        # [신규] 실시간 파일 로그 기록 (콤팩트 형식)
+        # HTML 태그 제거 및 한 줄 형식 [HH:MM:SS] 내용
+        clean_text = text.replace('<br>', ' ').replace('<b>', '').replace('</b>', '').replace('<font color=', '').replace('</font>', '').replace('</span>', '').replace('<span style=', '').replace("'", "").replace('"', '')
+        # 연속된 공백 제거
+        import re
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        
+        log_line = f"[{timestamp}] {clean_text}\n"
+        self.log_buffer.append(log_line) # 버퍼에 저장
+        
+        try:
+            today_str = datetime.datetime.now().strftime("%Y%m%d")
+            # 당일 로그 파일 경로 (기본 Log_YYYYMMDD.txt)
+            log_file_path = os.path.join(self.data_dir, f"Log_{today_str}.txt")
+            with open(log_file_path, 'a', encoding='utf-8') as f:
+                f.write(log_line)
+        except: pass
+
+        # TABLE 형태의 레이아웃을 사용하여 시간과 메시지를 분리 (GUI 표시용)
         full_html = f"""
         <table border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 2px;">
             <tr>
@@ -1146,7 +1165,8 @@ class KipoWindow(QMainWindow):
     def save_logs_to_file(self):
         """현재 로그창의 내용을 Log_YYYYMMDD_y.txt 형식으로 저장합니다."""
         try:
-            raw_text = self.log_text.toPlainText()
+            # [수정] QTextEdit.toPlainText() 대신 클린 오리지널 버퍼 사용 (여백 문제 해결)
+            raw_text = "".join(self.log_buffer)
             today_str = datetime.datetime.now().strftime("%Y%m%d")
             y = 1
             while True:
@@ -1183,7 +1203,8 @@ class KipoWindow(QMainWindow):
             now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"KIPOSTOCK_LOG_{now_str}.txt"
             log_path = os.path.join(self.script_dir, filename)
-            content = self.log_text.toPlainText()
+            # [수정] QTextEdit.toPlainText() 대신 클린 오리지널 버퍼 사용
+            content = "".join(self.log_buffer)
             with open(log_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             save_msg = f"💾 로그가 저장되었습니다:<br>" + "&nbsp;"*11 + f"<u><i>{filename}</i></u>"
