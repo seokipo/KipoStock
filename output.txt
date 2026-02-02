@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "D:\Work\Python\AutoBuy\KipoBuy_Gui_3.???\KipoBuy_Gui\Kipo_GUI_main.py", line 625, in append_log
+    self.log_text.appendHtml(html_text)
+    ^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'QTextEdit' object has no attribute 'appendHtml'
