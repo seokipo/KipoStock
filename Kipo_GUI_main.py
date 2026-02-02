@@ -356,13 +356,12 @@ class KipoWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
         elif os.path.exists(icon_path_ico):
             self.setWindowIcon(QIcon(icon_path_ico))
-        else:
-            # Fallback checks in script directory
-            for ext in ['png', 'ico']:
-                p = os.path.join(self.script_dir, f'kipo_yellow.{ext}')
-                if os.path.exists(p):
-                    self.setWindowIcon(QIcon(p))
-                    break
+        # [V5.7] Blue Icon 복구
+        self.setWindowIcon(QIcon('icon.ico'))
+        
+        # Tray Icon setup
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(QIcon('icon.ico'))
                 
         self.resize(1000, 700)
         
