@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
 from PyQt6.QtGui import QFont, QIcon, QColor, QPalette
 import winsound
+import re
 
 # 기존 모듈 임포트
 
@@ -1097,27 +1098,26 @@ class KipoWindow(QMainWindow):
 
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
-        # [수정] 들여쓰기 및 정렬 처리
-        # 시간 영역([HH:MM:SS])을 고정 너비로 두고, 메시지는 그 너비만큼 왼쪽 마진을 주어 정렬
-        text_html = text.replace('\n', '<br>')
-        
         # [신규] 실시간 파일 로그 기록 (콤팩트 형식)
-        # HTML 태그 제거 및 한 줄 형식 [HH:MM:SS] 내용
-        clean_text = text.replace('<br>', ' ').replace('<b>', '').replace('</b>', '').replace('<font color=', '').replace('</font>', '').replace('</span>', '').replace('<span style=', '').replace("'", "").replace('"', '')
-        # 연속된 공백 제거
-        import re
-        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        # 1. HTML 태그 완전 제거
+        msg_clean = re.sub('<[^<]+?>', '', text)
+        # 2. 모든 종류의 공백/줄바꿈을 단일 공백으로 치환 후 앞뒤 트림
+        msg_clean = " ".join(msg_clean.split()).strip()
         
-        log_line = f"[{timestamp}] {clean_text}\n"
-        self.log_buffer.append(log_line) # 버퍼에 저장
+        # 3. 한 줄 형식 [HH:MM:SS] 내용
+        log_line = f"[{timestamp}] {msg_clean}\n"
+        self.log_buffer.append(log_line) # 버퍼에 저장 (메모리 보관)
         
         try:
             today_str = datetime.datetime.now().strftime("%Y%m%d")
-            # 당일 로그 파일 경로 (기본 Log_YYYYMMDD.txt)
             log_file_path = os.path.join(self.data_dir, f"Log_{today_str}.txt")
-            with open(log_file_path, 'a', encoding='utf-8') as f:
+            # [수정] newline='' 를 사용하여 윈도우에서 \r\r\n 중복 방지
+            with open(log_file_path, 'a', encoding='utf-8', newline='') as f:
                 f.write(log_line)
         except: pass
+
+        # [수정] 들여쓰기 및 정렬 처리 (GUI 표시용)
+        text_html = text.replace('\n', '<br>')
 
         # TABLE 형태의 레이아웃을 사용하여 시간과 메시지를 분리 (GUI 표시용)
         full_html = f"""
@@ -1174,7 +1174,8 @@ class KipoWindow(QMainWindow):
                 filepath = os.path.join(self.data_dir, filename)
                 if not os.path.exists(filepath): break
                 y += 1
-            with open(filepath, 'w', encoding='utf-8') as f:
+            # [수정] newline='' 사용하여 윈도우 중복 개행 방지
+            with open(filepath, 'w', encoding='utf-8', newline='') as f:
                 f.write(raw_text)
             msg = f"💾 로그 파일 저장 완료: {filename}"
             self.append_log(msg)
@@ -1205,7 +1206,8 @@ class KipoWindow(QMainWindow):
             log_path = os.path.join(self.script_dir, filename)
             # [수정] QTextEdit.toPlainText() 대신 클린 오리지널 버퍼 사용
             content = "".join(self.log_buffer)
-            with open(log_path, 'w', encoding='utf-8') as f:
+            # [수정] newline='' 사용하여 윈도우 중복 개행 방지
+            with open(log_path, 'w', encoding='utf-8', newline='') as f:
                 f.write(content)
             save_msg = f"💾 로그가 저장되었습니다:<br>" + "&nbsp;"*11 + f"<u><i>{filename}</i></u>"
             self.append_log(save_msg)
