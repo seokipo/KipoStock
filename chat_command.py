@@ -22,7 +22,7 @@ from check_n_buy import ACCOUNT_CACHE
 from check_bal import fn_kt00001 as get_balance
 from acc_val import fn_kt00004 as get_my_stocks
 from acc_realized import fn_kt00006 as get_realized_pnl
-from acc_diary import fn_ka10170 as get_trade_diary, fn_ka10077 as get_realized_detail
+from acc_diary import fn_ka10170 as get_trade_diary, fn_ka10077 as get_realized_detail, fn_ka10076 as get_exec_list
 from login import fn_au10001
 import pandas as pd
 
@@ -96,14 +96,8 @@ class ChatCommand:
 
                 loop = asyncio.get_event_loop()
                 try:
-                    # [수정됨] quiet=True 옵션 추가하여 로그 숨김
-                    balance_raw = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
-                    stocks_data = await loop.run_in_executor(None, get_my_stocks, False, 'N', '', self.token)
-                    
-                    if balance_raw is not None and isinstance(stocks_data, list):
-                        ACCOUNT_CACHE['balance'] = int(balance_raw)
-                        ACCOUNT_CACHE['holdings'] = {s['stk_cd'].replace('A', '') for s in stocks_data}
-                        ACCOUNT_CACHE['last_update'] = time.time()
+                    from check_n_buy import update_account_cache
+                    await loop.run_in_executor(None, update_account_cache, self.token)
                 except Exception as api_err:
                     err_msg = str(api_err)
                     if any(x in err_msg for x in ['8005', 'Token', 'entr', 'Invalid']):
@@ -113,7 +107,7 @@ class ChatCommand:
                         continue 
             except Exception as e:
                 print(f"⚠️ 계좌 동기화 루프 예외: {e}")
-            await asyncio.sleep(5.0)
+            await asyncio.sleep(2.0)
 
     async def _check_n_sell_loop(self):
         """매도 체크 루프"""
@@ -172,7 +166,7 @@ class ChatCommand:
             # [수정] 수동 시작(manual=True)인 경우 사용자 설정을 무시하고 실제 장 시간(09:00~15:30)만 체크
             if manual:
                 if not MarketHour.is_actual_market_open_time():
-                    print(f"⚠️ [거부] 실제 장 운영 시간이 아닙니다. (수동 시작은 09:00~15:30 사이에만 가능)")
+                    log_and_tel(f"⚠️ [거부] 실제 장 운영 시간이 아닙니다. (수동 시작은 09:00~15:29 사이에만 가능)")
                     self.is_starting = False
                     return False
                 # [신규] 수동 모드 플래그 활성화 -> is_waiting_period() 무시
@@ -189,18 +183,14 @@ class ChatCommand:
             
             loop = asyncio.get_event_loop()
             try:
-                balance_raw = await loop.run_in_executor(None, get_balance, 'N', '', token, True)
-                stocks_data = await loop.run_in_executor(None, get_my_stocks, False, 'N', '', token)
-                
-                if balance_raw is not None and isinstance(stocks_data, list):
-                    ACCOUNT_CACHE['balance'] = int(balance_raw)
-                    ACCOUNT_CACHE['holdings'] = {s['stk_cd'].replace('A', '') for s in stocks_data}
-                    ACCOUNT_CACHE['last_update'] = time.time()
-                    print(f"✅ 계좌 정보 초기화 완료: 잔고 {ACCOUNT_CACHE['balance']:,}원, 보유 종목 {len(ACCOUNT_CACHE['holdings'])}개")
+                from check_n_buy import update_account_cache
+                await loop.run_in_executor(None, update_account_cache, token)
+                balance_raw = ACCOUNT_CACHE.get('balance', 0)
             except Exception as e:
                 print(f"⚠️ 계좌 정보 초기화 중 오류: {e} - 계속 진행합니다.")
+                balance_raw = 0
             
-            success = await self.rt_search.start(token)
+            success = await self.rt_search.start(token, acnt_no=None)
             if success:
                 self.check_n_sell_task = asyncio.create_task(self._check_n_sell_loop())
                 self.account_sync_task = asyncio.create_task(self._account_sync_loop())
@@ -318,13 +308,14 @@ class ChatCommand:
             tel_send(f"❌ report 오류: {e}")
 
     async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False):
-        """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금)"""
+        """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금 + ka10076 체결시간복원)"""
         print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
         try:
             if not self.token: 
                 self.get_token()
                 
             loop = asyncio.get_event_loop()
+            
             res_list = await loop.run_in_executor(None, get_trade_diary, self.token)
             diary_list = res_list.get('list', [])
             
@@ -332,7 +323,22 @@ class ChatCommand:
                 tel_send("📭 오늘 매매 내역이 없습니다.")
                 return
 
-            # 데이터 매핑 로드
+            exec_time_map = {}
+            try:
+                exec_data = await loop.run_in_executor(None, get_exec_list, self.token)
+                if exec_data:
+                    for ex in exec_data:
+                        t_code = ex.get('stk_cd', '').replace('A', '')
+                        t_time = ex.get('ord_tmd', '') 
+                        t_type = ex.get('sell_buy_tp_code', '') 
+                        
+                        if t_code and t_time and t_type == '2':
+                            current_min = exec_time_map.get(t_code, "999999")
+                            if t_time < current_min:
+                                exec_time_map[t_code] = t_time
+            except Exception as ex_err:
+                print(f"⚠️ [TimeRestore] 체결내역 조회 실패: {ex_err}")
+
             cond_mapping = {}
             mapping_file = os.path.join(self.data_dir, 'stock_conditions.json')
             if os.path.exists(mapping_file):
@@ -359,39 +365,48 @@ class ChatCommand:
                             if v is not None and str(v).strip() != "": return v
                         return 0
 
-                    # [수정] 매칭 데이터 최우선 참조 (구조화된 데이터 지원)
                     mapping_val = cond_mapping.get(code, "직접매매")
                     cond_name = "직접매매"
                     strat_key = "none"
                     strat_nm = "--"
+                    
                     found_buy_time = bt_data.get(code)
                     
                     if isinstance(mapping_val, dict):
                         cond_name = mapping_val.get('name', "직접매매")
                         strat_key = mapping_val.get('strat', 'none')
-                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율'}
+                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율', 'HTS': 'HTS'}
                         strat_nm = strat_map.get(strat_key, '--')
-                        # [신규] 매핑 데이터 내의 백업 시간 활용
+                        
                         if not found_buy_time:
                             found_buy_time = mapping_val.get('time')
                     else:
                         cond_name = str(mapping_val)
                     
-                    # [수정] 오버나이트 종목 판별 및 시간 표시 개선
+                    is_restored = False
+                    if not found_buy_time:
+                         api_time = exec_time_map.get(code)
+                         if api_time and len(api_time) == 6:
+                             found_buy_time = f"{api_time[:2]}:{api_time[2:4]}:{api_time[4:]}"
+                             is_restored = True
+                             if strat_nm == '--': 
+                                 strat_nm = "HTS"
+                                 cond_name = "외부체결(복원)"
+
                     current_time_str = datetime.now().strftime("%H:%M:%S")
                     is_overnight = False
                     
-                    # 매수 기록(금품)이 0이거나, 찾은 시간이 현재 시각보다 미래라면 오버나이트로 간주
                     buy_amt_val = int(float(val(['buy_amt', 'tot_buy_amt'])))
-                    if buy_amt_val <= 0 or (found_buy_time and found_buy_time > current_time_str):
-                        is_overnight = True
+                    
+                    if not is_restored:
+                        if buy_amt_val <= 0 or (found_buy_time and found_buy_time > current_time_str):
+                            is_overnight = True
                     
                     final_buy_time = found_buy_time if found_buy_time else "99:99:99"
                     if is_overnight:
-                        # 오버나이트면 [전일] 표시를 붙여서 시각적 오해 방지
                         if found_buy_time: final_buy_time = f"전일 {found_buy_time[:5]}"
                         else: final_buy_time = "[전일]"
-
+                    
                     row = {
                         'code': code,
                         'name': item.get('stk_nm', '--'),
@@ -413,13 +428,11 @@ class ChatCommand:
                     processed_data.append(row)
                 except: continue
 
-            # 정렬 적용
             if sort_mode == 'jun':
                 processed_data.sort(key=lambda x: x['strat_nm'], reverse=is_reverse)
             elif sort_mode == 'sic':
                 processed_data.sort(key=lambda x: x['cond_name'], reverse=is_reverse)
             elif sort_mode == 'son':
-                # [신규] 손익금 기준 정렬 (기본: 내림차순 - 수익 큰 순)
                 processed_data.sort(key=lambda x: x['pnl'], reverse=not is_reverse) 
             else:
                 processed_data.sort(key=lambda x: x['buy_time'], reverse=is_reverse)
@@ -429,7 +442,6 @@ class ChatCommand:
             total_tax = sum(r['tax'] for r in processed_data)
             total_pnl = sum(r['pnl'] for r in processed_data)
             count = len(processed_data)
-            # [수정] 음수 매수금액이 합산될 경우를 대비해 abs() 사용 및 0 체크 강화
             avg_pnl_rt = (total_pnl / abs(total_b_amt) * 100) if abs(total_b_amt) > 100 else 0
 
             if summary_only:
@@ -444,18 +456,15 @@ class ChatCommand:
                 summary_msg += f"📈 최종수익률: <b>{avg_pnl_rt:+.2f}%</b>\n"
                 summary_msg += "━━━━━━━━━━━━━━━"
                 
-                # 진짜 텔레그램으로 전송 (HTML 모드 활용, send_telegram이 True일 때만)
                 if send_telegram:
                     real_tel_send(summary_msg, parse_mode='HTML')
                     print("📢 텔레그램으로 요약 보고서를 전송했습니다.")
                 
-                # GUI 로그창에는 요약 표시
                 tel_send(summary_msg.replace('<b>', '').replace('</b>', ''))
                 return True
 
-            # 상세 리포트 생성
-            display_rows = [] # GUI용 (HTML)
-            tel_rows = []     # 텔레그램용 (Plain Text)
+            display_rows = [] 
+            tel_rows = []     
             
             h_line = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             header = " [시간] [전략] 종목     |  매수액  |  매도액  |  세금  | 손익(수익률) \n"
@@ -463,23 +472,21 @@ class ChatCommand:
             display_rows.append(h_line + header + h_line)
             tel_rows.append(h_line + header + h_line)
 
-            colors = {'qty': '#ff4444', 'amount': '#00c851', 'percent': '#33b5e5', 'none': '#00ff00'}
+            colors = {'qty': '#ff4444', 'amount': '#00c851', 'percent': '#33b5e5', 'none': '#00ff00', 'HTS': '#8a2be2'}
             for r in processed_data:
                 row_color = colors.get(r['strat_key'], '#00ff00')
                 bt_str = f"[{r['buy_time']}]"
                 if r.get('is_overnight'):
-                    bt_str = f"<font color='#ffeb3b'><b>{bt_str}</b></font>" # 오버나이트 강조
+                    bt_str = f"<font color='#ffeb3b'><b>{bt_str}</b></font>" 
                 
                 st_str = f"[{r['strat_nm']}]"
                 
-                # [수정] 오버나이트 종목은 매수 데이터가 0인 경우가 많으므로 '-' 로 표시해서 가독성 높임
                 buy_avg_str = f"{r['buy_avg']:>7,}" if r['buy_avg'] > 0 else f"{'-':>7}"
                 buy_qty_str = f"{r['buy_qty']:>3}" if r['buy_qty'] > 0 else f"{'-':>3}"
                 buy_amt_str = f"{r['buy_amt']:>8,}" if r['buy_amt'] > 0 else f"{'-':>8}"
                 
                 row_content = f"{bt_str:<10} {st_str:<6} {r['name']:<10} | {buy_amt_str:>8} | {r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
-                # [Lite V1.0] 텔레그램용은 HTML 태그 제거 및 간소화
                 row_tel = f"[{r['buy_time']:<8}] {st_str:<6} {r['name']:<10} | {buy_amt_str:>8} | {r['sel_amt']:>8,} | {r['tax']:>5,} | {r['pnl']:>+8,} ({r['pnl_rt']:>+6.2f}%)\n"
                 
                 display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
@@ -496,10 +503,8 @@ class ChatCommand:
             display_rows.append(h_line)
             tel_rows.append(h_line)
             
-            # GUI에는 HTML 버전 전송 (패치된 tel_send 사용 가능)
             tel_send("".join(display_rows))
             
-            # 텔레그램에는 진짜 전송 (HTML 태그 없는 버전, send_telegram이 True일 때만)
             if send_telegram:
                 real_tel_send("".join(tel_rows))
                 print("📢 텔레그램으로 상세 보고서를 전송했습니다.")
@@ -513,7 +518,6 @@ class ChatCommand:
                     '손익금액': r['pnl'], '수익률(%)': r['pnl_rt']
                 } for r in processed_data]
                 
-                # [신규] 합계 행 추가
                 df_data.append({
                     '매수시간': '합계', '매수전략': '-', '조건식': '-', 
                     '종목명': '-', '종목코드': '-', '매수평균가': 0, 
@@ -525,14 +529,12 @@ class ChatCommand:
                 df = pd.DataFrame(df_data)
                 date_str = datetime.now().strftime("%Y%m%d")
                 
-                # [신규] 중복 파일명 체크 (a, b, c...)
                 import string
-                suffix_list = list(string.ascii_lowercase) # a-z
+                suffix_list = list(string.ascii_lowercase) 
                 
                 final_filename = f"trade_log_{date_str}.csv"
                 csv_path = os.path.join(self.data_dir, final_filename)
                 
-                # 기본 파일이 존재하면 알파벳 접미사 붙여서 비어있는 이름 찾기
                 if os.path.exists(csv_path):
                     for char in suffix_list:
                         temp_name = f"trade_log_{date_str}_{char}.csv"
@@ -576,7 +578,6 @@ class ChatCommand:
             cond_list = await asyncio.wait_for(get_condition_list(token), timeout=5.0)
             if cond_list:
                 cond_list.sort(key=lambda x: int(x[0]))
-                # [추가] GUI 표시를 위해 rt_search의 condition_map 업데이트
                 for c in cond_list:
                     self.rt_search.condition_map[str(c[0])] = c[1]
 
@@ -594,16 +595,13 @@ class ChatCommand:
     def update_settings_batch(self, updates_dict):
         """여러 설정을 한 번에 안전하게 업데이트 (레이스 컨디션 방지)"""
         try:
-            # 1. 파일에서 현재 설정 읽기
             settings = {}
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     settings = json.load(f)
             
-            # 2. 모든 요청된 필드 업데이트
             settings.update(updates_dict)
                 
-            # 3. 파일에 다시 쓰기
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=4, ensure_ascii=False)
             return True
@@ -651,7 +649,6 @@ class ChatCommand:
                 except: idx = 1
             
             if self.on_auto_sequence:
-                # 텔레그램이나 명령창에서 수신 시 GUI로 신호 전달
                 self.on_auto_sequence(idx)
             else:
                 tel_send("ℹ️ auto 명령어는 GUI 환경에서만 작동합니다.")
@@ -690,8 +687,7 @@ class ChatCommand:
             await self.rt_search.refresh_conditions(self.token)
         elif cmd == 'help': await self.help()
         elif cmd.startswith('tel today'):
-            # tel today jun- 등 처리
-            sub_raw = cmd_full[4:].strip() # "today jun-"
+            sub_raw = cmd_full[4:].strip() 
             is_rev = sub_raw.endswith('-')
             
             parts = sub_raw.lower().split()
@@ -700,7 +696,6 @@ class ChatCommand:
                 sub_part = parts[1].replace('-', '')
                 if sub_part: sub_cmd = sub_part
             
-            # 요약 보고서 여부 확인 (tel today 만 쳤을 때)
             is_summary = (sub_raw.lower() == 'today')
             
             if sub_cmd == 'sic': await self.today(sort_mode='sic', is_reverse=is_rev, send_telegram=True)
@@ -709,12 +704,10 @@ class ChatCommand:
             else: await self.today(summary_only=is_summary, is_reverse=is_rev, send_telegram=True)
 
         elif cmd.startswith('today'):
-            # 명령어 파싱: today jun- 등 공백 및 하이픈 처리
             parts = cmd.split()
             sub_cmd = 'default'
             is_rev = False
             
-            # today jun- 처럼 공백이 없는 경우와 있는 경우 모두 대응
             full_text = cmd
             is_rev = full_text.endswith('-')
             
@@ -722,7 +715,6 @@ class ChatCommand:
                 sub_part = parts[1].replace('-', '')
                 if sub_part: sub_cmd = sub_part
             elif ' ' not in full_text and len(full_text) > 5:
-                # todayjun- 같은 형태 대비
                 sub_part = full_text[5:].replace('-', '')
                 if sub_part: sub_cmd = sub_part
                 
@@ -730,5 +722,5 @@ class ChatCommand:
             elif sub_cmd == 'sic': await self.today(sort_mode='sic', is_reverse=is_rev, send_telegram=False)
             elif sub_cmd == 'jun': await self.today(sort_mode='jun', is_reverse=is_rev, send_telegram=False)
             elif sub_cmd == 'son': await self.today(sort_mode='son', is_reverse=is_rev, send_telegram=False)
-            else: await self.today(is_reverse=is_rev, send_telegram=False) # 기본값
+            else: await self.today(is_reverse=is_rev, send_telegram=False) 
         else: tel_send(f"❓ 알 수 없는 명령어: {text}")

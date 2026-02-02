@@ -61,11 +61,35 @@ def chk_n_sell(token=None):
             specific_tp = TP_RATE
             specific_sl = SL_RATE
             
-            # 매칭 정보 읽기
             if mapping and stk_cd in mapping:
                 info = mapping[stk_cd]
-                if info.get('tp') is not None: specific_tp = float(info['tp'])
-                if info.get('sl') is not None: specific_sl = float(info['sl'])
+                strat_mode = info.get('strat', 'qty')
+                
+                # [Fix] HTS(직접) 전략인 경우, 저장된 값 대신 "실시간" 전역 설정값 우선 적용
+                # 이를 통해 사용자가 GUI에서 설정을 바꾸면 즉시 반영됨 (Live Control)
+                if strat_mode == 'HTS':
+                     st_data = cached_setting('strategy_tp_sl', {})
+                     hts_set = st_data.get('HTS', {})
+                     
+                     # HTS 실시간 설정 가져오기
+                     live_tp = float(hts_set.get('tp', 0))
+                     live_sl = float(hts_set.get('sl', 0))
+                     
+                     # 값이 유효하면 덮어쓰기 (0이면 아래 안전장치에서 기본값 처리됨)
+                     if live_tp != 0: specific_tp = live_tp
+                     if live_sl != 0: specific_sl = live_sl
+                     
+                else:
+                    if info.get('tp') is not None: specific_tp = float(info['tp'])
+                    if info.get('sl') is not None: specific_sl = float(info['sl'])
+
+            # [Fix] 값이 0이면 전역 설정 또는 기본값 사용 (HTS 매수 시 초기화 오류 방지)
+            if specific_tp == 0: specific_tp = TP_RATE if TP_RATE != 0 else 12.0
+            if specific_sl == 0: specific_sl = SL_RATE if SL_RATE != 0 else -1.5
+
+            # [Debug] 매도 판단 로깅 (사용자 요청: 왜 파는지 확인)
+            # [Debug] 매도 판단 로깅 (사용자 요청: 왜 파는지 확인) -> [요청] 로그 너무 많음 (지움)
+            # print(f"🧐 [Sell Check] {stock['stk_nm']}: 수익률 {pl_rt}% (익절: {specific_tp}% / 손절: {specific_sl}%)")
 
             if pl_rt > specific_tp or pl_rt < specific_sl:
                 # 매도 실행

@@ -326,7 +326,10 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🚀 KipoStock_Lite_V1_0")
+        # [신규] 로그 변수는 최우선 초기화 (load_settings_to_ui 호출 시 사용됨)
+        self.last_log_message = None
+        
+        self.setWindowTitle("🚀 KipoStock_Lite_V1.5A")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -365,7 +368,8 @@ class KipoWindow(QMainWindow):
         
         self.setup_ui()
         self.setup_worker()
-        self.load_settings_to_ui()
+        # [수정] 초기 실행 시 'M' (수동) 프로필 기본 선택
+        self.load_settings_to_ui(profile_idx="M")
 
         # 알람 관련 초기화
         self.alarm_playing = False
@@ -399,9 +403,9 @@ class KipoWindow(QMainWindow):
         # [신규] 안전한 알림 종료를 위한 단일 타이머 (SingleShot 대체)
         self.alert_close_timer = QTimer(self)
         self.alert_close_timer.setSingleShot(True)
-        self.alert_close_timer = QTimer(self)
-        self.alert_close_timer.setSingleShot(True)
         self.alert_close_timer.timeout.connect(self._close_active_alert)
+        
+
 
     # [신규] 툴팁 스타일 통일용 헬퍼 메서드
     def _style_tooltip(self, text):
@@ -479,9 +483,9 @@ class KipoWindow(QMainWindow):
         left_spacer = QWidget()
         left_spacer.setFixedWidth(40) 
         
-        self.lbl_main_title = QLabel("🚀 KipoStock_Lite_V1_0")
+        self.lbl_main_title = QLabel("🚀 KipoStock Lite V1.5")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_main_title.setFont(QFont("Arial", 20, QFont.Weight.Bold))
+        self.lbl_main_title.setFont(QFont("ARockwell Extra Bold", 26, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
 
         # [신규] 상태 표시등 (READY / RUNNING)
@@ -491,8 +495,9 @@ class KipoWindow(QMainWindow):
 
         # [신규] 현재 시간 표시 시계
         self.lbl_clock = QLabel(datetime.datetime.now().strftime("%H:%M:%S"))
-        self.lbl_clock.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        self.lbl_clock.setStyleSheet("color: #2c3e50; margin-left: 10px;")
+        # [수정] 자기가 요청한 대로 2배 키우고 이텔릭체 적용 (주식은 시간이 생명!)
+        self.lbl_clock.setFont(QFont("Arial", 26, QFont.Weight.Bold, True)) # 12 -> 26, Italic=True
+        self.lbl_clock.setStyleSheet("color: #002b5e; margin-left: 15px;")
         
         # Always on Top Button (Pin icon)
         self.btn_top = QPushButton("📍")
@@ -530,8 +535,8 @@ class KipoWindow(QMainWindow):
         
         # 1. Settings Group
         settings_group = QGroupBox("⚙️ Settings")
-        # [수정] 타이틀 폰트 크기 확대 (13px -> 15px) 및 스타일 강화
-        settings_group.setStyleSheet("QGroupBox::title { font-size: 15px; font-weight: bold; color: #333; subcontrol-origin: margin; left: 10px; }")
+        # [수정] 배경색: 은은한 크림색 (#fffcf5) + 폰트 스타일 강화
+        settings_group.setStyleSheet("QGroupBox { background-color: #fffcf5; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { font-size: 15px; font-weight: bold; color: #333; subcontrol-origin: margin; left: 10px; }")
         settings_layout = QVBoxLayout()
         settings_layout.setSpacing(12)
 
@@ -635,8 +640,8 @@ class KipoWindow(QMainWindow):
 
         # 💎 Buying Strategy Group (Revised for Color Matching)
         strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
-        # [수정] 타이틀 폰트 크기 확대 (기존 대비 키움) 및 패딩 조정
-        strategy_group.setStyleSheet("QGroupBox { background-color: #ffffff; border: 1px solid #ccc; border-radius: 8px; margin-top: 5px; padding: 5px; font-weight: bold; } QGroupBox::title { font-size: 14px; font-weight: bold; color: #000; }")
+        # [수정] 배경색: 신뢰감을 주는 은은한 민트색 (#f0fbf5)
+        strategy_group.setStyleSheet("QGroupBox { background-color: #f0fbf5; border: 1px solid #28a745; border-radius: 8px; margin-top: 5px; padding: 5px; font-weight: bold; } QGroupBox::title { font-size: 14px; font-weight: bold; color: #155724; }")
         strat_vbox = QVBoxLayout()
         strat_vbox.setContentsMargins(5, 10, 5, 5) # [수정] 좌측 여백 축소
         strat_vbox.setSpacing(6)
@@ -737,6 +742,27 @@ class KipoWindow(QMainWindow):
         pct_layout.addWidget(self.input_pct_sl)
         strat_vbox.addLayout(pct_layout)
 
+        # 4. HTS/Direct Mode (Orange Border)
+        hts_layout = QHBoxLayout()
+        lbl_hts = QLabel("🖐 직접")
+        lbl_hts.setFixedWidth(45)
+        lbl_hts.setStyleSheet("color: #fd7e14; font-weight: bold;") # Auto Mode Orange
+        self.input_hts_val = QLineEdit("HTS")
+        self.input_hts_val.setReadOnly(True)
+        self.input_hts_val.setFixedWidth(60)
+        self.input_hts_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_hts_val.setStyleSheet("background-color: #f0f0f0; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #555;")
+        self.input_hts_val.setToolTip(self._style_tooltip("🖐 [직접/HTS 매수]\nHTS 등 외부에서 매수한 종목의 전략"))
+        self.input_hts_tp, self.input_hts_sl = create_tpsl_inputs("#fd7e14")
+        self.input_hts_tp.setFixedWidth(45); self.input_hts_sl.setFixedWidth(45)
+        
+        hts_layout.addWidget(lbl_hts)
+        hts_layout.addWidget(self.input_hts_val)
+        hts_layout.addStretch()
+        hts_layout.addWidget(self.input_hts_tp)
+        hts_layout.addWidget(self.input_hts_sl)
+        strat_vbox.addLayout(hts_layout)
+
         strategy_group.setLayout(strat_vbox)
         settings_layout.addWidget(strategy_group)
 
@@ -744,19 +770,8 @@ class KipoWindow(QMainWindow):
         save_profile_layout = QHBoxLayout()
         save_profile_layout.setSpacing(6) # [수정] 6px 등간격 강제 적용
         
-        # 1. 시퀀스 자동 버튼 (가장 왼쪽)
-        self.btn_seq_auto = QPushButton("▶")
-        self.btn_seq_auto.setCheckable(True)
-        self.btn_seq_auto.setFixedSize(35, 35) # 35x35 통일
-        self.btn_seq_auto.setToolTip(self._style_tooltip("🔄 [자동 항법: 오토시퀀스]\n시간표에 따라 프로필 자동 전환"))
-        # [수정] 버튼 폰트 크기 조정 (24px -> 18px) 하여 다른 버튼과 균형 확보
-        self.btn_seq_auto.setStyleSheet("""
-            QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 18px; font-weight: bold; padding: 0px; text-align: center; }
-            QPushButton:checked { background-color: #fff59d; color: #0000ff; }
-        """)
-        self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
-        save_profile_layout.addWidget(self.btn_seq_auto)
-
+        # [삭제] 시퀀스 자동 버튼 이동 (상단으로) - 타이머는 유지
+        
         # 2. 설정 저장 버튼 (그 다음)
         self.btn_save = QPushButton("💾")
         self.btn_save.setToolTip(self._style_tooltip("💾 [설정 저장: 보관소]\n1~3번 슬롯에 현재 설정 저장"))
@@ -765,7 +780,7 @@ class KipoWindow(QMainWindow):
         self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 18px; padding: 0px; text-align: center;")
         self.btn_save.clicked.connect(self.on_save_button_clicked)
         save_profile_layout.addWidget(self.btn_save)
-        
+
         # 시퀀스 버튼용 타이머
         self.seq_blink_timer = QTimer(self)
         self.seq_blink_timer.setInterval(1000)
@@ -785,6 +800,15 @@ class KipoWindow(QMainWindow):
             
         settings_layout.addLayout(save_profile_layout)
         
+        # [신규] 'M' 버튼 (수동 전용)
+        self.btn_manual = QPushButton("M")
+        self.btn_manual.setFixedSize(35, 35)
+        # 주황색(#fd7e14)으로 강조
+        self.btn_manual.setStyleSheet("background-color: #fd7e14; border: 1px solid #e8590c; border-radius: 4px; font-weight: 900; color: white; padding: 0px; font-size: 18px; font-family: 'Arial';")
+        self.btn_manual.setToolTip(self._style_tooltip("🧡 [수동 모드: M]\n자동 시퀀스 없이 수동 시작 (1~3번은 수동 불가)"))
+        self.btn_manual.clicked.connect(lambda: self.on_profile_clicked("M"))
+        save_profile_layout.addWidget(self.btn_manual)
+        
         settings_layout.addStretch()
         settings_group.setLayout(settings_layout)
         settings_group.setContentsMargins(5, 5, 5, 5) # 여백 축소
@@ -792,6 +816,8 @@ class KipoWindow(QMainWindow):
 
         # 2. Real-time List
         rt_group = QGroupBox("📋 실시간 조건식")
+        # [신규] 배경색: 차분한 웜 그레이 (#fdfaf8)
+        rt_group.setStyleSheet("QGroupBox { background-color: #fdfaf8; border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { font-size: 14px; font-weight: bold; color: #333; subcontrol-origin: margin; left: 10px; }")
         rt_layout = QVBoxLayout()
         rt_layout.setContentsMargins(5, 5, 5, 5) # 여백 최소화
         rt_layout.setSpacing(2)
@@ -814,26 +840,33 @@ class KipoWindow(QMainWindow):
         # Control Buttons
         btn_layout = QHBoxLayout()
         
-        self.btn_start = QPushButton("▶ START")
+        # [이동 완료] 오토시퀀스 버튼 (파란색 대형)
+        self.btn_seq_auto = QPushButton("▶ SEQ AUTO")
+        self.btn_seq_auto.setCheckable(True)
+        self.btn_seq_auto.setToolTip(self._style_tooltip("🔄 [SEQ AUTO: 자동 항법]\n시간표에 따라 프로필 자동 전환 (점멸 시 작동 중)"))
+        self.btn_seq_auto.setStyleSheet("background-color: #17a2b8; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; color: white; border: 2px solid #138496; border-radius: 4px; font-weight: bold;")
+        self.btn_seq_auto.clicked.connect(self.on_seq_auto_toggled)
+        
         self.btn_start = QPushButton("▶ START")
         self.btn_start.setToolTip(self._style_tooltip("🚀 [START: 수동 점화]\n설정된 값으로 즉시 매매 시작"))
-        self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+        self.btn_start.setStyleSheet("background-color: #28a745; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #1e7e34; border-radius: 4px; font-weight: bold; color: white;")
         self.btn_start.clicked.connect(self.on_start_clicked)
         
         self.btn_stop = QPushButton("⏹ STOP")
-        self.btn_stop = QPushButton("⏹ STOP")
         self.btn_stop.setToolTip(self._style_tooltip("⏹ [STOP: 긴급 정지]\n모든 매매 감시 즉시 중단"))
-        self.btn_stop.setStyleSheet("background-color: #dc3545; height: 35px; font-size: 14px;")
+        self.btn_stop.setStyleSheet("background-color: #dc3545; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #bd2130; border-radius: 4px; color: white; font-weight: bold;")
         self.btn_stop.clicked.connect(self.on_stop_clicked)
+        self.btn_stop.setEnabled(False) # [수정] 초기 상태는 비활성화 (READY)
         
         self.btn_report = QPushButton("📊 REPORT")
         self.btn_report.setToolTip(self._style_tooltip("📊 [REPORT: 실시간 성과]\n매매 손익/계좌 현황 요약"))
-        self.btn_report.setStyleSheet("background-color: #17a2b8; height: 35px; font-size: 14px;")
+        self.btn_report.setStyleSheet("background-color: #17a2b8; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #138496; border-radius: 4px; color: white; font-weight: bold;")
         def on_report():
             self.animate_button_click(self.btn_report)
             self.worker.schedule_command('report')
         self.btn_report.clicked.connect(on_report)
 
+        btn_layout.addWidget(self.btn_seq_auto) # [신규] 맨 앞에 추가
         btn_layout.addWidget(self.btn_start)
         btn_layout.addWidget(self.btn_stop)
         btn_layout.addWidget(self.btn_report)
@@ -872,8 +905,9 @@ class KipoWindow(QMainWindow):
     def animate_button_click(self, btn):
         """버튼 클릭 시 색상 반전 애니메이션 효과"""
         original_style = btn.styleSheet()
-        # [효과] 잠시 밝게/어둡게 변경
-        btn.setStyleSheet("background-color: #555; color: white; border: 2px solid white;")
+        # [효과] 잠시 밝게/어둡게 변경 (지오메트리 강제 유지)
+        # 중요: min-height/max-height/padding/border를 유지해야 크기 변화(덜컥거림)가 없음
+        btn.setStyleSheet("background-color: #555; color: white; border: 2px solid white; min-height: 35px; max-height: 35px; padding: 0px; border-radius: 4px; font-weight: bold;")
         QTimer.singleShot(150, lambda: btn.setStyleSheet(original_style))
 
     def on_start_clicked(self, force=False, manual=None):
@@ -884,7 +918,7 @@ class KipoWindow(QMainWindow):
         # force는 이제 '수동 강제 시작(manual)'의 의미도 포함함
         # manual 인자가 명시적으로 전달되면 그 값을 따르고, 없으면 버튼 클릭으로 간주하여 True(수동) 처리
         if manual is None:
-            manual_override = True # 기본값: 직접 클릭은 수동 모드
+            manual_override = True # 기본값: 직접 클릭은 수동 모드 (설정 시간 무시하고 즉시 시작)
         else:
             manual_override = manual
 
@@ -912,6 +946,12 @@ class KipoWindow(QMainWindow):
         """STOP 버튼 클릭 핸들러 (메서드로 분리)"""
         self.animate_button_click(self.btn_stop)
         self.worker.schedule_command('stop')
+        
+        # [신규] 공용 STOP: 시퀀스 자동 모드도 함께 종료
+        if self.btn_seq_auto.isChecked():
+           self.btn_seq_auto.setChecked(False)
+           self.on_seq_auto_toggled() # 타이머 정지 및 로그 출력
+           
         # [신규] 중지 시 UI 잠금 공식 다시 계산 (READY 상태가 될 것이므로)
         QTimer.singleShot(500, lambda: self.lock_ui_for_sequence(self.btn_seq_auto.isChecked()))
 
@@ -958,17 +998,26 @@ class KipoWindow(QMainWindow):
             self.lbl_status.setText("● RUNNING")
             self.lbl_status.setStyleSheet("color: #28a745; margin-left: 10px;")
             self.btn_start.setEnabled(False)
-            self.btn_start.setStyleSheet("background-color: #6c757d; height: 35px; font-size: 14px;")
+            self.btn_start.setStyleSheet("background-color: #6c757d; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #545b62; border-radius: 4px; font-weight: bold; color: #ddd;")
         elif status == "WAITING":
             self.lbl_status.setText("● WAITING")
             self.lbl_status.setStyleSheet("color: #ffc107; margin-left: 10px;") # 노란색
             self.btn_start.setEnabled(True) 
-            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+            self.btn_start.setStyleSheet("background-color: #28a745; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #1e7e34; border-radius: 4px; font-weight: bold; color: white;")
         else:
             self.lbl_status.setText("● READY")
             self.lbl_status.setStyleSheet("color: #6c757d; margin-left: 10px;")
-            self.btn_start.setEnabled(True)
-            self.btn_start.setStyleSheet("background-color: #28a745; height: 35px; font-size: 14px;")
+            
+            # [수정] READY 상태 복귀 시, 현재 모드(M vs Auto)에 따라 스타일 분기
+            # M모드(Manual)라면 초록색 활성화, 아니라면 회색 비활성화 유지
+            # load_settings_to_ui 에서 이미 처리하지만, 안전장치로 여기서도 확인
+            if str(self.current_profile_idx) == "M":
+                 self.btn_start.setEnabled(True)
+                 self.btn_start.setStyleSheet("background-color: #28a745; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #1e7e34; border-radius: 4px; font-weight: bold; color: white;")
+            else:
+                 # Auto 모드에서는 Start 버튼 기본 비활성화 (시퀀스 사용 유도)
+                 self.btn_start.setEnabled(False)
+                 self.btn_start.setStyleSheet("background-color: #6c757d; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #545b62; border-radius: 4px; font-weight: bold; color: #ddd;")
         
         # [신규] 상태 변경 시 UI 잠금 상태 동적 업데이트 (READY 시 잠금 해제 목적)
         self.lock_ui_for_sequence(self.btn_seq_auto.isChecked())
@@ -1039,6 +1088,11 @@ class KipoWindow(QMainWindow):
         
         if any(keyword in text for keyword in filter_keywords):
             return
+
+        # [신규] 연속된 중복 메시지 필터링 (내용이 100% 동일할 경우만)
+        if text == self.last_log_message:
+            return
+        self.last_log_message = text
 
         timestamp = datetime.datetime.now().strftime("%H:%M:%S")
         
@@ -1381,6 +1435,7 @@ class KipoWindow(QMainWindow):
             load_strategy_tpsl('qty', self.input_qty_tp, self.input_qty_sl)
             load_strategy_tpsl('amount', self.input_amt_tp, self.input_amt_sl)
             load_strategy_tpsl('percent', self.input_pct_tp, self.input_pct_sl)
+            load_strategy_tpsl('HTS', self.input_hts_tp, self.input_hts_sl)
 
             # [수정] 시퀀스 버튼 로드 및 UI 반영 (전환 시에는 현재 상태 유지)
             if not keep_seq_auto:
@@ -1404,6 +1459,24 @@ class KipoWindow(QMainWindow):
             # [신규] 활성화된 프로필 버튼 강조 처리
             self.current_profile_idx = profile_idx
             self.update_profile_buttons_ui()
+
+            # [신규] 상호 배타적 모드 적용 (M vs 1,2,3)
+            # update_profile_buttons_ui 내부 로직과 별개로 기능적 제한 적용
+            if str(profile_idx) == "M":
+                # M (수동) 모드: 시작 버튼 활성화, 시퀀스 버튼 비활성화 & 끄기
+                self.btn_start.setEnabled(True)
+                # [수정] 지오메트리 제약 조건 포함 (높이 35px 고정)
+                self.btn_start.setStyleSheet("background-color: #28a745; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #1e7e34; border-radius: 4px; font-weight: bold; color: white;")
+                self.btn_seq_auto.setEnabled(False) 
+                self.btn_seq_auto.setChecked(False) # 강제 끄기
+                self.on_seq_auto_toggled() # 스타일 및 로직 반영
+            else:
+                # 1,2,3 (오토) 모드: 시작 버튼 비활성화 (오토시퀀스로만 작동 유도), 시퀀스 버튼 활성화
+                self.btn_start.setEnabled(False)
+                # [수정] 지오메트리 제약 조건 포함 (높이 35px 고정)
+                self.btn_start.setStyleSheet("background-color: #6c757d; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; border: 2px solid #545b62; border-radius: 4px; font-weight: bold; color: #ddd;")
+                self.btn_seq_auto.setEnabled(True)
+
 
             # [신규] 로드 직후 리스트 리프레시 및 운영 시간 동기화
             QTimer.singleShot(500, self.refresh_condition_list_ui)
@@ -1468,11 +1541,13 @@ class KipoWindow(QMainWindow):
             q_tp = f"{sanitize_tp(self.input_qty_tp.text())}"; q_sl = f"{sanitize_sl(self.input_qty_sl.text())}"
             a_tp = f"{sanitize_tp(self.input_amt_tp.text())}"; a_sl = f"{sanitize_sl(self.input_amt_sl.text())}"
             p_tp = f"{sanitize_tp(self.input_pct_tp.text())}"; p_sl = f"{sanitize_sl(self.input_pct_sl.text())}"
+            h_tp = f"{sanitize_tp(self.input_hts_tp.text())}"; h_sl = f"{sanitize_sl(self.input_hts_sl.text())}"
 
             # UI에 보정된 값 즉시 반영
             self.input_qty_tp.setText(q_tp); self.input_qty_sl.setText(q_sl)
             self.input_amt_tp.setText(a_tp); self.input_amt_sl.setText(a_sl)
             self.input_pct_tp.setText(p_tp); self.input_pct_sl.setText(p_sl)
+            self.input_hts_tp.setText(h_tp); self.input_hts_sl.setText(h_sl)
 
             # 현재 설정을 딕셔너리로 구성
             current_data = {
@@ -1487,7 +1562,8 @@ class KipoWindow(QMainWindow):
                 'strategy_tp_sl': {
                     'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
                     'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
-                    'percent': {'tp': float(p_tp), 'sl': float(p_sl)}
+                    'percent': {'tp': float(p_tp), 'sl': float(p_sl)},
+                    'HTS': {'tp': float(h_tp), 'sl': float(h_sl)}
                 },
                 'condition_strategies': cond_strategies,
                 'search_seq': selected_seq,
@@ -1515,7 +1591,7 @@ class KipoWindow(QMainWindow):
                 if not quiet:
                     self.append_log(f"💾 프로필 {profile_idx}번에 설정이 저장되었습니다.")
                     # [수정] 일관된 서식으로 로그 출력
-                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
+                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 직접({h_tp}/{h_sl}%)"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
             else:
                 # [수정] 레이스 컨디션 방지를 위해 일괄 업데이트(update_settings) 사용
@@ -1526,7 +1602,8 @@ class KipoWindow(QMainWindow):
                     'strategy_tp_sl': {
                         'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
                         'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
-                        'percent': {'tp': float(p_tp), 'sl': float(p_sl)}
+                        'percent': {'tp': float(p_tp), 'sl': float(p_sl)},
+                        'HTS': {'tp': float(h_tp), 'sl': float(h_sl)}
                     },
                     'condition_strategies': cond_strategies,
                     'search_seq': selected_seq,
@@ -1566,7 +1643,7 @@ class KipoWindow(QMainWindow):
                 if not quiet:
                     self.append_log("💾 기본 설정이 저장되었습니다.")
                     # [수정] NameError(tpr, slr) 해결 및 상세 로그 출력
-                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
+                    summary = f"📋 [저장] 1주({q_tp}/{q_sl}%) | 금액({a_tp}/{a_sl}%) | 비율({p_tp}/{p_sl}%) | 직접({h_tp}/{h_sl}%) | 종목수:{max_s} | 시간:{st}~{et}"
                     self.append_log(f"<font color='#28a745'>{summary}</font>")
 
             self.refresh_condition_list_ui()
@@ -1586,14 +1663,21 @@ class KipoWindow(QMainWindow):
             self.save_settings(profile_idx=idx)
             self.stop_save_mode()
         else:
-            # 일반 모드일 때: 프로필 로드 (현재 시퀀스 버튼 상태 강제 유지)
-            self.load_settings_to_ui(profile_idx=idx, keep_seq_auto=True)
-            self.current_profile_idx = idx
-            self.update_profile_buttons_ui()
+            # [수정] M 프로필 클릭 시 동작
+            if str(idx) == "M":
+                self.load_settings_to_ui(profile_idx="M", keep_seq_auto=False) # M은 오토시퀀스 끔
+                self.current_profile_idx = "M"
+                self.update_profile_buttons_ui()
+                # 로직은 load_settings_to_ui 하단에 추가된 상호 배타 로직에서 처리됨
+            else:
+                # 일반 모드일 때: 프로필 로드 (현재 시퀀스 버튼 상태 강제 유지)
+                self.load_settings_to_ui(profile_idx=idx, keep_seq_auto=True)
+                self.current_profile_idx = idx
+                self.update_profile_buttons_ui()
             
             # [수정] 시퀀스 자동 모드 조건 강화 (기존에 이미 켜져 있었을 때만 로드 후 자동 시작)
-            # 로드된 설정(target)에 의해 켜지는 경우에는 바로 시작하지 않음 (사용자 확인 용도)
-            if is_seq_before_load and self.btn_seq_auto.isChecked():
+            # 단, M모드일 때는 절대 자동 시작 안 함
+            if str(idx) != "M" and is_seq_before_load and self.btn_seq_auto.isChecked():
                 self.append_log(f"🚀 시퀀스 자동: 프로필 {idx}번 선택됨 - 엔진을 자동 재기동합니다.")
                 # [수정] 이미 실행 중일 수도 있으므로 force=True로 재시작 강제 (원격에서 온 경우 이미 READY 체크됨)
                 # [중요] 오토 시퀀스에 의한 자동 시작이므로 manual=False로 시간 체크를 강제함!
@@ -1622,7 +1706,7 @@ class KipoWindow(QMainWindow):
             for i, btn in enumerate(self.profile_buttons):
                 idx = i + 1
                 has_data = str(idx) in profiles
-                is_selected = (self.current_profile_idx == idx)
+                is_selected = (str(self.current_profile_idx) == str(idx))
                 
                 # 기본 스타일
                 base_style = "border-radius: 4px; font-weight: 900; padding: 0px; font-size: 16px; font-family: 'Arial';"
@@ -1638,6 +1722,25 @@ class KipoWindow(QMainWindow):
                     style = f"background-color: #ffffff; border: 1px solid #ddd; color: #ccc; {base_style}"
                 
                 btn.setStyleSheet(style)
+
+            # [신규] M 버튼 스타일 업데이트
+            if hasattr(self, 'btn_manual'):
+                is_m_selected = (str(self.current_profile_idx) == "M")
+                has_m_data = "M" in profiles
+                
+                base_m_style = "border-radius: 4px; font-weight: 900; padding: 0px; font-size: 18px; font-family: 'Arial';"
+                
+                if is_m_selected:
+                    # M 선택됨: 진한 주황색 배경 + 흰색 글씨 + 테두리 강조
+                    style = f"background-color: #fd7e14; border: 2px solid #d9480f; color: white; {base_m_style}"
+                elif has_m_data:
+                    # M 데이터 있음: 약간 톤다운된 주황 (또는 사용자 요청대로 주황 유지하되 테두리만)
+                    style = f"background-color: #ff922b; border: 1px solid #e8590c; color: white; {base_m_style}"
+                else:
+                    # M 비어있음 (사실 M은 항상 눌러서 만드니까 거의 data 있음)
+                    style = f"background-color: #ffe8cc; border: 1px solid #fd7e14; color: #e8590c; {base_m_style}"
+                
+                self.btn_manual.setStyleSheet(style)
                     
         except Exception as e:
             self.append_log(f"UI 업데이트 오류: {e}")
@@ -1825,9 +1928,8 @@ class KipoWindow(QMainWindow):
                 self.append_log(f"⚠️ 시퀀스 정보 로드 중 오류: {e}")
         else:
             self.seq_blink_timer.stop()
-            self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #f8f9fa; border: 1px solid #999; border-radius: 4px; color: #666; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
-            """)
+            # [수정] 꺼졌을 때 기본 파란색 복구 (지오메트리 강제 적용)
+            self.btn_seq_auto.setStyleSheet("background-color: #17a2b8; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; color: white; border: 2px solid #138496; border-radius: 4px; font-weight: bold;")
             self.append_log("⏹ 시퀀스 자동 모드 OFF: 종료 시간 도달 시 알람만 울립니다.")
             self.is_seq_blink_on = False
         
@@ -1881,14 +1983,10 @@ class KipoWindow(QMainWindow):
         self.is_seq_blink_on = not self.is_seq_blink_on
         if self.is_seq_blink_on:
             # 밝은 노랑 (눈에 확 띔)
-            self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #fff59d; border: 2px solid #fbc02d; border-radius: 4px; color: #0000ff; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
-            """)
+            self.btn_seq_auto.setStyleSheet("background-color: #fff59d; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; color: #0000ff; border: 2px solid #fbc02d; border-radius: 4px; font-weight: bold;")
         else:
-            # 진한 파랑 (작동 중임을 강조)
-            self.btn_seq_auto.setStyleSheet("""
-                QPushButton { background-color: #2196f3; border: 2px solid #0d47a1; border-radius: 4px; color: white; font-size: 24px; font-weight: bold; padding: 0px; padding-left: 2px; padding-bottom: 4px; margin: 0px; text-align: center; }
-            """)
+            # 진한 파랑 (작동 중임을 강조) - [수정] 경계선 두께 2px로 통일하여 크기 변동(Jitter) 방지
+            self.btn_seq_auto.setStyleSheet("background-color: #17a2b8; min-height: 35px; max-height: 35px; padding: 0px; font-size: 14px; color: white; border: 2px solid #138496; border-radius: 4px; font-weight: bold;")
 
     def handle_end_time_event(self, current_time_str):
         """매 초마다 호출되는 이벤트 처리 (9시 예약 시작 및 프로필 전환)"""
@@ -1937,7 +2035,8 @@ class KipoWindow(QMainWindow):
                                 
                                 # [수정] 시퀀스 전환 딜레이를 2.5초 -> 5초로 증가하여 R10001 중복 로그인 방지
                                 # 이전 프로필의 세션이 완전히 정리될 시간을 확보합니다.
-                                QTimer.singleShot(5000, lambda: self.on_start_clicked(force=True)) 
+                                # [중요] 시퀀스 자동 전환은 Time Setting을 준수해야 하므로 manual=False로 전달
+                                QTimer.singleShot(5000, lambda: self.on_start_clicked(force=True, manual=False)) 
                                 return
                 except Exception as e:
                     self.append_log(f"⚠️ 시퀀스 전환 중 오류: {e}")
@@ -2094,7 +2193,10 @@ if __name__ == '__main__':
         sys.exit(retCode)
         
     except BaseException as e:
-        # BaseException을 통해 SystemExit까지 모두 캡처
+        # [수정] SystemExit(0)은 정상 종료이므로 크래시 로그에서 제외
+        if isinstance(e, SystemExit):
+            sys.exit(e.code)
+
         # [수정] 크래시 리포트도 LogData 폴더로 이동 시도
         crash_dir = os.path.dirname(os.path.abspath(__file__))
         if getattr(sys, 'frozen', False):

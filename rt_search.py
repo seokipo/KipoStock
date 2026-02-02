@@ -2,7 +2,7 @@ import asyncio
 import websockets
 import json
 from config import socket_url
-from check_n_buy import chk_n_buy, update_account_cache
+from check_n_buy import chk_n_buy, update_account_cache, RECENT_ORDER_CACHE
 from get_setting import get_setting
 from login import fn_au10001 as get_token
 from market_hour import MarketHour
@@ -28,9 +28,10 @@ class RealTimeSearch:
         # [신규] 현재 서버에 등록 성공하여 감시 중인 조건식 번호 집합
         self.active_conditions = set()
 
-    async def connect(self, token):
+    async def connect(self, token, acnt_no=None):
         try:
             self.token = token
+            self.acnt_no = acnt_no
             self.websocket = await websockets.connect(self.socket_url)
             self.connected = True
             print("⚡ [접속] 서버 연결 성공. 로그인 시도...")
@@ -178,11 +179,85 @@ class RealTimeSearch:
                                 else:
                                     pass # print(f"⏳ [대외시간] {jmcode} 매수 건너뜀 (설정 시간 외)")
                 
+                # --- 6. 실시간 체결 처리 (HTS 매매 즉시 감지용) ---
+                elif trnm == 'RSCN': 
+                    data = response.get('data')
+                    if isinstance(data, list):
+                        for item in data:
+                            values = item.get('values') or {}
+                            jmcode = values.get('1001', '').replace('A', '') # 종목코드
+                            tp = values.get('8030') # 2: 매수, 1: 매도
+                            tm = values.get('8031') # 체결시각 (HHMMSS)
+                            price = values.get('1002', '0') # 체결가
+                            qty = values.get('1004', '0')  # 체결량
+                            
+                            if jmcode:
+                                # 시간 포맷 (HH:MM:SS)
+                                f_time = f"{tm[:2]}:{tm[2:4]}:{tm[4:]}" if tm and len(tm) == 6 else ""
+                                s_name = self.condition_map.get(jmcode, jmcode)
+                                
+                                # 포맷팅 (가격/수량)
+                                try: price_f = f"{int(price):,}"
+                                except: price_f = price
+                                
+                                # [사용자 요청] 노란색 강조 및 직접매매 표시
+                                icon = "⚡" if tp == '2' else "🔥"
+                                status_txt = "[매수체결]" if tp == '2' else "[매도체결]"
+                                log_color = "#ffc107" # 노란색 (Yellow)
+                                
+                                log_msg = f"<font color='{log_color}'>{icon} <b>{status_txt}</b> {s_name} ({price_f}원/{qty}주) [직접매매]</font>"
+                                print(log_msg)
+                                
+                                # 폴링 로그 중복 방지를 위해 캐시 업데이트
+                                RECENT_ORDER_CACHE[jmcode] = time.time()
+                                
+                                if tp == '2': # 매수 시에만 처리
+                                    # 저장 로직 호출
+                                    from check_n_buy import save_buy_time, update_stock_condition, RECENT_ORDER_CACHE
+                                    if f_time:
+                                        # [중복방지] HTS 매수 감지 시 즉시 캐시 업데이트하여 자동 매수 차단
+                                        RECENT_ORDER_CACHE[jmcode] = time.time()
+                                        save_buy_time(jmcode, f_time)
+                                        update_stock_condition(jmcode, name='직접매매', strat='HTS', time_val=f_time)
+                                    
+                                    from tel_send import tel_send
+                                    tel_send(f"🕵️ [HTS매수] {s_name} ({f_time}) {price_f}원/{qty}주")
+                                else: # 매도 시
+                                    from tel_send import tel_send
+                                    tel_send(f"🕵️ [HTS매도] {s_name} ({f_time}) {price_f}원/{qty}주")
+
                 # --- 4. 기타 메시지 ---
                 elif trnm == 'REAL':
                     data = response.get('data')
                     if isinstance(data, list):
                         for item in data:
+                            # [신규] 주문체결 REAL 메시지 감지 (dostk 서버 특성 반영)
+                            if item.get('name') == '주문체결':
+                                values = item.get('values') or {}
+                                jmcode = values.get('9001', '').replace('A', '')
+                                s_name = values.get('302', jmcode)
+                                order_type = values.get('905', '') # 예: '+매수', '-매도'
+                                order_stat = values.get('913', '') # 예: '접수', '체결'
+                                qty = values.get('900', '0')
+                                
+                                # 매수/매도 구분
+                                is_buy = '매수' in order_type
+                                tag = "[HTS매수]" if is_buy else "[HTS매도]"
+                                color = "#ffc107" if is_buy else "#00b0f0" # 노랑 vs 파랑
+                                
+                                # 로그 출력 (접수 등은 생략하고 체결만 출력)
+                                if '체결' in order_stat:
+                                    print(f"<font color='{color}'>⚡ <b>{tag}</b> {s_name} ({order_stat}) {qty}주 [실시간]</font>")
+                                
+                                # 캐시 업데이트 (Polling 중복 방지)
+                                from check_n_buy import RECENT_ORDER_CACHE, save_buy_time, update_stock_condition
+                                RECENT_ORDER_CACHE[jmcode] = time.time()
+                                
+                                if is_buy and '체결' in order_stat:
+                                    save_buy_time(jmcode)
+                                    update_stock_condition(jmcode, name='직접매매', strat='HTS')
+                                continue
+
                             jmcode = (item.get('values') or {}).get('9001')
                             if jmcode:
                                 # [수정] 코드 표준화 (A제거)
@@ -247,11 +322,30 @@ class RealTimeSearch:
                     await self.send_message(response)
 
                 else:
-                    # [Debug] 모르는 trnm 수신 시 로그
-                    if trnm not in ['LOGIN', 'CNSRLST', 'CNSR', 'REAL', 'CNSRREQ', 'PING']:
-                        print(f"❓ [알수없는 TR] {trnm}: {response}")
+                    # [Lite V1.2] 신호 탐지 모드: PING, REG 외 모든 신호 로그 출력
+                    if trnm not in ['PING', 'REG']:
+                        print(f"🔍 [RAW] {trnm}: {response}")
 
-            except Exception:
+                    # [Debug] 모르는 trnm 수신 시 로그
+                    if trnm not in ['LOGIN', 'CNSRLST', 'CNSR', 'REAL', 'CNSRREQ', 'PING', 'REG']:
+                        pass # 위에서 이미 출력함
+
+            except websockets.ConnectionClosed:
+                print("⚠️ [소켓] 서버와의 연결이 종료되었습니다.")
+                self.connected = False
+                if self.on_connection_closed:
+                    await self.on_connection_closed()
+                break
+            except Exception as e:
+                # [신규] 윈도우 소켓 강제종료 등 치명적 오류 감지 시 재연결 시도
+                err_str = str(e)
+                if "10054" in err_str or "closed" in err_str.lower():
+                    print(f"❌ [소켓] 치명적 오류 감지: {e}")
+                    self.connected = False
+                    if self.on_connection_closed:
+                        await self.on_connection_closed()
+                    break
+
                 if not self.connected: break
                 continue
 
@@ -287,10 +381,21 @@ class RealTimeSearch:
             print(f"❌ 조건식 갱신 실패: {e}")
             return False
 
-    async def start(self, token):
+    async def _account_polling_loop(self):
+        """[신규] 보조적으로 계좌 정보를 갱신 (주기 연장)"""
+        # chat_command가 5초마다 하므로 여기선 60초마다 보조적으로만 수행
+        while self.keep_running and self.connected:
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, update_account_cache, self.token)
+            except: pass
+            await asyncio.sleep(60)
+
+    async def start(self, token, acnt_no=None):
         try:
             self.active_conditions.clear() # [신규] 시작 시 초기화
             self.token = token
+            self.acnt_no = acnt_no
             print("💰 계좌 정보 로딩...")
             
             # [수정] 블로킹 I/O를 스레드로 분리하여 GUI 프리징 방지
@@ -300,10 +405,29 @@ class RealTimeSearch:
             self.keep_running = True
             self.list_loaded_event.clear() # 이벤트 초기화
             
-            await self.connect(token)
+            await self.connect(token, acnt_no=acnt_no)
             if not self.connected: return False
 
             self.receive_task = asyncio.create_task(self.receive_messages())
+            
+            # [신규] 계좌 폴링 태스크 시작
+            self.polling_task = asyncio.create_task(self._account_polling_loop())
+
+            # [신규] 실시간 체결(주문체결) 등록 - HTS 매매 즉시 감지용
+            # 계좌번호(acnt_no)가 있으면 그걸로 등록
+            reg_item = self.acnt_no if self.acnt_no else ''
+            print(f"🔔 실시간 체결 감시 등록... (계좌: {reg_item if reg_item else '전체'})")
+            # [수정] 계좌번호 미지정 시 item 필드 생략 (전체 감시 시도)
+            reg_payload_data = {'type': ['00']}
+            if reg_item:
+                reg_payload_data['item'] = [reg_item]
+
+            await self.send_message({ 
+                'trnm': 'REG', 
+                'grp_no': '1', 
+                'refresh': '1', 
+                'data': [reg_payload_data]
+            })
 
             # 목록(이름)을 받아올 때까지 최대 5초 대기
             print("⏳ 목록 수신 대기 중 (최대 5초)...")

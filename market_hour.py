@@ -4,7 +4,6 @@ class MarketHour:
 	"""장 시간 관련 상수 및 메서드를 관리하는 클래스"""
 	
 	# 장 시작/종료 시간 상수
-	# 장 시작/종료 시간 상수
 	MARKET_START_HOUR = 9
 	MARKET_START_MINUTE = 0
 	MARKET_END_HOUR = 15
@@ -110,7 +109,8 @@ class MarketHour:
 		# 공휴일 체크는 기존 is_holiday 활용 가능하도록 정적 메서드로 호출하거나 상위 클래스 로직 활용
 		# 여기서는 단순화를 위해 시간만 체크하거나 기존 is_holiday를 가져와서 사용
 		now_val = now.hour * 100 + now.minute
-		return 900 <= now_val <= 1530
+		# [수정] 15:30:00 정각에 종료되도록 엄격한 체크 (< 1530)
+		return 900 <= now_val < 1530
 
 	# [신규] 수동 시작 오버라이드 플래그
 	_MANUAL_OVERRIDE = False
