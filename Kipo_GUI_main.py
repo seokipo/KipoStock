@@ -483,7 +483,7 @@ class KipoWindow(QMainWindow):
         left_spacer = QWidget()
         left_spacer.setFixedWidth(40) 
         
-        self.lbl_main_title = QLabel("🚀 KipoStock Lite V1.5")
+        self.lbl_main_title = QLabel("🚀 KipoStock V5.7")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_main_title.setFont(QFont("ARockwell Extra Bold", 26, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
@@ -561,7 +561,7 @@ class KipoWindow(QMainWindow):
         self.cond_btn_layout.setSpacing(5)
         self.cond_buttons = []
         # State: 0 (Gray/Off), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
-        self.cond_states = [0] * 20 # [V5.7] 20개로 복구
+        self.cond_states = [0] * 20
         
         for i in range(20):
             btn = QPushButton(str(i))
@@ -1525,14 +1525,26 @@ class KipoWindow(QMainWindow):
                 QMessageBox.warning(self, "조건식 개수 초과", msg)
                 self.append_log(msg.replace("\n", " "))
 
+                        # [수정] 숫자 형식 오류 방지를 위한 안전한 변환 함수
+            def safe_int(s, default=0):
+                try: 
+                    cleaned = "".join(c for c in str(s) if c.isdigit() or c in '.-').split('.')[0]
+                    return int(cleaned) if cleaned else default
+                except: return default
+            
+            def safe_float(s, default=0.0):
+                try: 
+                    cleaned = "".join(c for c in str(s) if c.isdigit() or c in '.-')
+                    return float(cleaned) if cleaned else default
+                except: return default
+
             qty_val = self.input_qty_val.text()
             amt_val = self.input_amt_val.text()
             pct_val = self.input_pct_val.text()
             
-            # [수정] 성향별 대표값 변수 정의 및 자동 보정
-            # 익절(TP)은 양수, 손절(SL)은 음수로 강제 변환
-            def sanitize_tp(v): return abs(float(v))
-            def sanitize_sl(v): return -abs(float(v))
+            # [수정] 성향별 대표값 변수 정의 및 자동 보정 (안전하게 변환)
+            def sanitize_tp(v): return abs(safe_float(v, 1.0))
+            def sanitize_sl(v): return -abs(safe_float(v, -1.0))
 
             q_tp = f"{sanitize_tp(self.input_qty_tp.text())}"; q_sl = f"{sanitize_sl(self.input_qty_sl.text())}"
             a_tp = f"{sanitize_tp(self.input_amt_tp.text())}"; a_sl = f"{sanitize_sl(self.input_amt_sl.text())}"
@@ -1547,19 +1559,19 @@ class KipoWindow(QMainWindow):
 
             # 현재 설정을 딕셔너리로 구성
             current_data = {
-                'take_profit_rate': float(q_tp), # 1주 전략값을 기본값으로 사용
-                'stop_loss_rate': float(q_sl),   # 1주 전략값을 기본값으로 사용
-                'max_stocks': int(max_s),
+                'take_profit_rate': safe_float(q_tp, 1.0), # 1주 전략값을 기본값으로 사용
+                'stop_loss_rate': safe_float(q_sl, -1.0),   # 1주 전략값을 기본값으로 사용
+                'max_stocks': safe_int(max_s, 20),
                 'start_time': st,
                 'end_time': et,
                 'qty_val': qty_val,
                 'amt_val': amt_val,
                 'pct_val': pct_val,
                 'strategy_tp_sl': {
-                    'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
-                    'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
-                    'percent': {'tp': float(p_tp), 'sl': float(p_sl)},
-                    'HTS': {'tp': float(h_tp), 'sl': float(h_sl)}
+                    'qty': {'tp': safe_float(q_tp, 1.0), 'sl': safe_float(q_sl, -1.0)},
+                    'amount': {'tp': safe_float(a_tp, 1.0), 'sl': safe_float(a_sl, -1.0)},
+                    'percent': {'tp': safe_float(p_tp, 1.0), 'sl': safe_float(p_sl, -1.0)},
+                    'HTS': {'tp': safe_float(h_tp, 1.0), 'sl': safe_float(h_sl, -1.0)}
                 },
                 'condition_strategies': cond_strategies,
                 'search_seq': selected_seq,
@@ -1596,16 +1608,16 @@ class KipoWindow(QMainWindow):
                     'amt_val': amt_val,
                     'pct_val': pct_val,
                     'strategy_tp_sl': {
-                        'qty': {'tp': float(q_tp), 'sl': float(q_sl)},
-                        'amount': {'tp': float(a_tp), 'sl': float(a_sl)},
-                        'percent': {'tp': float(p_tp), 'sl': float(p_sl)},
-                        'HTS': {'tp': float(h_tp), 'sl': float(h_sl)}
+                        'qty': {'tp': safe_float(q_tp, 1.0), 'sl': safe_float(q_sl, -1.0)},
+                        'amount': {'tp': safe_float(a_tp, 1.0), 'sl': safe_float(a_sl, -1.0)},
+                        'percent': {'tp': safe_float(p_tp, 1.0), 'sl': safe_float(p_sl, -1.0)},
+                        'HTS': {'tp': safe_float(h_tp, 1.0), 'sl': safe_float(h_sl, -1.0)}
                     },
                     'condition_strategies': cond_strategies,
                     'search_seq': selected_seq,
-                    'take_profit_rate': float(q_tp),
-                    'stop_loss_rate': float(q_sl),
-                    'max_stocks': int(max_s),
+                    'take_profit_rate': safe_float(q_tp, 1.0),
+                    'stop_loss_rate': safe_float(q_sl, -1.0),
+                    'max_stocks': safe_int(max_s, 20),
                     'start_time': st,
                     'end_time': et
                 }
