@@ -543,7 +543,7 @@ class KipoWindow(QMainWindow):
         # Condition Select (0-19) & Max Stocks
         cond_row_layout = QHBoxLayout()
         # [수정] 라벨 볼드 처리
-        cond_label = QLabel("<b>조건식 선택 (0-9)</b>")
+        cond_label = QLabel("<b>조건식 선택 (0-19)</b>")
         cond_row_layout.addWidget(cond_label)
         
         cond_row_layout.addStretch()
@@ -561,24 +561,20 @@ class KipoWindow(QMainWindow):
         self.cond_btn_layout.setSpacing(5)
         self.cond_buttons = []
         # State: 0 (Gray/Off), 1 (Red/Qty), 2 (Green/Amt), 3 (Blue/Pct)
-        self.cond_states = [0] * 10 # [Lite] 10개로 축소
+        self.cond_states = [0] * 20 # [V5.7] 20개로 복구
         
-        for i in range(10):
+        for i in range(20):
             btn = QPushButton(str(i))
-            # [Lite] 원형 버튼 디자인: 지름 36px, Border-radius 18px (완전한 원형)
-            btn.setFixedSize(36, 36) 
-            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 18px; padding: 0px; font-size: 14px;")
+            # [V5.7] 20개 원형 버튼 디자인: 지름 25px, Border-radius 12px
+            btn.setFixedSize(25, 25) 
+            btn.setStyleSheet("background-color: #e0e0e0; color: #333; font-weight: bold; border-radius: 12px; padding: 0px; font-size: 11px;")
             btn.setToolTip(self._style_tooltip(f"🔍 [조건식 {i}번]\n클릭하여 전략 변경"))
             btn.clicked.connect(lambda checked, idx=i: self.on_cond_clicked(idx))
             self.cond_buttons.append(btn)
             
-            # [Lite] 배분: 상단(짝수: 0, 2, 4, 6, 8) / 하단(홀수: 1, 3, 5, 7, 9)
-            if i % 2 == 0:
-                row = 0
-                col = i // 2
-            else:
-                row = 1
-                col = i // 2
+            # [V5.7] 배분: 상단(0-9) / 하단(10-19)
+            row = 0 if i < 10 else 1
+            col = i % 10
             self.cond_btn_layout.addWidget(btn, row, col)
         
         settings_layout.addLayout(cond_row_layout)
@@ -1447,7 +1443,7 @@ class KipoWindow(QMainWindow):
             strat_map = target.get('condition_strategies', {})
             active_seqs = set(map(str, seq_data)) if isinstance(seq_data, (list, set)) else set()
 
-            for i in range(10): # [Lite] 10개로 한정
+            for i in range(20): # [Lite] 10개로 한정
                 mode = strat_map.get(str(i))
                 if mode == 'qty': self.cond_states[i] = 1
                 elif mode == 'amount': self.cond_states[i] = 2
