@@ -37,28 +37,14 @@ def fn_kt00001(cont_yn='N', next_key='', token=None, quiet=False):
             if not quiet: print(f"❌ 예수금 조회 실패: {response.status_code}")
             return None
 
-        res_json = response.json()
-        entry = res_json.get('entr', '0')
-        # [Fix] 예수금(인출가능)이 아닌 주문가능금액(ord_psbl_amt)이 실제 매수 재원임
-        # 1.5버전 참조: ord_psbl_amt > d2_auto_ord_amt > entr 순으로 확인
-        ord_amt = res_json.get('ord_psbl_amt')
-        if not ord_amt or int(ord_amt) == 0:
-             ord_amt = res_json.get('d2_auto_ord_amt')
-        if not ord_amt or int(ord_amt) == 0:
-             ord_amt = entry
-
-        acnt_no = res_json.get('acnt_no', '')
+        entry = response.json()['entr']
         
-        # [디버그] 계좌번호가 없으면 RAW 데이터 출력
-        if not acnt_no and not quiet:
-            print(f"📡 [DEBUG] 계좌번호 누락! 서버 응답: {res_json}")
-            
         # [수정] quiet가 False일 때만 출력
         if not quiet:
-            ord_formatted = f"{int(ord_amt):,}원"
-            print(f"주문가능: {ord_formatted} (예수금: {int(entry):,})")
+            entry_formatted = f"{int(entry):,}원"
+            print('예수금: ', entry_formatted)
             
-        return {"balance": ord_amt, "acnt_no": acnt_no}
+        return entry
         
     except Exception as e:
         if not quiet: print(f"⚠️ 예수금 조회 에러: {e}")

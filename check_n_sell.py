@@ -6,6 +6,7 @@ from sell_stock import fn_kt10001 as sell_stock
 from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
+from market_hour import MarketHour
 
 # 전역 캐시 (파일 I/O 최소화를 통한 성능 최적화)
 _STRATEGY_MAPPING_CACHE = {}
@@ -36,9 +37,15 @@ def chk_n_sell(token=None):
     mapping = _STRATEGY_MAPPING_CACHE
 
     try:
-        my_stocks = get_my_stocks(token=token)
+        my_stocks_data = get_my_stocks(token=token)
+        my_stocks = []
+        
+        if isinstance(my_stocks_data, dict):
+            my_stocks = my_stocks_data.get('stocks', [])
+        elif isinstance(my_stocks_data, list):
+            my_stocks = my_stocks_data
+
         if not my_stocks:
-            # print("보유 종목이 없습니다.") # 로그 너무 많으면 생략
             return True
             
         for stock in my_stocks:
@@ -92,6 +99,13 @@ def chk_n_sell(token=None):
             # print(f"🧐 [Sell Check] {stock['stk_nm']}: 수익률 {pl_rt}% (익절: {specific_tp}% / 손절: {specific_sl}%)")
 
             if pl_rt > specific_tp or pl_rt < specific_sl:
+                # [신규] 장 시작 전(09:00 이전)에는 매도 주문 제한
+                if not MarketHour.is_market_open_time():
+                    # 로그 스팸 방지를 위해 장 시작 전에는 별도 로그 없이 넘어가거나
+                    # 필요시 디버그 로그만 출력 (현재는 조용히 넘김)
+                    # print(f"⏳ [Standby] 장 시작 전 대기: {stock['stk_nm']}")
+                    continue
+
                 # 매도 실행
                 sell_result = sell_stock(stock['stk_cd'].replace('A', ''), str(qty), token=token)
                 
@@ -113,13 +127,23 @@ def chk_n_sell(token=None):
                     # 매도 가격 추정 (현재가 또는 평가 단가)
                     sell_prc = float(stock.get('prc', 0)) or float(stock.get('evlt_amt', 0)) / qty if qty > 0 else 0
                     pnl_amt = int(stock.get('pl_amt', 0)) # [표준화] pl_amt -> pnl_amt
+                    
+                    # [신규] 세금 정보 추출
+                    def val(keys):
+                        for k in keys:
+                            v = stock.get(k)
+                            if v is not None and str(v).strip() != "": return v
+                        return 0
+                    tax_val = int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax'])))
+
                     session_logger.record_sell(
                         stock['stk_cd'].replace('A', ''), 
                         stock['stk_nm'], 
                         qty, 
                         sell_prc, 
                         pl_rt, 
-                        pnl_amt
+                        pnl_amt,
+                        tax=tax_val # 보존된 세금 정보 전달
                     )
                 except Exception as ex:
                     print(f"⚠️ 세션 매도 기록 실패: {ex}")

@@ -29,18 +29,18 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 	
 	try:
 		data = response.json()
-		if 'stk_acnt_evlt_prst' not in data:
-			# 키가 없으면 빈 리스트 반환
-			return []
-			
-		stk_acnt_evlt_prst = data['stk_acnt_evlt_prst']
+		stk_acnt_evlt_prst = data.get('stk_acnt_evlt_prst', [])
+		acnt_no = data.get('acnt_no', '')
 		
-		if not stk_acnt_evlt_prst:
-			return []
+		# [신규] 반환 형식을 딕셔너리로 확장 (계좌번호 포함)
+		return {
+			'stocks': stk_acnt_evlt_prst,
+			'acnt_no': acnt_no
+		}
 			
 	except Exception as e:
 		print(f"⚠️ [acc_val] Error: {e}")
-		return []
+		return {'stocks': [], 'acnt_no': ''}
 
 	if print_df:
 		df = pd.DataFrame(stk_acnt_evlt_prst)[['stk_cd', 'stk_nm', 'pl_rt', 'rmnd_qty']]

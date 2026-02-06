@@ -61,12 +61,13 @@ class MarketHour:
 
 	@classmethod
 	def is_pre_market_reservation_time(cls):
-		"""장 시작 전 예약 가능 시간(평일 08:00 ~ 09:00)인지 확인합니다."""
+		"""장 시작 전 예약 가능 시간(평일 08:00 ~ 설정된 시작 시간)인지 확인합니다."""
 		if not cls._is_weekday() or cls.is_holiday():
 			return False
 		now = datetime.datetime.now()
 		now_val = now.hour * 100 + now.minute
-		return 800 <= now_val < 900
+		market_start = cls.MARKET_START_HOUR * 100 + cls.MARKET_START_MINUTE
+		return 800 <= now_val < market_start
 	
 	@classmethod
 	def is_market_start_time(cls):
@@ -102,15 +103,13 @@ class MarketHour:
 
 	@staticmethod
 	def is_actual_market_open_time():
-		"""사용자 설정과 관계없이 실제 한국 거래소 운영 시간(09:00~15:30)인지 확인합니다."""
+		"""사용자 설정과 관계없이 실제 한국 거래소 데이터 발생 시간(08:30~15:40)인지 확인합니다."""
 		now = datetime.datetime.now()
 		if now.weekday() >= 5: # 주말 제외
 			return False
-		# 공휴일 체크는 기존 is_holiday 활용 가능하도록 정적 메서드로 호출하거나 상위 클래스 로직 활용
-		# 여기서는 단순화를 위해 시간만 체크하거나 기존 is_holiday를 가져와서 사용
 		now_val = now.hour * 100 + now.minute
-		# [수정] 15:30:00 정각에 종료되도록 엄격한 체크 (< 1530)
-		return 900 <= now_val < 1530
+		# [수정] 장후 시간외 거래(15:30~15:40)까지 커버하기 위해 1540으로 연장
+		return 830 <= now_val < 1540
 
 	# [신규] 수동 시작 오버라이드 플래그
 	_MANUAL_OVERRIDE = False

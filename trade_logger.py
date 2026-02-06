@@ -5,7 +5,7 @@ class TradeLogger:
         self.trades = []
         self.start_time = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    def record_buy(self, code, name, qty, price):
+    def record_buy(self, code, name, qty, price, strat_mode='qty'):
         """매수 기록"""
         amount = qty * price
         self.trades.append({
@@ -15,10 +15,11 @@ class TradeLogger:
             'name': name,
             'qty': qty,
             'price': price,
-            'amount': amount
+            'amount': amount,
+            'strat_mode': strat_mode
         })
 
-    def record_sell(self, code, name, qty, price, pl_rt, pnl_amt):
+    def record_sell(self, code, name, qty, price, pl_rt, pnl_amt, tax=0):
         """매도 기록"""
         amount = qty * price
         self.trades.append({
@@ -30,7 +31,8 @@ class TradeLogger:
             'price': price,
             'amount': amount,
             'pl_rt': pl_rt,
-            'pnl_amt': pnl_amt
+            'pnl_amt': pnl_amt,
+            'tax': tax
         })
 
     def get_session_report(self):
@@ -63,7 +65,15 @@ class TradeLogger:
         total_buy_amt = sum(t['amount'] for t in self.trades if t['type'] == 'BUY')
         total_sell_amt = sum(t['amount'] for t in self.trades if t['type'] == 'SELL')
         total_pnl_amt = sum(t.get('pnl_amt', 0) for t in self.trades if t['type'] == 'SELL')
+        total_tax_amt = sum(t.get('tax', 0) for t in self.trades if t['type'] == 'SELL')
         
+        # 전략별 매수 건수 집계
+        strat_counts = {'qty': 0, 'amount': 0, 'percent': 0, 'HTS': 0}
+        for t in self.trades:
+            if t['type'] == 'BUY':
+                mode = t.get('strat_mode', 'qty')
+                strat_counts[mode] = strat_counts.get(mode, 0) + 1
+
         total_pnl_rt = (total_pnl_amt / total_buy_amt * 100) if total_buy_amt > 0 else 0.0
 
         return {
@@ -71,8 +81,10 @@ class TradeLogger:
             'total_buy': total_buy_amt,
             'total_sell': total_sell_amt,
             'total_pnl': total_pnl_amt,
+            'total_tax': total_tax_amt,
             'total_rt': total_pnl_rt,
-            'trade_count': len(self.trades)
+            'trade_count': len(self.trades),
+            'strat_counts': strat_counts
         }
 
 # 싱글톤 인스턴스

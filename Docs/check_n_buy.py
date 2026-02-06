@@ -11,10 +11,10 @@ from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
 import subprocess
+
+# [신규] 비동기 로깅을 위한 큐와 워커 스레드 (속도 최적화 핵심)
 import threading
 import queue
-from get_setting import get_setting
-from trade_logger import session_logger
 
 _LOG_QUEUE = queue.Queue()
 
@@ -61,6 +61,7 @@ def _process_save_mapping(data):
         mapping_file = os.path.join(data_dir, 'stock_conditions.json')
         mapping = load_json_safe(mapping_file)
         
+        from get_setting import get_setting
         st_data = get_setting('strategy_tp_sl', {})
         specific_setting = st_data.get(mode, {})
         
@@ -90,7 +91,6 @@ def say_text(text):
 # 전역 변수로 계좌 정보를 메모리에 들고 있음
 ACCOUNT_CACHE = {
     'balance': 0,
-    'acnt_no': '', # [신규] 계좌번호 저장 필드
     'holdings': {}, # [수정] set() -> dict {code: qty} (수량 변화 감지용)
     'names': {},
     'last_update': 0
@@ -101,35 +101,26 @@ PROCESSING_FLAGS = set() # [신규] 중복 처리 동시 진입 방지 락
 
 def update_account_cache(token):
     try:
-        balance_data = get_balance(token=token, quiet=True)
-        if balance_data and isinstance(balance_data, dict):
-            ACCOUNT_CACHE['balance'] = int(str(balance_data.get('balance', '0')).replace(',', ''))
-            ACCOUNT_CACHE['acnt_no'] = balance_data.get('acnt_no', '')
+        balance_raw = get_balance(token=token, quiet=True)
+        if balance_raw:
+            ACCOUNT_CACHE['balance'] = int(str(balance_raw).replace(',', ''))
         
         # [수정] 수량까지 포함하여 비교 (DICT 형태)
         old_holdings = ACCOUNT_CACHE['holdings'].copy()
         new_holdings = {}
+        
         names = {}
+        my_stocks = get_my_stocks(token=token)
         
-        my_stocks_data = get_my_stocks(token=token)
-        my_stocks = []
-        
-        if isinstance(my_stocks_data, dict):
-            my_stocks = my_stocks_data.get('stocks', [])
-            # [신규] 계좌번호 확보 (예수금 조회 실패 대비)
-            if not ACCOUNT_CACHE['acnt_no']:
-                ACCOUNT_CACHE['acnt_no'] = my_stocks_data.get('acnt_no', '')
-        elif isinstance(my_stocks_data, list):
-            my_stocks = my_stocks_data
-            
-        for stock in my_stocks:
-            code = stock['stk_cd'].replace('A', '')
-            name = stock['stk_nm']
-            try: qty = int(stock.get('rmnd_qty', 0)) # 잔여 수량
-            except: qty = 0
-            
-            new_holdings[code] = qty
-            names[code] = name
+        if my_stocks:
+            for stock in my_stocks:
+                code = stock['stk_cd'].replace('A', '')
+                name = stock['stk_nm']
+                try: qty = int(stock.get('rmnd_qty', 0)) # 잔여 수량
+                except: qty = 0
+                
+                new_holdings[code] = qty
+                names[code] = name
         
         # [신규] HTS/외부 매매 감지 로직 (최초 실행 시엔 skip)
         if ACCOUNT_CACHE['last_update'] > 0:
@@ -141,22 +132,25 @@ def update_account_cache(token):
                     diff = new_qty - old_qty
                     s_name = names.get(code, code)
                     
-                    # [HTS 감지 핵심] 봇 주문 후 잠시 동안은 중복 방지를 위해 스킵하지만,
-                    # HTS 주문은 last_order_time이 없거나 오래되었으므로 통과됨.
+                    # 우리가 방금 주문한 건지 혹은 웹소켓이 이미 처리했는지 확인
                     last_order_time = RECENT_ORDER_CACHE.get(code, 0)
-                    
-                    # [수정] 봇 주문 직후(2초)가 아니면 무조건 HTS/외부 매수로 간주하고 로그 출력
-                    if time.time() - last_order_time > 2.0:
-                        print(f"<font color='#ffc107'>🕵️ <b>[HTS매수/폴링]</b> {s_name} ({diff}주 추가 감지) [직접매매]</font>")
+                    if time.time() - last_order_time > 1.5:
+                        from tel_send import tel_send
+                        # [Lite V1.1] HTS 감지 로그 (노란색 강조)
+                        print(f"<font color='#ffc107'>🕵️ <b>[HTS매수]</b> {s_name} ({diff}주 매수 감지) [직접매매]</font>")
                         tel_send(f"🕵️ [HTS외부감지] {s_name} {diff}주 추가됨")
                         
-                        # [HTS 수동매매는 중복 감지 방지 캐시를 업데이트하지 않음]
-                        # RECENT_ORDER_CACHE[code] = time.time() 
+                        # [중복방지] HTS 매수 감지 시 즉시 캐시 업데이트하여 자동 매수 차단
+                        RECENT_ORDER_CACHE[code] = time.time()
                         
-                        # [신규] HTS 매수 정보 저장
+                        # [신규] HTS 매수도 전략 정보에 기록 (재시작 시 today 명령어에서 보이게 함)
                         try:
+                            # 1. 매수 시간 저장 (현재 시간)
+                            save_buy_time(code)
+                            
+                            # 2. 조건식 매핑 저장 ("직접매매")
                             update_stock_condition(code, name='직접매매', strat='HTS')
-                            session_logger.record_buy(code, s_name, diff, 0, strat_mode='HTS')
+                            
                         except Exception as e:
                             print(f"⚠️ [HTS저장] 메타데이터 저장 실패: {e}")
             
@@ -167,17 +161,20 @@ def update_account_cache(token):
                     diff = old_qty - new_qty
                     s_name = names.get(code, ACCOUNT_CACHE['names'].get(code, code))
                     
+                    # 우리가 방금 주문한 건지 혹은 웹소켓이 이미 처리했는지 확인
                     last_order_time = RECENT_ORDER_CACHE.get(code, 0)
-                    # [수정] 봇 매도 직후가 아니면 HTS 매도로 로그 출력
-                    if time.time() - last_order_time > 2.0:
-                        print(f"<font color='#ffc107'>🕵️ <b>[HTS매도/폴링]</b> {s_name} ({diff}주 판매 감지) [직접매매]</font>")
+                    if time.time() - last_order_time > 1.5:
+                        from tel_send import tel_send
+                        # [Lite V1.1] HTS 매도 로그 (노란색 강조)
+                        print(f"<font color='#ffc107'>🕵️ <b>[HTS매도]</b> {s_name} ({diff}주 매도 감지) [직접매매]</font>")
                         tel_send(f"🕵️ [HTS외부매도] {s_name} {diff}주 판매됨")
-                        # [HTS 수동매도는 시간 제한 없이 모두 로깅되도록 캐시 업데이트 제거]
-                        # RECENT_ORDER_CACHE[code] = time.time()
+                        
+                        # [중복방지] HTS 매도 감지 시에도 캐시 업데이트 (연속 동작 방지)
+                        RECENT_ORDER_CACHE[code] = time.time()
         
-        # [신규] 계좌 갱신 성공 로그 (최초 1회만)
+        # [신규] 계좌 갱신 성공 로그 (매도 로그 누락 방지를 위해 감지 로직 후에 업데이트)
         if ACCOUNT_CACHE['last_update'] == 0:
-             print(f"✅ 계좌 정보 초기화 완료: 잔고 {ACCOUNT_CACHE['balance']:,}원, 보유 {len(new_holdings)}종목")
+             print(f"✅ 계좌 정보 초기화 완료: 잔고 {ACCOUNT_CACHE['balance']:,}원, 보유 종목 {len(new_holdings)}개")
         
         ACCOUNT_CACHE['holdings'] = new_holdings
         ACCOUNT_CACHE['names'].update(names)
@@ -276,6 +273,32 @@ def save_buy_time(code, time_val=None):
     except Exception as e:
         print(f"⚠️ [DEBUG] 매수 시간 저장 실패: {e}")
 
+# [신규] 종목별 조건식 매핑 정보 강제 업데이트 (HTS 등)
+def update_stock_condition(code, name='HTS/외부', strat='HTS', time_val=None):
+    try:
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+        
+        data_dir = os.path.join(base_path, 'LogData')
+        mapping_file = os.path.join(data_dir, 'stock_conditions.json')
+        
+        mapping = load_json_safe(mapping_file)
+        code = code.replace('A', '')
+        
+        t_val = time_val if time_val else datetime.now().strftime("%H:%M:%S")
+        
+        # HTS 기록이거나 기존 기록이 없는 경우에만 업데이트 (API 복원 우선순위 높임)
+        mapping[code] = {
+            'name': name,
+            'strat': strat,
+            'time': t_val,
+            'tp': 0, 'sl': 0
+        }
+        save_json_safe(mapping_file, mapping)
+    except Exception as e:
+        print(f"⚠️ [HTS기록] 조건 매핑 저장 실패: {e}")
 
 # [신규] 로그를 예쁘게 출력하는 함수
 # [Lite V1.0] 간결한 로그 시스템
@@ -306,17 +329,31 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
         max_stocks = cached_setting('max_stocks', 20) 
         if current_time - last_entry < 10:
             s_name = get_stock_name_safe(stk_cd, token)
-            # pretty_log("⏰", "시간제한", s_name, stk_cd) # [요청] 로그 삭제 (패스)
+            # pretty_log("⏰", "시간제한", s_name, stk_cd) # [요청] 로그 삭제
             return 
 
         # A. 보유 종목 확인 (캐시 기반)
         if stk_cd in ACCOUNT_CACHE['holdings']:
             s_name = get_stock_name_safe(stk_cd, token)
-            # pretty_log("💼", "이미보유", s_name, stk_cd) # [요청] 로그 삭제 (패스)
+            # pretty_log("💼", "이미보유", s_name, stk_cd) # [요청] 로그 삭제
             return
 
-        # [수정] A-2. 보유 종목 확인 (캐시 기반으로 충분, API 중복 호출 제거하여 속도 극대화)
-        # 0.1초가 아쉬운 초단타를 위해 매수 직전 계좌 전체 조회 API는 생략함
+        # [수정] A-2. 보유 종목 최종 확인 (API 기반 Safety Check)
+        # HTS 매수 직후 캐시 미반영으로 인한 중복 매수 방지 (0.1초 차이)
+        check_holdings = get_my_stocks(token=token)
+        if check_holdings:
+             for stock in check_holdings:
+                 if stock['stk_cd'].replace('A', '') == stk_cd:
+                     s_name = get_stock_name_safe(stk_cd, token)
+                     # [수정] HTS 매수 직후 이 로직이 먼저 돌면 '중복방지'라고 떠서 혼란을 줌
+                     # 실제로는 이미 보유 중인 것을 감지한 것이므로, 조용히 캐시만 업데이트하고 빠져나감
+                     # pretty_log("🛡️", "보유확인", s_name, stk_cd) # 로그 생략
+                     
+                     # 캐시 강제 업데이트
+                     try: qty = int(stock.get('rmnd_qty', 0))
+                     except: qty = 0
+                     ACCOUNT_CACHE['holdings'][stk_cd] = qty
+                     return
 
         # B. 최대 종목 수 확인
         current_count = len(ACCOUNT_CACHE['holdings'])
@@ -325,23 +362,11 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             pretty_log("⛔", f"풀방({current_count})", s_name, stk_cd)
             return
 
-        # C. 잔고 체크 (Safe Retry)
-        if ACCOUNT_CACHE['balance'] < 1000:
-            # [Fix] 잔고가 0원이거나 정보가 없을 수 있으므로 API로 한 번 더 확실하게 확인
-            # print(f"⚠️ [잔고재확인] 캐시 잔고({ACCOUNT_CACHE['balance']}) 부족 -> API 재조회 시도")
-            try:
-                bal_data = get_balance(token=token, quiet=True)
-                if bal_data and isinstance(bal_data, dict):
-                    real_bal = int(str(bal_data.get('balance', '0')).replace(',', ''))
-                    ACCOUNT_CACHE['balance'] = real_bal
-                    ACCOUNT_CACHE['acnt_no'] = bal_data.get('acnt_no', '')
-            except: pass
-
+        # C. 잔고 체크
         if ACCOUNT_CACHE['balance'] < 1000: 
             s_name = get_stock_name_safe(stk_cd, token)
             pretty_log("💸", "잔고부족", s_name, stk_cd)
-            # [Fix] 무한 재시도(로그 폭탄) 방지를 위해 10초 쿨타임 적용 (pop 제거)
-            # RECENT_ORDER_CACHE.pop(stk_cd, None) 
+            RECENT_ORDER_CACHE.pop(stk_cd, None)
             return
 
         # =========================================================
@@ -367,34 +392,23 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             mode = 'qty'
             val_str = '1'
             
-        # [V2.0] 매수 방식 결정 (시장가 vs 현재가)
-        price_types = cached_setting('strategy_price_types', {})
-        p_type = price_types.get(mode, 'market')
+        # 기본 수량
+        qty = 1
         
-        trde_tp = '3' # 기본: 시장가
-        ord_uv = '0'  # 시장가는 가격 0
-        
-        # 가격 확인 (실시간 -> API)
-        current_price = 0
-        if trade_price:
-            current_price = int(trade_price)
-        
-        if current_price == 0:
-            try:
-                _, current_price = get_current_price(stk_cd, token=token)
-            except: pass
-            
-        if p_type == 'current' and current_price > 0:
-            trde_tp = '0' # 지정가
-            ord_uv = str(current_price)
-            # pretty_log("📍", "현재가", f"{current_price:,}원", stk_cd)
-
         try:
             if mode == 'qty':
                 # 고정 수량
                 qty = int(val_str.replace(',', ''))
             
             elif mode in ['amount', 'percent']:
+                # 가격 확인 (실시간 -> API)
+                current_price = 0
+                if trade_price:
+                    current_price = int(trade_price)
+                
+                if current_price == 0:
+                    _, current_price = get_current_price(stk_cd, token=token)
+                    
                 if current_price > 0:
                     if mode == 'amount':
                         target_amt = int(val_str.replace(',', ''))
@@ -416,10 +430,13 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             print(f"⚠️ [매수전략] 계산 오류 (기본 1주): {e}")
             qty = 1
 
-        result = buy_stock(stk_cd, qty, ord_uv, trde_tp=trde_tp, token=token)
+        result = buy_stock(stk_cd, qty, '0', token=token)
         
         # [추가] 매수 성공 시 세션 로그에 기록하기 위해 가격 정보 준비
-        final_price = current_price
+        try:
+            _, final_price = get_current_price(stk_cd, token=token)
+        except:
+            final_price = current_price if 'current_price' in locals() else 0
         
         if isinstance(result, tuple) or isinstance(result, list):
             ret_code = result[0]
@@ -431,17 +448,14 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
         is_success = str(ret_code) == '0' or ret_code == 0
         
         if is_success:
+            from trade_logger import session_logger
             # [수정] set.add -> dict 갱신
             current_qty = ACCOUNT_CACHE['holdings'].get(stk_cd, 0)
             ACCOUNT_CACHE['holdings'][stk_cd] = current_qty + qty
-            
-            # [신규] 중복 로그 방지를 위해 주문 캐시 즉시 업데이트 (rt_search 필터링용)
-            RECENT_ORDER_CACHE[stk_cd] = time.time()
-            
             s_name = get_stock_name_safe(stk_cd, token)
             
             # 세션 매수 기록
-            session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=mode)
+            session_logger.record_buy(stk_cd, s_name, qty, final_price)
             
             # [수정] 비동기 처리: 종목별 검색 조건명 및 전략 저장
             if seq_name:
@@ -459,17 +473,18 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
             log_color = color_map.get(mode, '#00ff00')
             
-            # [Lite V1.0] 다이어트 로그 (한 줄 요약 적용) - 음수 가격 방지(abs)
-            log_msg = f"<font color='{log_color}'>⚡<b>[매수체결]</b> {s_name} ({abs(final_price):,}원/{qty}주)"
+            # [Lite V1.0] 다이어트 로그 (한 줄 요약 적용)
+            log_msg = f"<font color='{log_color}'>⚡<b>[매수체결]</b> {s_name} ({final_price:,}원/{qty}주)"
             if seq_name: log_msg += f" <b>[{seq}. {seq_name}]</b>"
             log_msg += "</font>"
             print(log_msg)
             
             # [신규] 텔레그램 전송 추가
-            tel_send(f"⚡[{qty}주 매수가동]⚡ {s_name} ({abs(final_price):,}원)")
+            tel_send(f"⚡[{qty}주 매수가동]⚡ {s_name} ({final_price:,}원)")
 
             # [신규] 전략별 음성 안내 추가 (조건식 이름 포함)
             # [수정] voice_guidance 설정값 확인 (기본값 True)
+            from get_setting import get_setting
             if get_setting('voice_guidance', True):
                 voice_map = {'qty': '한주', 'amount': '금액', 'percent': '비율'}
                 strategy_voice = voice_map.get(mode, '매수')
@@ -485,15 +500,8 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             
         else:
             s_name = get_stock_name_safe(stk_cd, token)
-            # [사용자 요청] 매수증거금 부족 시 종목명 포함 커스텀 로그
-            if "매수증거금이 부족합니다" in ret_msg:
-                print(f"<font color='#e91e63'>❌ <b>[{s_name}]</b> 매수증거금이 부족합니다.</font>")
-            else:
-                # 그 외 에러는 상세 내용 표시
-                print(f"❌ 매수 실패 [{s_name}]: [{ret_code}] {ret_msg}")
-                
-            # [Fix] 수동 매수 등의 재시도를 위해 실패 시 주문 캐시에서 제거
-            RECENT_ORDER_CACHE.pop(stk_cd, None)
+            pretty_log("❌", "주문실패", s_name, stk_cd, is_error=True)
+            print(f"   ㄴ 사유: {ret_msg}") # [수정] 코드 제거
             
     except Exception as e:
         s_name = get_stock_name_safe(stk_cd, token)
@@ -508,6 +516,8 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
 # [신규] 조건식 매핑 업데이트 (HTS 매매 등 외부 요인)
 def update_stock_condition(code, name='직접매매', strat='qty', time_val=None):
     try:
+        from get_setting import get_setting
+        import sys
         
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)

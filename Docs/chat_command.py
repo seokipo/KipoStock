@@ -192,8 +192,7 @@ class ChatCommand:
                 print(f"⚠️ 계좌 정보 초기화 중 오류: {e} - 계속 진행합니다.")
                 balance_raw = 0
             
-            acnt_no = ACCOUNT_CACHE.get('acnt_no')
-            success = await self.rt_search.start(token, acnt_no=acnt_no)
+            success = await self.rt_search.start(token, acnt_no=None)
             if success:
                 self.check_n_sell_task = asyncio.create_task(self._check_n_sell_loop())
                 self.account_sync_task = asyncio.create_task(self._account_sync_loop())
@@ -261,56 +260,40 @@ class ChatCommand:
             tel_send("⏳ <b>리포 데이터를 전산 수집 중입니다. 잠시만 기다려 주세요...</b>")
             
             # 1. 당일 매매 일지 (오늘 전체 거래 내역) 출력 및 CSV 저장
-            # today()를 호출하며 return_text=True로 텍스트 데이터를, return_stats=True로 통계 데이터를 받아옵니다.
-            diary_text, stats = await self.today(summary_only=False, return_text=True, return_stats=True)
+            # today()를 호출하며 return_text=True로 텍스트 데이터를 받아옵니다.
+            diary_text = await self.today(summary_only=False, return_text=True)
             
             # 2. 계좌 정보 및 세션 수익 수집
             if not self.token: self.get_token()
             loop = asyncio.get_event_loop()
             
             # 예수금 조회
-            balance_res = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
-            if balance_res and isinstance(balance_res, dict):
-                 balance_raw = balance_res.get('balance', 0)
-            else:
-                 balance_raw = balance_res # 기존 호환성 (V1.5 등)
-
+            balance_raw = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
             balance_str = f"{int(balance_raw):,}원" if balance_raw else "조회 실패"
             
             # 보유 종목 조회
-            account_data_raw = await loop.run_in_executor(None, fn_kt00004, False, 'N', '', self.token)
-            if isinstance(account_data_raw, dict):
-                account_data = account_data_raw.get('stocks', [])
-            else:
-                account_data = account_data_raw
+            account_data = await loop.run_in_executor(None, fn_kt00004, False, 'N', '', self.token)
             
             # 현재 세션(프로그램 가동 이후) 수익 리포트
             session_report = session_logger.get_session_report()
             
             # 3. 종합 요약 메시지 구성 (GUI 표시용)
             msg = "\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            msg += "📂 <b>[ 매수전략별 매매현황 ]</b>\n"
-            if stats:
-                dsc = stats.get('daily_strat_counts', {})
-                msg += f"   🔹 1주 매수: {dsc.get('qty', 0)} 건\n"
-                msg += f"   🔹 금액 매수: {dsc.get('amount', 0)} 건\n"
-                msg += f"   🔹 비율 매수: {dsc.get('percent', 0)} 건\n"
-                msg += f"   🔹 HTS 매수: {dsc.get('HTS', 0) + dsc.get('none', 0)} 건\n" # HTS 및 지정되지 않은 건 통합
-            else:
-                msg += "   (매매 내역 데이터를 집계할 수 없습니다)\n"
-            msg += "────────────────────────────────────────\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += "🏦 <b>[ 계좌 현황 및 세션 실적 요약 ]</b>\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"💳 <b>현금 잔고(예수금):</b> {balance_str}\n"
+            msg += "─────────────────────\n"
             
-            msg += "📂 <b>[오늘 매매현황]</b>\n"
-            if stats:
-                msg += f"   🔹 총매수 : {stats.get('total_buy', 0):,}\n"
-                msg += f"   🔹 총매도 : {stats.get('total_sell', 0):,}\n"
-                msg += f"   🔹 세금외 : {stats.get('total_tax', 0):,}\n"
-                msg += f"   ✨ 손  익 : <font color='#28a745'><b>{stats.get('total_pnl', 0):+,}원 ({stats.get('avg_pnl_rt', 0):+.2f}%)</b></font>\n"
+            msg += "📂 <b>[오늘 프로그램 가동 실적]</b>\n"
+            if session_report:
+                msg += f"   🔹 총 매입: {session_report['total_buy']:,}원\n"
+                msg += f"   🔹 총 매도: {session_report['total_sell']:,}원\n"
+                msg += f"   ✨ 실현손익: <font color='#28a745'><b>{session_report['total_pnl']:+,}원 ({session_report['total_rt']:+.2f}%)</b></font>\n"
             else:
-                msg += "   (당일 매매 데이터를 불러올 수 없습니다)\n"
+                msg += "   (현재 가동 중 매매 내역이 없습니다)\n"
             
-            msg += "────────────────────────────────────────\n"
+            msg += "─────────────────────\n"
             msg += "📈 <b>[현재 보유 종목]</b>\n"
             if account_data:
                 for s in account_data:
@@ -320,7 +303,7 @@ class ChatCommand:
                     msg += f"{emoji} {s['stk_nm']}: <font color='{color}'>{pl_rt:+.2f}% ({int(s['pl_amt']):,}원)</font>\n"
             else:
                 msg += "   현재 보유 중인 종목이 없습니다.\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg += "━━━━━━━━━━━━━━━━━━━━━\n"
             
             tel_send(msg)
             
@@ -362,7 +345,7 @@ class ChatCommand:
             tel_send(f"❌ <b>리포트 생성 중 오류 발생:</b> {e}")
             return False
 
-    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False, return_stats=False):
+    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False):
         """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금 + ka10076 체결시간복원)"""
         print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
         try:
@@ -446,7 +429,6 @@ class ChatCommand:
                              is_restored = True
                              if strat_nm == '--': 
                                  strat_nm = "HTS"
-                                 strat_key = "HTS" # [신규] 통계용 키 명시
                                  cond_name = "외부체결(복원)"
 
                     current_time_str = datetime.now().strftime("%H:%M:%S")
@@ -498,28 +480,19 @@ class ChatCommand:
             total_tax = sum(r['tax'] for r in processed_data)
             total_pnl = sum(r['pnl'] for r in processed_data)
             count = len(processed_data)
-            
-            # [신규] 당일 전체 전략별 매수 건수 집계 (당일 매수가 발생한 종목만 카운트)
-            daily_strat_counts = {'qty': 0, 'amount': 0, 'percent': 0, 'HTS': 0, 'none': 0}
-            for r in processed_data:
-                # 당일 매수 수량이 0보다 큰 경우에만 매수 전략으로 집계
-                if r.get('buy_qty', 0) > 0:
-                    s_key = r.get('strat_key', 'none')
-                    daily_strat_counts[s_key] = daily_strat_counts.get(s_key, 0) + 1
-
             avg_pnl_rt = (total_pnl / abs(total_b_amt) * 100) if abs(total_b_amt) > 100 else 0
 
             if summary_only:
                 summary_msg = "<b>📝 [ 당일 매매 요약 리포트 ]</b>\n"
-                summary_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                summary_msg += "━━━━━━━━━━━━━━━\n"
                 summary_msg += f"🔹 거래종목: {count}건\n"
                 summary_msg += f"🔹 총 매수: {total_b_amt:,}원\n"
                 summary_msg += f"🔹 총 매도: {total_s_amt:,}원\n"
-                summary_msg += "──────────────────────────────────────────\n"
+                summary_msg += "────────────────\n"
                 summary_msg += f"💸 제세공과: {total_tax:,}원\n"
                 summary_msg += f"✨ 실현손익: <b>{total_pnl:+,}원</b>\n"
                 summary_msg += f"📈 최종수익률: <b>{avg_pnl_rt:+.2f}%</b>\n"
-                summary_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                summary_msg += "━━━━━━━━━━━━━━━"
                 
                 if send_telegram:
                     real_tel_send(summary_msg, parse_mode='HTML')
@@ -531,7 +504,7 @@ class ChatCommand:
             display_rows = [] 
             tel_rows = []     
             
-            h_line = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            h_line = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             header = " [시간] [전략] 종목     |  매수액  |  매도액  |  세금  | 손익(수익률) \n"
             
             display_rows.append(h_line + header + h_line)
@@ -557,7 +530,7 @@ class ChatCommand:
                 display_rows.append(f"<font color='{row_color}'>{row_content}</font>")
                 tel_rows.append(row_tel)
 
-            d_ft = "----------------------------------------------------------------------------------\n"
+            d_ft = "--------------------------------------------------------------------------------------------\n"
             display_rows.append(d_ft)
             tel_rows.append(d_ft)
             
@@ -614,22 +587,7 @@ class ChatCommand:
             except Exception as save_err: 
                 print(f"❌ csv 저장 오류: {save_err}")
 
-            # [신규] 통계 데이터 구성 (TOTAL 합계 섹션 및 전략 통계 연동)
-            stats_data = {
-                'total_buy': total_b_amt,
-                'total_sell': total_s_amt,
-                'total_tax': total_tax,
-                'total_pnl': total_pnl,
-                'avg_pnl_rt': avg_pnl_rt,
-                'count': count,
-                'daily_strat_counts': daily_strat_counts
-            }
-
-            # [신규] 결과 반환 로직 확장 (report에서 텍스트와 통계를 모두 쓰기 위함)
-            if return_stats and return_text:
-                return "".join(display_rows), stats_data
-            if return_stats:
-                return stats_data
+            # [신규] 결과 텍스트 반환 (report에서 사용)
             if return_text:
                 return "".join(display_rows)
             return True

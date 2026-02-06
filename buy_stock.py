@@ -4,7 +4,7 @@ from config import host_url
 from login import fn_au10001 as get_token
 
 # 주식 매수주문
-def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=None):
+def fn_kt10000(stk_cd, ord_qty, ord_uv, trde_tp='3', cont_yn='N', next_key='', token=None):
     endpoint = '/api/dostk/ordr'
     url =  host_url + endpoint
 
@@ -21,7 +21,7 @@ def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=None):
         'stk_cd': stk_cd,
         'ord_qty': str(ord_qty), 
         'ord_uv': str(ord_uv),   
-        'trde_tp': '3',          # 3:시장가
+        'trde_tp': trde_tp,          # 3:시장가, 0:지정가(현재가)
         'cond_uv': '',
     }
 
@@ -33,16 +33,16 @@ def fn_kt10000(stk_cd, ord_qty, ord_uv, cont_yn='N', next_key='', token=None):
         try:
             res_json = response.json()
             ret_code = res_json.get('return_code')
-            if str(ret_code) != '0':
-                 print(f"❌ 매수 API 실패 응답: {res_json.get('return_msg')}")
-            return ret_code
+            ret_msg = res_json.get('return_msg', '')
+            
+            # [수정] 내부 print 삭제 및 (코드, 메시지) 튜플 반환
+            return ret_code, ret_msg
+            
         except:
-            print("❌ 응답 파싱 실패:", response.text)
-            return "-1"
+            return "-1", f"응답 파싱 실패: {response.text}"
 
     except Exception as e:
-        print(f"❌ API 요청 중 에러: {e}")
-        return "-1"
+        return "-1", f"API 요청 중 에러: {e}"
 
 if __name__ == '__main__':
     # 테스트

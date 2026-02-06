@@ -2,10 +2,12 @@ import asyncio
 import websockets
 import json
 from config import socket_url
-from check_n_buy import chk_n_buy, update_account_cache, RECENT_ORDER_CACHE
+import time 
 from get_setting import get_setting
 from login import fn_au10001 as get_token
 from market_hour import MarketHour
+from tel_send import tel_send
+import time # [추가]
 
 class RealTimeSearch:
     def __init__(self, on_connection_closed=None):
@@ -60,6 +62,29 @@ class RealTimeSearch:
                 trnm = response.get('trnm')
 
                 # --- 1. 로그인 성공 시 목록 요청 ---
+                # [HTS 추적용] 원본 데이터 스니퍼 (모든 수신 메시지 가시화)
+                # PING은 너무 잦으므로 제외
+                if trnm not in ['PING', 'REG']:
+                    pass # 아래에서 상세 처리
+                
+                # [디버그] 사용자 요청: 서버 소식 가감없이 띄우기
+                if trnm in ['REAL', 'RSCN', 'CNSR']:
+                    # HTS 관련 신호(이름에 '주문'이나 '계좌' 포함)면 RAW 데이터 출력
+                    is_account_msg = False
+                    if trnm == 'REAL':
+                        for item in response.get('data', []):
+                            if '주문' in item.get('name', '') or '계좌' in item.get('name', ''):
+                                is_account_msg = True
+                                break
+                    if is_account_msg or trnm == 'RSCN':
+                        print(f"📡 [RAW_LIVE] {trnm}: {response}")
+
+                # [🎰 마스터 스니퍼] 사용자 요청: 모든 날것의 데이터(Lo-data) 노출
+                # PING은 조용히 넘어가고 나머지는 가감 없이 출력 (사용자 요청으로 OFF)
+                # if trnm in ['REAL', 'RSCN', 'CNSR']:
+                    # [디버그] 서버가 보내는 모든 비밀 편지를 자기가 직접 눈으로 확인!
+                    # print(f"📡 [LO-DATA] {trnm}: {response}")
+
                 if trnm == 'LOGIN':
                     if response.get('return_code') == 0:
                         print('✅ 로그인 성공 (조건식 이름 가져오는 중...)')
@@ -133,23 +158,21 @@ class RealTimeSearch:
                     # print(f"📝 [CNSR_RAW] {raw_message}")
 
                     if data:
-                        # [Lite V1.0] 한 번에 검출되는 종목 수를 절반으로 제한 (최소 1개)
-                        orig_count = len(data)
-                        data = data[:max(1, orig_count // 2)]
-                        if orig_count > 1:
-                            print(f"✂️ [Lite] 종목 제한: {orig_count}개 -> {len(data)}개")
-                            
+                        # [Lite] 종목 제한 해제 (GOLD 버전: 모든 신호를 고속으로 처리)
+                        # data = data[:max(1, orig_count // 2)]
+                        
                         stock_list = []
                         for item in data:
                             jmcode = item.get('stk_cd') or item.get('code') or (item.get('values') or {}).get('9001')
                             if jmcode:
                                 jmcode = jmcode.replace('A', '')
                                 stock_list.append(jmcode)
-                                if seq != '': # 00번 검색식('0')도 저장되도록 수정
+                                if seq != '': 
                                     self.stock_origin_map[jmcode] = seq
                         
                         if stock_list:
-                            print(f"📡 [검색검출] {seq}번({self.condition_map.get(seq, '이름모름')}): {', '.join(stock_list)}")
+                            # [최적화] 노이즈 방지를 위해 로그는 한 줄로 간결성 유지
+                            print(f"📡 [검색검출] {seq}번({self.condition_map.get(seq, '이름모름')}): {len(stock_list)}종목")
 
                         # 위에서 정규화된 data 사용
                         for item in data:
@@ -175,6 +198,7 @@ class RealTimeSearch:
                                 # [신규] 매매 가능 시간인지 최종 확인 (3중 방어)
                                 if not MarketHour.is_waiting_period():
                                     # 즉시 매수 스레드로 던짐 (seq, price 전달)
+                                    from check_n_buy import chk_n_buy
                                     loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name)
                                 else:
                                     pass # print(f"⏳ [대외시간] {jmcode} 매수 건너뜀 (설정 시간 외)")
@@ -192,70 +216,84 @@ class RealTimeSearch:
                             qty = values.get('1004', '0')  # 체결량
                             
                             if jmcode:
+                                from check_n_buy import RECENT_ORDER_CACHE, save_buy_time, update_stock_condition
                                 # 시간 포맷 (HH:MM:SS)
-                                f_time = f"{tm[:2]}:{tm[2:4]}:{tm[4:]}" if tm and len(tm) == 6 else ""
+                                f_time = f"{tm[:2]}:{tm[2:4]}:{tm[4:]}" if tm and len(tm) == 6 else datetime.now().strftime("%H:%M:%S")
                                 s_name = self.condition_map.get(jmcode, jmcode)
                                 
-                                # 포맷팅 (가격/수량)
                                 try: price_f = f"{int(price):,}"
                                 except: price_f = price
                                 
-                                # [사용자 요청] 노란색 강조 및 직접매매 표시
                                 icon = "⚡" if tp == '2' else "🔥"
-                                status_txt = "[매수체결]" if tp == '2' else "[매도체결]"
-                                log_color = "#ffc107" # 노란색 (Yellow)
+                                status_txt = "[HTS매수]" if tp == '2' else "[HTS매도]"
+                                log_color = "#ffc107" if tp == '2' else "#00b0f0"
                                 
-                                log_msg = f"<font color='{log_color}'>{icon} <b>{status_txt}</b> {s_name} ({price_f}원/{qty}주) [직접매매]</font>"
-                                print(log_msg)
-                                
-                                # 폴링 로그 중복 방지를 위해 캐시 업데이트
+                                # [중복방지] 자동 매수 직후(5초 이내) 신호는 생략
+                                last_bot_order = RECENT_ORDER_CACHE.get(jmcode, 0)
+                                if time.time() - last_bot_order < 5.0:
+                                    RECENT_ORDER_CACHE[jmcode] = time.time()
+                                    continue
+
+                                print(f"<font color='{log_color}'>{icon} <b>{status_txt}</b> {s_name} ({price_f}원/{qty}주) [HTS체결]</font>")
                                 RECENT_ORDER_CACHE[jmcode] = time.time()
                                 
-                                if tp == '2': # 매수 시에만 처리
-                                    # 저장 로직 호출
-                                    from check_n_buy import save_buy_time, update_stock_condition, RECENT_ORDER_CACHE
-                                    if f_time:
-                                        # [중복방지] HTS 매수 감지 시 즉시 캐시 업데이트하여 자동 매수 차단
-                                        RECENT_ORDER_CACHE[jmcode] = time.time()
-                                        save_buy_time(jmcode, f_time)
-                                        update_stock_condition(jmcode, name='직접매매', strat='HTS', time_val=f_time)
-                                    
-                                    from tel_send import tel_send
-                                    tel_send(f"🕵️ [HTS매수] {s_name} ({f_time}) {price_f}원/{qty}주")
-                                else: # 매도 시
-                                    from tel_send import tel_send
-                                    tel_send(f"🕵️ [HTS매도] {s_name} ({f_time}) {price_f}원/{qty}주")
+                                if tp == '2': # 매수
+                                    save_buy_time(jmcode, f_time)
+                                    update_stock_condition(jmcode, name='직접매매', strat='HTS', time_val=f_time)
+                                    tel_send(f"🕵️ [HTS매수전파] {s_name} {price_f}원 ({qty}주)")
+                                else: # 매도
+                                    tel_send(f"🕵️ [HTS매도전파] {s_name} {price_f}원 ({qty}주)")
 
                 # --- 4. 기타 메시지 ---
                 elif trnm == 'REAL':
                     data = response.get('data')
                     if isinstance(data, list):
                         for item in data:
-                            # [신규] 주문체결 REAL 메시지 감지 (dostk 서버 특성 반영)
-                            if item.get('name') == '주문체결':
+                            # [HTS 감지 핵심] '주문체결' 또는 '잔고변경' 등 계좌 관련 신호 정밀 체크
+                            target_name = item.get('name', '')
+                            if '주문체결' in target_name or '계좌' in target_name:
                                 values = item.get('values') or {}
                                 jmcode = values.get('9001', '').replace('A', '')
+                                if not jmcode: jmcode = item.get('item', '').replace('A', '') # fallback
+                                
                                 s_name = values.get('302', jmcode)
                                 order_type = values.get('905', '') # 예: '+매수', '-매도'
                                 order_stat = values.get('913', '') # 예: '접수', '체결'
                                 qty = values.get('900', '0')
                                 
-                                # 매수/매도 구분
+                                # [핵심] 9201 필드로 계좌번호가 넘어오는지 체크 (이게 일치해야 HTS 감지 성공)
+                                msg_acnt = values.get('9201', '알수없음')
+                                
                                 is_buy = '매수' in order_type
-                                tag = "[HTS매수]" if is_buy else "[HTS매도]"
-                                color = "#ffc107" if is_buy else "#00b0f0" # 노랑 vs 파랑
+                                tag_pre = "[HTS접수]"
+                                tag_done = "[HTS체결]"
+                                color = "#ffc107" if is_buy else "#00b0f0"
                                 
-                                # 로그 출력 (접수 등은 생략하고 체결만 출력)
-                                if '체결' in order_stat:
-                                    print(f"<font color='{color}'>⚡ <b>{tag}</b> {s_name} ({order_stat}) {qty}주 [실시간]</font>")
-                                
-                                # 캐시 업데이트 (Polling 중복 방지)
                                 from check_n_buy import RECENT_ORDER_CACHE, save_buy_time, update_stock_condition
-                                RECENT_ORDER_CACHE[jmcode] = time.time()
                                 
-                                if is_buy and '체결' in order_stat:
-                                    save_buy_time(jmcode)
-                                    update_stock_condition(jmcode, name='직접매매', strat='HTS')
+                                # 1. 접수 로그 (최초 1회만, 계좌번호 포함해서 선명하게!)
+                                if '접수' in order_stat or '주문' in order_stat:
+                                    print(f"<font color='{color}'>📝 <b>{tag_pre}</b> {s_name} ({order_stat}) {qty}주 (계좌:{msg_acnt})</font>")
+                                
+                                # 2. 체결 처리
+                                if any(x in order_stat for x in ['체', '완', '정', '량', '완체']):
+                                    # [핵심] 5초 락은 유지하되 HTS 매매는 무조건 로그는 남김 (텔레그램만 제어할 수도 있음)
+                                    last_bot_order = RECENT_ORDER_CACHE.get(jmcode, 0)
+                                    is_duplicate = time.time() - last_bot_order < 5.0
+                                    
+                                    if not is_duplicate:
+                                        print(f"<font color='{color}'>⚡ <b>{tag_done}</b> {s_name} ({order_stat}) {qty}주 [HTS매칭성공]</font>")
+                                        RECENT_ORDER_CACHE[jmcode] = time.time()
+                                        
+                                        if is_buy:
+                                            save_buy_time(jmcode)
+                                            update_stock_condition(jmcode, name='직접매매', strat='HTS')
+                                            tel_send(f"🕵️ [HTS매수전파] {s_name} {qty}주 체결!")
+                                        else:
+                                            tel_send(f"🕵️ [HTS매도전파] {s_name} {qty}주 체결!")
+                                    else:
+                                        # 중복이지만 로그는 살짝 표시 (디버그용)
+                                        print(f"ℹ️ {s_name} {order_stat} 신호 수신 (자동 매수 직후 중복 필터링 중)")
                                 continue
 
                             jmcode = (item.get('values') or {}).get('9001')
@@ -291,6 +329,7 @@ class RealTimeSearch:
 
                                 # [신규] 매매 가능 시간인지 최종 확인 (3중 방어)
                                 if not MarketHour.is_waiting_period():
+                                    from check_n_buy import chk_n_buy
                                     loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name)
                                 else:
                                     # REAL 신호는 너무 잦으므로 로그 생략
@@ -386,6 +425,7 @@ class RealTimeSearch:
         # chat_command가 5초마다 하므로 여기선 60초마다 보조적으로만 수행
         while self.keep_running and self.connected:
             try:
+                from check_n_buy import update_account_cache
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, update_account_cache, self.token)
             except: pass
@@ -399,6 +439,7 @@ class RealTimeSearch:
             print("💰 계좌 정보 로딩...")
             
             # [수정] 블로킹 I/O를 스레드로 분리하여 GUI 프리징 방지
+            from check_n_buy import update_account_cache
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, update_account_cache, token)
 
@@ -414,19 +455,31 @@ class RealTimeSearch:
             self.polling_task = asyncio.create_task(self._account_polling_loop())
 
             # [신규] 실시간 체결(주문체결) 등록 - HTS 매매 즉시 감지용
-            # 계좌번호(acnt_no)가 있으면 그걸로 등록
-            reg_item = self.acnt_no if self.acnt_no else ''
-            print(f"🔔 실시간 체결 감시 등록... (계좌: {reg_item if reg_item else '전체'})")
-            # [수정] 계좌번호 미지정 시 item 필드 생략 (전체 감시 시도)
-            reg_payload_data = {'type': ['00']}
-            if reg_item:
-                reg_payload_data['item'] = [reg_item]
+            print(f"🔔 실시간 체결 감시 등록...")
+            
+            # [수정] 키움 API 가이드에 맞춰 item(계좌/종목)과 type을 명시적으로 구성
+            reg_items = []
+            acnt_no = self.acnt_no if self.acnt_no else ''
+            
+            # 1. 체결 (모든 종목 감시를 위해 빈 값)
+            reg_items.append({'item': [''], 'type': ['00']})
+            # 2. 주문체결 & 잔고변경 (계좌번호 필수)
+            if acnt_no:
+                reg_items.append({'item': [acnt_no], 'type': ['01']})
+                reg_items.append({'item': [acnt_no], 'type': ['02']})
+            else:
+                # 계좌번호가 없는 경우 빈 값으로라도 시도 (서버 세션에 기대)
+                reg_items.append({'item': [''], 'type': ['01']})
+                reg_items.append({'item': [''], 'type': ['02']})
+
+            # [🎰 스니퍼 요청] 등록할 실시간 항목들을 로그에 투명하게 공개!
+            # print(f"📊 [REG_DATA] {reg_items}") # [요청] 로그 삭제
 
             await self.send_message({ 
                 'trnm': 'REG', 
                 'grp_no': '1', 
                 'refresh': '1', 
-                'data': [reg_payload_data]
+                'data': reg_items
             })
 
             # 목록(이름)을 받아올 때까지 최대 5초 대기
