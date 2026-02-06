@@ -509,7 +509,7 @@ class KipoWindow(QMainWindow):
         center_vbox.setContentsMargins(0, 0, 0, 0)
         center_vbox.setSpacing(5)
         
-        self.lbl_main_title = QLabel("🚀 KipoStock Lite V2.64 GOLD")
+        self.lbl_main_title = QLabel("🚀 KipoStock Lite V2.5")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_main_title.setFont(QFont("ARockwell Extra Bold", 26, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
