@@ -71,6 +71,7 @@ def chk_n_sell(token=None):
             if mapping and stk_cd in mapping:
                 info = mapping[stk_cd]
                 strat_mode = info.get('strat', 'qty')
+                seq = info.get('seq') # [신규] 저장된 시퀀스 정보 추출
                 
                 # [Fix] HTS(직접) 전략인 경우, 저장된 값 대신 "실시간" 전역 설정값 우선 적용
                 # 이를 통해 사용자가 GUI에서 설정을 바꾸면 즉시 반영됨 (Live Control)
@@ -143,7 +144,8 @@ def chk_n_sell(token=None):
                         sell_prc, 
                         pl_rt, 
                         pnl_amt,
-                        tax=tax_val # 보존된 세금 정보 전달
+                        tax=tax_val,
+                        seq=seq # [신규] 보존된 시퀀스 정보 전달
                     )
                 except Exception as ex:
                     print(f"⚠️ 세션 매도 기록 실패: {ex}")

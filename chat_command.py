@@ -3,6 +3,7 @@ import os
 import sys
 import asyncio
 import time
+import math
 from datetime import datetime
 import re
 from rt_search import RealTimeSearch
@@ -20,9 +21,9 @@ from check_n_sell import chk_n_sell
 from acc_val import fn_kt00004
 from market_hour import MarketHour
 from get_seq import get_condition_list
-from check_n_buy import ACCOUNT_CACHE
 from check_bal import fn_kt00001 as get_balance
 from acc_val import fn_kt00004 as get_my_stocks
+from check_n_buy import ACCOUNT_CACHE, load_json_safe
 from acc_realized import fn_kt00006 as get_realized_pnl
 from acc_diary import fn_ka10170 as get_trade_diary, fn_ka10077 as get_realized_detail, fn_ka10076 as get_exec_list
 from login import fn_au10001
@@ -60,6 +61,10 @@ class ChatCommand:
         self.on_condition_loaded = None # [신규] 목록 로드 완료 콜백
         self.on_start = None # [신규] 엔진 시작 성공 콜백
         self.on_stop = None # [신규] 엔진 정지 콜백
+        
+        # [신규] 재연결 관련 제어 변수 (v3.0 지수 백오프용)
+        self.reconnect_attempts = 0
+        self.max_reconnect_delay = 60 # 최대 대기 시간 (60초)
         
         # [신규] 시작/중지 요청 콜백 (GUI를 거쳐 실행되도록)
         self.on_start_request = None
@@ -244,21 +249,29 @@ class ChatCommand:
         self.account_sync_task = None
 
     async def _on_connection_closed(self):
-        """재연결 콜백"""
-        # [신규] 이미 시작 중인 경우(예: 시퀀스 전환, 사용자 클릭) 중복 재연결 방지
+        """재연결 콜백 (v3.0 지수 백오프 적용)"""
         if self.is_starting:
             print("🔄 [안내] 엔진 재시작 중으로 자동 재연결을 건너뜁니다.")
             return
 
         await self.stop(set_auto_start_false=False)
-        await asyncio.sleep(2)
-        await self.start()
+        
+        # 지수 백오프 대기 시간 계산: 2^attempts + random jitter (jitter는 일단 생략)
+        self.reconnect_attempts += 1
+        delay = min(self.max_reconnect_delay, 2 ** self.reconnect_attempts)
+        
+        print(f"⚠️ [재연결] 소켓 끊김 감시... {delay}초 후 재시도합니다. (시도 횟수: {self.reconnect_attempts})")
+        await asyncio.sleep(delay)
+        
+        success = await self.start()
+        if success:
+            self.reconnect_attempts = 0 # 성공 시 횟수 초기화
 
-    async def report(self):
+    async def report(self, seq=None):
         """종합 리포트: 당일 매매 일지 + 계좌 현황 + 세션 수익 + 파일 저장"""
         try:
-            print("📊 [REPORT] 종합 리포트 생성 시퀀스 시작...")
-            tel_send("⏳ <b>리포 데이터를 전산 수집 중입니다. 잠시만 기다려 주세요...</b>")
+            print(f"📊 [REPORT] {'시퀀스 '+str(seq)+' ' if seq else ''}종합 리포트 생성 시퀀스 시작...")
+            log_and_tel("⏳ <b>리포 데이터를 전산 수집 중입니다. 잠시만 기다려 주세요...</b>", parse_mode='HTML')
             
             # 1. 당일 매매 일지 (오늘 전체 거래 내역) 출력 및 CSV 저장
             # today()를 호출하며 return_text=True로 텍스트 데이터를, return_stats=True로 통계 데이터를 받아옵니다.
@@ -285,30 +298,66 @@ class ChatCommand:
                 account_data = account_data_raw
             
             # 현재 세션(프로그램 가동 이후) 수익 리포트
-            session_report = session_logger.get_session_report()
+            session_report = session_logger.get_session_report(target_seq=seq)
+            
+            # [신규] 퀀트 분석 지표 수집 (v3.1)
+            # 시퀀스 리포트일 경우 session_report를, 종합 리포트일 경우 stats(당일 전체)를 활용
+            q_metrics = session_report if seq else stats
             
             # 3. 종합 요약 메시지 구성 (GUI 표시용)
             msg = "\n"
             msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            title_prefix = f"시퀀스 {seq} " if seq else ""
+            msg += f"🚀 <b>[ KipoStock v3.1 {title_prefix}분석 리포트 ]</b>\n"
+            msg += "────────────────────────────────────────\n"
+            
+            if q_metrics:
+                wr = q_metrics.get('win_rate', 0)
+                mdd = q_metrics.get('mdd', 0)
+                sr = q_metrics.get('sharpe_ratio', 0)
+                pf = q_metrics.get('profit_factor', 0)
+                pr = q_metrics.get('payoff_ratio', 0)
+                ex = q_metrics.get('expectancy', 0)
+                
+                # 승률 색상 (70% 이상 빨간색, 40% 이하 파란색)
+                wr_color = "#ff4444" if wr >= 70 else ("#33b5e5" if wr <= 40 else "#ffffff")
+                pf_color = "#ff4444" if pf >= 2.0 else ("#33b5e5" if pf < 1.0 else "#ffffff")
+                
+                msg += f"   📊 <b>승  률 :</b> <font color='{wr_color}'><b>{wr:.1f}%</b></font>\n"
+                msg += f"   💰 <b>PF(Profit Factor) :</b> <font color='{pf_color}'><b>{pf:.2f}</b></font>\n"
+                msg += f"   ⚖️ <b>손익비(Payoff Ratio) :</b> <b>{pr:.2f}</b>\n"
+                msg += f"   🎯 <b>매매 기댓값 :</b> <font color='#ffbb33'><b>{int(ex):,}원</b></font>\n"
+                msg += f"   📉 <b>MDD(최대낙폭) :</b> <font color='#ffbb33'><b>{int(mdd):,}원</b></font>\n"
+                msg += f"   📈 <b>샤프 지수 :</b> <b>{sr:.2f}</b>\n"
+                msg += "────────────────────────────────────────\n"
+
             msg += "📂 <b>[ 매수전략별 매매현황 ]</b>\n"
-            if stats:
-                dsc = stats.get('daily_strat_counts', {})
-                msg += f"   🔹 1주 매수: {dsc.get('qty', 0)} 건\n"
-                msg += f"   🔹 금액 매수: {dsc.get('amount', 0)} 건\n"
-                msg += f"   🔹 비율 매수: {dsc.get('percent', 0)} 건\n"
-                msg += f"   🔹 HTS 매수: {dsc.get('HTS', 0) + dsc.get('none', 0)} 건\n" # HTS 및 지정되지 않은 건 통합
+            # [수정] 시퀀스 리포트일 경우 session_report의 strat_counts 사용
+            target_strat_counts = q_metrics.get('strat_counts', {}) if seq and q_metrics else (stats.get('daily_strat_counts', {}) if stats else {})
+            
+            if target_strat_counts:
+                msg += f"   🔹 1주 매수: {target_strat_counts.get('qty', 0)} 건\n"
+                msg += f"   🔹 금액 매수: {target_strat_counts.get('amount', 0)} 건\n"
+                msg += f"   🔹 비율 매수: {target_strat_counts.get('percent', 0)} 건\n"
+                msg += f"   🔹 HTS 매수: {target_strat_counts.get('HTS', 0) + target_strat_counts.get('none', 0)} 건\n"
             else:
                 msg += "   (매매 내역 데이터를 집계할 수 없습니다)\n"
             msg += "────────────────────────────────────────\n"
             
-            msg += "📂 <b>[오늘 매매현황]</b>\n"
-            if stats:
-                msg += f"   🔹 총매수 : {stats.get('total_buy', 0):,}\n"
-                msg += f"   🔹 총매도 : {stats.get('total_sell', 0):,}\n"
-                msg += f"   🔹 세금외 : {stats.get('total_tax', 0):,}\n"
-                msg += f"   ✨ 손  익 : <font color='#28a745'><b>{stats.get('total_pnl', 0):+,}원 ({stats.get('avg_pnl_rt', 0):+.2f}%)</b></font>\n"
+            msg += f"📂 <b>[{title_prefix if title_prefix else '오늘 '}매매현황]</b>\n"
+            # [수정] 성과 지표도 q_metrics(시퀀스 우선) 기준으로 표시
+            target_data = q_metrics if seq and q_metrics else stats
+            
+            if target_data:
+                total_pnl = target_data.get('total_pnl', 0)
+                pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
+                
+                msg += f"   🔹 총매수 : {target_data.get('total_buy', 0):,}\n"
+                msg += f"   🔹 총매도 : {target_data.get('total_sell', 0):,}\n"
+                msg += f"   🔹 세금외 : {target_data.get('total_tax', 0):,}\n"
+                msg += f"   ✨ 손  익 : <font color='{pnl_color}'><b>{total_pnl:+,}원 ({target_data.get('total_rt', target_data.get('avg_pnl_rt', 0)):+.2f}%)</b></font>\n"
             else:
-                msg += "   (당일 매매 데이터를 불러올 수 없습니다)\n"
+                msg += "   (데이터를 불러올 수 없습니다)\n"
             
             msg += "────────────────────────────────────────\n"
             msg += "📈 <b>[현재 보유 종목]</b>\n"
@@ -322,7 +371,7 @@ class ChatCommand:
                 msg += "   현재 보유 중인 종목이 없습니다.\n"
             msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             
-            tel_send(msg)
+            log_and_tel(msg, parse_mode='HTML')
             
             # 4. 전체 리포트 텍스트 파일 저장 (TXT)
             try:
@@ -351,7 +400,7 @@ class ChatCommand:
                 with open(save_path, 'w', encoding='utf-8') as f:
                     f.write(txt_report)
                 
-                tel_send(f"<font color='#28a745'>💾 <b>종합 리포트 파일 저장 완료:</b> {filename}</font>")
+                log_and_tel(f"<font color='#28a745'>💾 <b>종합 리포트 파일 저장 완료:</b> {filename}</font>", parse_mode='HTML')
                 print(f"✅ 리포트 파일 저장 완료: {save_path}")
             except Exception as fe:
                 print(f"❌ 리포트 파일 저장 중 오류: {fe}")
@@ -359,7 +408,7 @@ class ChatCommand:
             return True
         except Exception as e:
             print(f"❌ [REPORT] 오류: {e}")
-            tel_send(f"❌ <b>리포트 생성 중 오류 발생:</b> {e}")
+            log_and_tel(f"❌ <b>리포트 생성 중 오류 발생:</b> {e}", parse_mode='HTML')
             return False
 
     async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False, return_stats=False):
@@ -396,18 +445,12 @@ class ChatCommand:
 
             cond_mapping = {}
             mapping_file = os.path.join(self.data_dir, 'stock_conditions.json')
-            if os.path.exists(mapping_file):
-                try:
-                    with open(mapping_file, 'r', encoding='utf-8') as f:
-                        cond_mapping = json.load(f)
-                except: pass
+            cond_mapping = load_json_safe(mapping_file)
 
             bt_data = {}
             try:
                 bt_path = os.path.join(self.data_dir, 'daily_buy_times.json')
-                if os.path.exists(bt_path):
-                    with open(bt_path, 'r', encoding='utf-8') as f:
-                        bt_data = json.load(f)
+                bt_data = load_json_safe(bt_path)
             except: pass
 
             processed_data = []
@@ -499,26 +542,84 @@ class ChatCommand:
             total_pnl = sum(r['pnl'] for r in processed_data)
             count = len(processed_data)
             
-            # [신규] 당일 전체 전략별 매수 건수 집계 (당일 매수가 발생한 종목만 카운트)
+            # [신규] 당일 전략별 매수 건수 집계
             daily_strat_counts = {'qty': 0, 'amount': 0, 'percent': 0, 'HTS': 0, 'none': 0}
             for r in processed_data:
-                # 당일 매수 수량이 0보다 큰 경우에만 매수 전략으로 집계
                 if r.get('buy_qty', 0) > 0:
                     s_key = r.get('strat_key', 'none')
                     daily_strat_counts[s_key] = daily_strat_counts.get(s_key, 0) + 1
 
+            # [신규] 당일 전체 퀀트 지표 계산 (v3.1)
+            win_trades = [r for r in processed_data if r['pnl'] > 0]
+            loss_trades = [r for r in processed_data if r['pnl'] < 0]
+            win_count = len(win_trades)
+            loss_count = len(loss_trades)
+            win_rate = (win_count / count * 100) if count > 0 else 0
+            
+            total_profit = sum(r['pnl'] for r in win_trades)
+            total_loss = abs(sum(r['pnl'] for r in loss_trades))
+            profit_factor = (total_profit / total_loss) if total_loss > 0 else (total_profit if total_profit > 0 else 0)
+            
+            avg_profit = (total_profit / win_count) if win_count > 0 else 0
+            avg_loss = (total_loss / loss_count) if loss_count > 0 else 0
+            payoff_ratio = (avg_profit / avg_loss) if avg_loss > 0 else 0
+            
+            win_prob = win_count / count if count > 0 else 0
+            loss_prob = loss_count / count if count > 0 else 0
+            expectancy = (win_prob * avg_profit) - (loss_prob * avg_loss)
+            
+            # MDD (오늘 거래 내역 기준)
+            peak = 0
+            current_pnl = 0
+            mdd = 0
+            for r in processed_data:
+                current_pnl += r['pnl']
+                if current_pnl > peak: peak = current_pnl
+                dd = peak - current_pnl
+                if dd > mdd: mdd = dd
+
+            # [신규] 샤프 지수 계산 (일간 수익률 변동성 대비 수익률)
+            sharpe_ratio = 0
+            returns = [r['pnl_rt'] for r in processed_data]
+            if len(returns) > 1:
+                avg_ret = sum(returns) / len(returns)
+                var = sum((x - avg_ret) ** 2 for x in returns) / (len(returns) - 1)
+                std = math.sqrt(var)
+                if std > 0:
+                    sharpe_ratio = avg_ret / std
+
             avg_pnl_rt = (total_pnl / abs(total_b_amt) * 100) if abs(total_b_amt) > 100 else 0
+            
+            # 리포트 반환용 stats 딕셔너리 구성
+            current_stats = {
+                'total_buy': total_b_amt,
+                'total_sell': total_s_amt,
+                'total_tax': total_tax,
+                'total_pnl': total_pnl,
+                'count': count,
+                'avg_pnl_rt': avg_pnl_rt,
+                'daily_strat_counts': daily_strat_counts,
+                'win_rate': win_rate,
+                'profit_factor': profit_factor,
+                'payoff_ratio': payoff_ratio,
+                'expectancy': expectancy,
+                'mdd': mdd,
+                'sharpe_ratio': sharpe_ratio
+            }
 
             if summary_only:
                 summary_msg = "<b>📝 [ 당일 매매 요약 리포트 ]</b>\n"
                 summary_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 summary_msg += f"🔹 거래종목: {count}건\n"
+                # [수정] 수익은 빨간색(#ff4444), 손실은 파란색(#33b5e5)
+                pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
+                
                 summary_msg += f"🔹 총 매수: {total_b_amt:,}원\n"
                 summary_msg += f"🔹 총 매도: {total_s_amt:,}원\n"
                 summary_msg += "──────────────────────────────────────────\n"
                 summary_msg += f"💸 제세공과: {total_tax:,}원\n"
-                summary_msg += f"✨ 실현손익: <b>{total_pnl:+,}원</b>\n"
-                summary_msg += f"📈 최종수익률: <b>{avg_pnl_rt:+.2f}%</b>\n"
+                summary_msg += f"✨ 실현손익: <font color='{pnl_color}'><b>{total_pnl:+,}원</b></font>\n"
+                summary_msg += f"📈 최종수익률: <font color='{pnl_color}'><b>{avg_pnl_rt:+.2f}%</b></font>\n"
                 summary_msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 
                 if send_telegram:
@@ -614,24 +715,16 @@ class ChatCommand:
             except Exception as save_err: 
                 print(f"❌ csv 저장 오류: {save_err}")
 
-            # [신규] 통계 데이터 구성 (TOTAL 합계 섹션 및 전략 통계 연동)
-            stats_data = {
-                'total_buy': total_b_amt,
-                'total_sell': total_s_amt,
-                'total_tax': total_tax,
-                'total_pnl': total_pnl,
-                'avg_pnl_rt': avg_pnl_rt,
-                'count': count,
-                'daily_strat_counts': daily_strat_counts
-            }
-
             # [신규] 결과 반환 로직 확장 (report에서 텍스트와 통계를 모두 쓰기 위함)
+            report_text = "".join(display_rows)
             if return_stats and return_text:
-                return "".join(display_rows), stats_data
+                return report_text, current_stats
             if return_stats:
-                return stats_data
+                return current_stats
             if return_text:
-                return "".join(display_rows)
+                return report_text
+            
+            return True
             return True
 
         except Exception as e:

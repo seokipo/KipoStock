@@ -332,7 +332,7 @@ class KipoWindow(QMainWindow):
         # [최우선] 현재 프로필 기본값 M으로 선언 (UI 초기화 시 참조됨)
         self.current_profile_idx = "M"
 
-        self.setWindowTitle("🚀 KipoStock Lite V2.5 GOLD")
+        self.setWindowTitle("🚀 KipoStock v3.1 DIAMOND")
         # 파일 경로 설정 (중요: 리소스와 설정 파일 분리)
         if getattr(sys, 'frozen', False):
             # 실행 파일 위치 (settings.json, 로그 저장용)
@@ -509,7 +509,7 @@ class KipoWindow(QMainWindow):
         center_vbox.setContentsMargins(0, 0, 0, 0)
         center_vbox.setSpacing(5)
         
-        self.lbl_main_title = QLabel("🚀 KipoStock Lite V2.5")
+        self.lbl_main_title = QLabel("🚀 KipoStock v3.1 DIAMOND")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_main_title.setFont(QFont("ARockwell Extra Bold", 26, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #2c3e50;")
@@ -660,10 +660,11 @@ class KipoWindow(QMainWindow):
 
         # Time Settings (Horizontal)
         time_layout = QHBoxLayout()
+        time_layout.setSpacing(2) # [유지] 레이블-입력창 밀착 (약 절반 거리)
         
-        # Start
+        # 시작 (위치 원복: 앞 여백 제거)
         lbl_start = QLabel("시작")
-        lbl_start.setFixedWidth(25) # 너비 고정으로 가변성 억제
+        lbl_start.setFixedWidth(25)
         time_layout.addWidget(lbl_start)
         self.input_start_time = QLineEdit()
         self.input_start_time.setFixedWidth(50)
@@ -671,9 +672,10 @@ class KipoWindow(QMainWindow):
         self.input_start_time.setStyleSheet("border: 1px solid #ccc; border-radius: 4px; font-weight: bold; font-size: 14px; padding: 1px;")
         time_layout.addWidget(self.input_start_time)
         
-        time_layout.addSpacing(6) # 간격 최적화
+        # [수정] 종료 레이블의 원래 위치 유지를 위해 중간 여백 대폭 확대 (12 -> 20)
+        time_layout.addSpacing(20) 
         
-        # End
+        # 종료
         lbl_end = QLabel("종료")
         lbl_end.setFixedWidth(25)
         time_layout.addWidget(lbl_end)
@@ -877,16 +879,16 @@ class KipoWindow(QMainWindow):
 
         # Save & Profile Slots Layout
         save_profile_layout = QHBoxLayout()
-        save_profile_layout.setSpacing(6) # [수정] 6px 등간격 강제 적용
+        save_profile_layout.setSpacing(5) # [수정] 버튼 4개 배치를 위해 간격 축소 (6px -> 5px)
         
         # [삭제] 시퀀스 자동 버튼 이동 (상단으로) - 타이머는 유지
         
         # 2. 설정 저장 버튼 (그 다음)
         self.btn_save = QPushButton("💾")
-        self.btn_save.setToolTip(self._style_tooltip("💾 [설정 저장: 보관소]\n1~3번 슬롯에 현재 설정 저장"))
-        self.btn_save.setFixedSize(35, 35) # 35x35 통일
-        # [수정] 버튼 폰트 크기 조정 (20px -> 18px)
-        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 18px; padding: 0px; text-align: center;")
+        self.btn_save.setToolTip(self._style_tooltip("💾 [설정 저장: 보관소]\n1~4번 슬롯에 현재 설정 저장"))
+        self.btn_save.setFixedSize(32, 32) # [수정] 4개 버튼 배치를 위해 크기 축소 (35x35 -> 32x32)
+        # [수정] 버튼 폰트 크기 조정 (18px -> 16px)
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 16px; padding: 0px; text-align: center;")
         self.btn_save.clicked.connect(self.on_save_button_clicked)
         save_profile_layout.addWidget(self.btn_save)
 
@@ -897,11 +899,11 @@ class KipoWindow(QMainWindow):
         self.is_seq_blink_on = False
         
         self.profile_buttons = []
-        for i in range(1, 4):
+        for i in range(1, 5):
             btn = QPushButton(str(i))
-            btn.setFixedSize(35, 35) # 크기 유지
-            # [수정] 다른 버튼들과 폰트 크기(18px) 통일
-            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 18px; font-family: 'Arial';")
+            btn.setFixedSize(32, 32) # [수정] 크기 축소 (35x35 -> 32x32)
+            # [수정] 폰트 크기 조정 (18px -> 16px)
+            btn.setStyleSheet("background-color: #ffffff; border: 1px solid #999; border-radius: 4px; font-weight: 900; color: #000000; padding: 0px; font-size: 16px; font-family: 'Arial';")
             btn.setToolTip(self._style_tooltip(f"📂 [프로필 {i}번: 슬롯]\n설정 불러오기 또는 저장"))
             btn.clicked.connect(lambda checked, idx=i: self.on_profile_clicked(idx))
             save_profile_layout.addWidget(btn)
@@ -911,10 +913,10 @@ class KipoWindow(QMainWindow):
         
         # [신규] 'M' 버튼 (수동 전용)
         self.btn_manual = QPushButton("M")
-        self.btn_manual.setFixedSize(35, 35)
-        # [수정] M 버튼 초록색으로 변경 (START 버튼과 통일)
-        self.btn_manual.setStyleSheet("background-color: #28a745; border: 1px solid #1e7e34; border-radius: 4px; font-weight: 900; color: white; padding: 0px; font-size: 18px; font-family: 'Arial';")
-        self.btn_manual.setToolTip(self._style_tooltip("💚 [수동 모드: M]\n자동 시퀀스 없이 수동 시작 (1~3번은 수동 불가)"))
+        self.btn_manual.setFixedSize(32, 32) # [수정] 크기 축소 (35x35 -> 32x32)
+        # [수정] M 버튼 초록색으로 변경 (START 버튼과 통일) / 폰트 축소 (18px -> 16px)
+        self.btn_manual.setStyleSheet("background-color: #28a745; border: 1px solid #1e7e34; border-radius: 4px; font-weight: 900; color: white; padding: 0px; font-size: 16px; font-family: 'Arial';")
+        self.btn_manual.setToolTip(self._style_tooltip("💚 [수동 모드: M]\n자동 시퀀스 없이 수동 시작 (1~4번은 수동 불가)"))
         self.btn_manual.clicked.connect(lambda: self.on_profile_clicked("M"))
         save_profile_layout.addWidget(self.btn_manual)
         
@@ -1093,7 +1095,7 @@ class KipoWindow(QMainWindow):
             self.log_and_tel("⚠️ 매매 진행 중(RUNNING)에는 자동 시퀀스를 시작할 수 없습니다. 중지(STOP) 후 다시 시도하세요.")
             return
 
-        if not (1 <= idx <= 3):
+        if not (1 <= idx <= 4):
             self.append_log(f"⚠️ 올바르지 않은 프로필 번호입니다: {idx}")
             return
 
@@ -1964,7 +1966,7 @@ class KipoWindow(QMainWindow):
         if not self.is_save_mode:
             self.is_save_mode = True
             self.profile_blink_timer.start()
-            self.append_log("💡 저장할 번호(1~3, M)를 선택하세요. (다시 누르면 취소)")
+            self.append_log("💡 저장할 번호(1~4, M)를 선택하세요. (다시 누르면 취소)")
             self.btn_save.setStyleSheet("background-color: #ffc107; color: black; border-radius: 4px; font-weight: bold; font-size: 18px; padding: 0px; text-align: center; border: 1px solid #e0a800;")
         else:
             self.stop_save_mode()
@@ -2030,7 +2032,7 @@ class KipoWindow(QMainWindow):
                     et = datetime.datetime.strptime(et_str, "%H:%M").time()
                     if now_time >= et:
                         next_idx = self.current_profile_idx + 1
-                        if next_idx <= 3:
+                        if next_idx <= 4:
                             # 다음 프로필 로드 시도
                             self.append_log(f"⏩ 현재 시간({now_time.strftime('%H:%M')})이 {self.current_profile_idx}번 종료 시간({et_str})보다 늦어 다음 프로필로 건너뜁니다.")
                             self.load_settings_to_ui(profile_idx=next_idx, keep_seq_auto=True)
@@ -2076,7 +2078,7 @@ class KipoWindow(QMainWindow):
                     found_any = False
                     # [수정] 파일에서 읽는 대신 현재 UI 메모리(혹은 저장된 데이터)를 기반으로 하되
                     # 현재 프로필의 "실제 UI 상태"를 우선적으로 반영하여 리포트 출력
-                    for i in range(current_idx, 4):
+                    for i in range(current_idx, 5):
                         p = profiles.get(str(i))
                         if not p and i != current_idx: continue
                         
@@ -2229,7 +2231,7 @@ class KipoWindow(QMainWindow):
         if is_seq_auto and current_idx is not None:
             # [시퀀스 ON] 다음 프로필로 전환 시도
             next_idx = current_idx + 1
-            if next_idx <= 3: # 최대 3번 프로필까지만
+            if next_idx <= 4: # 최대 4번 프로필까지만
                 # 다음 프로필 데이터 확인
                 try:
                     if os.path.exists(self.settings_file):
@@ -2237,6 +2239,9 @@ class KipoWindow(QMainWindow):
                             settings = json.load(f)
                             if 'profiles' in settings and str(next_idx) in settings['profiles']:
                                 self.log_and_tel(f"🔄 시퀀스 자동: 프로필 {current_idx}번 종료 -> {next_idx}번으로 전환합니다.")
+                                
+                                # [신규] 시퀀스 전환 리포트 자동 출력 및 전송 (현재 시퀀스 필터링)
+                                self.worker.schedule_command('report', current_idx)
                                 
                                 # 1) 현재 설정 저장
                                 self.save_settings(profile_idx=current_idx, restart_if_running=False) # 전환 중 중복 시작 방지
@@ -2278,8 +2283,9 @@ class KipoWindow(QMainWindow):
             self.start_alarm() # 마지막 종료 알람
             self.worker.schedule_command('stop') # 매매 중단
             
-            # [수정] 중단 후 약간의 여유를 두고 최종 보고 전송 (worker에 today 추가됨)
-            QTimer.singleShot(5000, lambda: self.worker.schedule_command('today'))
+            # [수정] 중단 후 마지막 시퀀스 리포트 및 최종 종합 리포트 전송
+            QTimer.singleShot(2000, lambda: self.worker.schedule_command('report', current_idx)) # 마지막 시퀀스
+            QTimer.singleShot(7000, lambda: self.worker.schedule_command('report')) # 전체 종합
             return
 
         # [시퀀스 OFF]

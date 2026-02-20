@@ -1,5 +1,6 @@
 import requests
 import json
+import re
 from get_setting import get_setting
 from config import telegram_token, telegram_chat_id
 
@@ -19,6 +20,12 @@ def tel_send(message, parse_mode=None):
         end = start + chunk_size
         chunk = message[start:end]
         
+        # [신규] 텔레그램이 지원하지 않는 <font> 태그 제거
+        if parse_mode == 'HTML':
+            # <font color="..."> 및 </font> 제거
+            chunk = re.sub(r'<font[^>]*>', '', chunk)
+            chunk = chunk.replace('</font>', '')
+
         # HTML 모드일 때 태그가 잘리지 않도록 배려 (간단히 처리)
         if parse_mode == 'HTML' and chunk.count('<') != chunk.count('>'):
              # 마지막 '<' 위치를 찾아 그 전까지만 자름

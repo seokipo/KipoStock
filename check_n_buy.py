@@ -11,8 +11,10 @@ from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
 import subprocess
-import threading
 import queue
+import threading
+
+_FILE_LOCK = threading.Lock() # [신규] 파일 I/O 동기화를 위한 전역 락
 from get_setting import get_setting
 from trade_logger import session_logger
 
@@ -46,6 +48,7 @@ def _process_save_mapping(data):
         stk_cd = data['code']
         seq_name = data['name']
         mode = data['mode']
+        seq = data.get('seq') # [신규] 시퀀스 정보
         
         # 경로 로직 통합
         if getattr(sys, 'frozen', False):
@@ -67,6 +70,7 @@ def _process_save_mapping(data):
         mapping[stk_cd] = {
             'name': seq_name,
             'strat': mode,
+            'seq': seq, # [신규] 시퀀스 번호 저장
             'tp': specific_setting.get('tp'),
             'sl': specific_setting.get('sl'),
             'time': datetime.now().strftime("%H:%M:%S")
@@ -155,8 +159,14 @@ def update_account_cache(token):
                         
                         # [신규] HTS 매수 정보 저장
                         try:
+                            # [개선] HTS 매수 시 가격이 0이면 현재가를 가져와서 기록 (수익률 정밀도 향상)
+                            hts_price = 0
+                            try:
+                                _, hts_price = get_current_price(code, token=token)
+                            except: pass
+                            
                             update_stock_condition(code, name='직접매매', strat='HTS')
-                            session_logger.record_buy(code, s_name, diff, 0, strat_mode='HTS')
+                            session_logger.record_buy(code, s_name, diff, hts_price, strat_mode='HTS')
                         except Exception as e:
                             print(f"⚠️ [HTS저장] 메타데이터 저장 실패: {e}")
             
@@ -204,40 +214,61 @@ def get_stock_name_safe(code, token):
 
 
 # [신규] 안전한 JSON 파일 입출력 헬퍼 (Atomic Write & Retry Read)
-def load_json_safe(path, retries=3):
-    """파일을 안전하게 읽어옵니다. (Race Condition으로 인한 빈 파일 읽기 방지)"""
+def load_json_safe(path, retries=5):
+    """파일을 안전하게 읽어옵니다. (Race Condition 및 WinError 5 방지)"""
     for i in range(retries):
         try:
-            if not os.path.exists(path): return {}
-            if os.path.getsize(path) == 0: # 빈 파일이면 잠시 대기 후 재시도
-                time.sleep(0.1)
+            with _FILE_LOCK: # 스레드 간 충돌 방지
+                if not os.path.exists(path): return {}
+                if os.path.getsize(path) == 0:
+                    time.sleep(0.05 * (i + 1))
+                    continue
+                    
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except (json.JSONDecodeError, PermissionError, IOError) as e:
+            if i < retries - 1:
+                time.sleep(0.05 * (i + 1)) # 지수 백오프와 유사한 대기
                 continue
-                
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            time.sleep(0.1) # 쓰기 중일 수 있으므로 대기
-        except Exception:
-            pass
-    return {} # 최후의 수단 (이 경우에만 초기화)
+    return {}
 
-def save_json_safe(path, data):
-    """파일을 안전하게 저장합니다. (Temp 파일 + Atomic Rename)"""
-    try:
-        dir_name = os.path.dirname(path)
-        base_name = os.path.basename(path)
-        temp_path = os.path.join(dir_name, f".tmp_{base_name}_{int(time.time()*1000)}")
-        
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno()) # 디스크 기록 보장
-            
-        os.replace(temp_path, path) # Atomic Replace (Windows에서도 지원됨)
-    except Exception as e:
-        print(f"⚠️ [FileIO] 저장 실패: {e}")
-        try: os.remove(temp_path)
-        except: pass
+def save_json_safe(path, data, retries=5):
+    """파일을 안전하게 저장합니다. (Temp 파일 + Atomic Rename + Retry)"""
+    temp_path = None
+    for i in range(retries):
+        try:
+            with _FILE_LOCK:
+                dir_name = os.path.dirname(path)
+                base_name = os.path.basename(path)
+                timestamp = int(time.time()*1000)
+                temp_path = os.path.join(dir_name, f".tmp_{base_name}_{timestamp}_{i}")
+                
+                # 1. 임시 파일 쓰기
+                with open(temp_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
+                    f.flush()
+                    os.fsync(f.fileno())
+                
+                # 2. 원자적 교체
+                if os.path.exists(path):
+                    # 윈도우에서 os.replace가 WinError 5를 낼 때를 대비한 내부 재시도
+                    os.replace(temp_path, path)
+                else:
+                    os.rename(temp_path, path)
+                return True # 성공 시 즉시 리턴
+                
+        except (PermissionError, IOError) as e:
+            if i < retries - 1:
+                time.sleep(0.1 * (i + 1))
+                continue
+            else:
+                print(f"⚠️ [FileIO] 저장 최종 실패 ({path}): {e}")
+        finally:
+            # 임시 파일이 남아있다면 삭제 시도
+            if temp_path and os.path.exists(temp_path):
+                try: os.remove(temp_path)
+                except: pass
+    return False
 
 # [신규] 매수 시간 로컬 저장 함수 (Safe Version)
 def save_buy_time(code, time_val=None):
@@ -441,14 +472,15 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             s_name = get_stock_name_safe(stk_cd, token)
             
             # 세션 매수 기록
-            session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=mode)
+            session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=mode, seq=seq)
             
             # [수정] 비동기 처리: 종목별 검색 조건명 및 전략 저장
             if seq_name:
                 task_data = {
                     'code': stk_cd,
                     'name': seq_name,
-                    'mode': mode
+                    'mode': mode,
+                    'seq': seq # [신규] 시퀀스 정보 전달
                 }
                 _LOG_QUEUE.put(('save_mapping', task_data))
 
@@ -506,7 +538,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             PROCESSING_FLAGS.remove(stk_cd)
 
 # [신규] 조건식 매핑 업데이트 (HTS 매매 등 외부 요인)
-def update_stock_condition(code, name='직접매매', strat='qty', time_val=None):
+def update_stock_condition(code, name='직접매매', strat='qty', time_val=None, seq=None):
     try:
         
         if getattr(sys, 'frozen', False):
@@ -545,6 +577,7 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
         mapping[code] = {
             'name': name,
             'strat': strat,
+            'seq': seq, # [신규] 시퀀스 정보 저장
             'tp': spec_tp, 
             'sl': spec_sl,
             'time': time_val if time_val else datetime.now().strftime("%H:%M:%S")
