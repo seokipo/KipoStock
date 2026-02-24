@@ -1,9 +1,0 @@
-# 작업 목록 (Task List)
-
-- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 리포트 시간 정렬 수정 (`[--:--:--]` 적용)
-- [x] 시퀀스 자동(Sequence Auto) 고도화
-  - [x] 종료 시간 도달 시 다음 프로필(1->2->3)로 자동 전환 로직 완성
-  - [x] 프로필 전환 시 알람 및 UI 전체 동기화 적용
-  - [x] 마지막 프로필(3번) 종료 시 매입 중단 및 [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 리포트 자동 전송
-- [x] 최종 빌드 및 검증 완료 (`KipoStock_V5.2_Automation.exe`)
-- [x] 사용자 가이드 작성 및 배포

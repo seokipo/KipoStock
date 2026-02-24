@@ -1,9 +1,0 @@
-# 작업 목록 (Task List)
-
-- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#240-398) 리포트 시간 정렬 수정 (`[--:--:--]` 적용)
-- [x] 시퀀스 자동(Sequence Auto) 고도화 및 버그 수정
-  - [x] 프로필 전환 시 `Sequence Auto` 버튼 상태 유지 로직 추가
-  - [x] API 재검색 요청 시 시각적 로그 추가 및 **강제 재등록(Force Restart) 구현**
-  - [x] 프로필 전환 시 [on_start_clicked](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#691-705)가 정상 호출되어 API 등록 과정 표기 완료
-  - [x] 마지막 프로필(3번) 종료 시 매입 중단 및 리포트 전송 순서 보완
-- [x] 최종 빌드 및 검증 완료 (`KipoStock_V5.2_Automation.exe`)

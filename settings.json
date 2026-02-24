@@ -1,5 +1,5 @@
 {
-    "process_name": "KipoStock - V2.6",
+    "process_name": "KipoStock v3.5 DIAMOND",
     "auto_start": false,
     "search_seq": [
         "0",
@@ -157,5 +157,8 @@
         "8": "qty",
         "9": "qty"
     },
-    "voice_guidance": true
+    "voice_guidance": true,
+    "tel_on": true,
+    "tel_log_on": true,
+    "ui_theme": "dark"
 }

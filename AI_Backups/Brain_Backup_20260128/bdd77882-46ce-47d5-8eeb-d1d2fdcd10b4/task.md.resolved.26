@@ -1,7 +1,0 @@
-# 작업: 전략별 개별 익절/손절 설정 기능 추가
-
-- [x] PLANNING: 개별 설정 구현 계획 수립 <!-- id: 10 -->
-- [x] UI 수정: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)에 전략별 익절/손절 입력 필드 추가 <!-- id: 11 -->
-- [x] 설정 저장/로드 로직 업데이트: [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)의 [save_settings](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1293-1423), [load_settings_to_ui](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py#1204-1292) 수정 <!-- id: 12 -->
-- [x] 매도 로직 업데이트: [check_n_sell.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_sell.py)에서 전략별 설정값 적용 <!-- id: 13 -->
-- [x] 검증 및 실행 파일 재빌드 <!-- id: 14 -->

@@ -17,6 +17,7 @@ dist/
 *.csv
 *.log
 trade_log_*.csv
+LogData/
 
 # IDE 설정
 .idea/

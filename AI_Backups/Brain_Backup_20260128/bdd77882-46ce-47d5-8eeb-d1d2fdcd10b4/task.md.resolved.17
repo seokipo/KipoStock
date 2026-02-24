@@ -1,6 +1,0 @@
-# 작업: 실행 파일(EXE) 생성 및 배포
-
-- [x] 빌드 환경 및 기존 [.spec](file:///d:/Work/Python/AutoBuy/KipoStockNow/KipoStock_V5.3.9_Auto.spec) 파일 확인 <!-- id: 0 -->
-- [x] `PyInstaller`를 이용한 최신 EXE 빌드 수행 <!-- id: 1 -->
-- [x] 빌드 완료 후 실행 파일 위치 안내 및 백업 <!-- id: 2 -->
-- [ ] 최종 결과 보고 및 GitHub 백업 <!-- id: 3 -->

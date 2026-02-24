@@ -1,5 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "Plan to modify `build_exe.py` to support building `Kipo_main.py` as a console application.",
-  "updatedAt": "2026-01-19T10:01:29.650975700Z"
-}

@@ -1,7 +1,0 @@
-# 작업 목록: 압정 기능 복구 및 today 개선
-
-- [x] 코드 분석 및 계획 수립
-- [/] 압정 기능(항상 위) 정상 작동 확인 및 수정 ([Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)) [/]
-- [ ] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 명령어 결과에 정렬 기준 표시 ([chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)) [ ]
-- [ ] 도움말([help](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#480-491)) 내용 미세 조정 [ ]
-- [ ] 최종 테스트 및 재빌드 [ ]

@@ -1,7 +1,0 @@
-# 작업 목록: 오류 수정 및 UI 안정화
-
-- [x] 코드 분석 및 계획 수립
-- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 명령어 `NameError` 수정 및 역순 정렬(`-`) 구현
-- [x] 압정 핀 깜빡임 및 위치 이동 문제 해결 (Win32 API 적용 실패 후 Qt 복구/미세조정)
-- [x] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 중복 로그("조회 결과") 제거 및 통합
-- [/] 최종 테스트 및 재빌드 [/]

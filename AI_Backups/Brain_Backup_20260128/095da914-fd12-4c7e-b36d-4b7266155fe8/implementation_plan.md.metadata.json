@@ -1,6 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "모든 입력 소스(GUI, CLI, 텔레그램)의 시작/중지 명령을 UI 상태와 동기화하는 구현 계획 (한글)",
-  "updatedAt": "2026-01-27T06:01:47.061846200Z",
-  "version": "1"
-}

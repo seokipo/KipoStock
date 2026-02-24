@@ -1,8 +1,0 @@
-# Task: Fix Persistent Alarm Crash
-
-## Status
-- [/] Investigate [Kipo_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_main.py) and [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoBuy_Gui/Kipo_GUI_main.py) for alarm logic
-- [ ] Check for potential causes of crash (infinite loops, memory leaks, unhandled exceptions)
-- [ ] Test the application locally if possible
-- [ ] Implement fix
-- [ ] Verify fix

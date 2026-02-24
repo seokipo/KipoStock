@@ -1,7 +1,0 @@
-# 작업: today 명령어 개선 및 텔레그램 연동
-
-- [ ] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py): [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#264-426) 명령어의 정렬 및 파싱 로직 구현 <!-- id: 0 -->
-- [ ] [chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py): `tel today` 텔레그램 전송 및 로그 기록 기능 추가 <!-- id: 1 -->
-- [ ] 데이터 정렬 로직 검증 (시간, 전략, 조건식) <!-- id: 2 -->
-- [ ] 최신 버전 EXE 재빌드 및 안내 <!-- id: 3 -->
-- [ ] GitHub 최종 백업 <!-- id: 4 -->

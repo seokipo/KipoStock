@@ -1,6 +1,0 @@
-# 작업: TTS 개선 및 GUI 목록 수정
-
-- [ ] [check_n_buy.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/check_n_buy.py): TTS 실행 시 터미널 창 숨김 처리 (`CREATE_NO_WINDOW`) <!-- id: 0 -->
-- [ ] [Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py): 실시간 조건식 목록이 갱신되지 않는 로직 분석 및 수정 <!-- id: 1 -->
-- [ ] 빌드 및 실행 테스트 <!-- id: 2 -->
-- [ ] 최신 버전 EXE 재빌드 및 안내 <!-- id: 3 -->

@@ -541,47 +541,37 @@ class KipoWindow(QMainWindow):
             }
             
             QToolTip { 
-                background-color: #333333; 
-                color: #ffffff;
-                border: 2px solid #f1c40f; 
-                padding: 6px; 
-                border-radius: 6px;
+                background-color: #ffffff; 
+                color: #212529;
+                border: 1px solid #f1c40f; 
+                padding: 5px; 
+                border-radius: 5px;
                 font-family: 'Malgun Gothic';
-                font-size: 13px;
             }
             QGroupBox#settings_group { 
                 background-color: #ffffff; 
-                border: 2px solid #f1c40f; 
+                border: 2px solid #ced4da; 
                 border-radius: 12px; 
                 margin-top: 10px; 
                 padding-top: 8px; 
             }
-            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #f1c40f; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
+            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #ced4da; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
             
             QGroupBox#strategy_group { background-color: #ffffff; border: 2px solid #27ae60; border-radius: 12px; margin-top: 10px; padding-top: 15px; }
-            QGroupBox#strategy_group::title { color: #27ae60; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
+            QGroupBox#strategy_group::title { color: #27ae60; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top left; left: 15px; top: 0px; padding: 0 5px; }
             
             QGroupBox#profile_group { background-color: #f8f9fa; border: 2px solid #2980b9; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
-            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
+            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
             
             QGroupBox#rt_group { background-color: #f8f9fa; border: 2px solid #e67e22; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
-            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
-
-            QPushButton#btn_top { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; text-align: center; padding: 0px; }
-            QPushButton#btn_top:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
-            QPushButton#btn_top:hover { background-color: #e2e6ea; }
+            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
 
             QLineEdit#input_max { border: 2px solid #adb5bd; border-radius: 6px; padding: 2px; font-weight: bold; color: #212529; background-color: #f8f9fa; }
             QLineEdit#input_start_time { border: 1px solid #ced4da; border-radius: 4px; font-weight: bold; font-size: 14px; padding: 1px; color: #212529; background-color: #ffffff; }
             QLineEdit#input_end_time { border: 1px solid #ced4da; border-radius: 4px; font-weight: bold; font-size: 14px; padding: 1px; color: #212529; background-color: #ffffff; }
             QLineEdit#input_cmd { background-color: #ffffff; color: #212529; border: 1px solid #ced4da; border-radius: 15px; padding-left: 15px; font-size: 12px; }
             
-            QLineEdit#input_qty_val { background-color: #ffffff; border: 2px solid #e74c3c; border-radius: 6px; padding: 2px; font-weight: bold; font-size: 15px; color: #e74c3c; }
-            QLineEdit#input_amt_val { background-color: #ffffff; border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #dc3545; }
-            QLineEdit#input_pct_val { background-color: #ffffff; border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #dc3545; }
-            QLineEdit#input_hts_val { background-color: #e9ecef; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #495057; }
-            
-            QTextEdit#log_display { background-color: #1e1e1e; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 2px solid #adb5bd; border-radius: 10px; padding: 10px; }
+            QTextEdit#log_display { background-color: #ffffff; color: #333333; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 1px solid #ced4da; border-radius: 10px; padding: 10px; }
             QTextEdit#rt_list { background-color: #f8f9fa; color: #333333; border: 1px solid #ced4da; border-radius: 4px; font-family: 'Malgun Gothic'; font-size: 12px; padding: 5px; }
             """
         else:
@@ -598,49 +588,40 @@ class KipoWindow(QMainWindow):
             QMessageBox { background-color: #2a2a2a; color: #e0e0e0; }
             QMessageBox QLabel { color: #e0e0e0; }
             QMessageBox QPushButton { background-color: #34495e; color: white; border: 1px solid #2c3e50; min-width: 80px; padding: 5px; }
-            QTextEdit { background-color: #000000; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 2px solid #333; border-radius: 10px; padding: 10px; }
+            QTextEdit { background-color: #000000; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 1px solid #333; border-radius: 10px; padding: 10px; }
             QToolTip { background-color: #2c3e50; color: #f8f9fa; border: 1px solid #f1c40f; padding: 5px; border-radius: 5px; font-family: 'Malgun Gothic'; }
             
             QGroupBox#settings_group { background-color: #1a1a1a; border: 2px solid #f1c40f; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
-            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #f1c40f; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
+            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #f1c40f; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
             
             QGroupBox#strategy_group { background-color: #1a1a1a; border: 2px solid #27ae60; border-radius: 12px; margin-top: 10px; padding-top: 15px; font-weight: bold; }
-            QGroupBox#strategy_group::title { color: #2ecc71; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
+            QGroupBox#strategy_group::title { color: #2ecc71; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
             
             QGroupBox#profile_group { background-color: #1a1a1a; border: 2px solid #2980b9; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
-            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
+            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
             
             QGroupBox#rt_group { background-color: #1a1a1a; border: 2px solid #e67e22; border-radius: 12px; margin-top: 10px; padding-top: 8px; font-weight: bold; }
-            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
-
-            QPushButton#btn_top { background-color: #1a1a1a; border-radius: 5px; font-size: 18px; border: 1px solid #444; color: #888; text-align: center; padding: 0px; }
-            QPushButton#btn_top:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
-            QPushButton#btn_top:hover { background-color: #333; }
+            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; padding: 0 8px; }
 
             QLineEdit#input_max { border: 2px solid #f1c40f; border-radius: 6px; padding: 2px; font-weight: bold; color: #f1c40f; background-color: #000000; }
             QLineEdit#input_start_time { border: 1px solid #444; border-radius: 4px; font-weight: bold; font-size: 14px; padding: 1px; color: #ffffff; background-color: #1a1a1a; }
             QLineEdit#input_end_time { border: 1px solid #444; border-radius: 4px; font-weight: bold; font-size: 14px; padding: 1px; color: #ffffff; background-color: #1a1a1a; }
             QLineEdit#input_cmd { background-color: #000000; color: #f1c40f; border: 1px solid #444; border-radius: 15px; padding-left: 15px; font-size: 12px; }
             
-            QLineEdit#input_qty_val { background-color: #000000; border: 2px solid #e74c3c; border-radius: 6px; padding: 2px; font-weight: bold; font-size: 15px; color: #e74c3c; }
-            QLineEdit#input_amt_val { background-color: #000000; border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #e0e0e0; }
-            QLineEdit#input_pct_val { background-color: #000000; border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; color: #e0e0e0; }
-            QLineEdit#input_hts_val { background-color: #2a2a2a; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #aaa; }
-            
-            QTextEdit#log_display { background-color: #000000; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 2px solid #333; border-radius: 10px; padding: 10px; }
+            QTextEdit#log_display { background-color: #000000; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 1px solid #333; border-radius: 10px; padding: 10px; }
             QTextEdit#rt_list { background-color: #000000; color: #ffffff; border: 1px solid #444; border-radius: 4px; font-family: 'Malgun Gothic'; font-size: 12px; padding: 5px; }
             """
 
     def toggle_theme(self):
         """[신규] 테마 변경 토글 메서드. JSON 저장 및 런타임 CSS 갱신"""
         self.ui_theme = 'light' if self.ui_theme == 'dark' else 'dark'
-        self.btn_theme.setText("🌞" if self.ui_theme == 'light' else "🌙")
+        self.btn_theme.setText("☀️" if self.ui_theme == 'light' else "🌙")
         
         try:
             import json
             s_data = {}
             if os.path.exists(self.settings_file):
-                with open(self.settings_file, 'r', encoding='utf-8-sig') as f:
+                with open(self.settings_file, 'r', encoding='utf-8') as f:
                     s_data = json.load(f)
             s_data['ui_theme'] = self.ui_theme
             with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -650,20 +631,8 @@ class KipoWindow(QMainWindow):
             
         self.apply_theme()
         
-        # [수정] load_settings_to_ui()를 부르면 입력값이 초기화되므로, 스타일만 개별적으로 갱신
-        self.update_profile_buttons_ui()
-        for i in range(10):
-            self.update_button_style(i) # 조건식 버튼 스타일 갱신
-        
-        # 하단 컨트롤 버튼 스타일 갱신 (현재 상태 유지)
-        current_status = "READY"
-        status_text = self.lbl_status.text()
-        if "RUNNING" in status_text: current_status = "RUNNING"
-        elif "WAITING" in status_text: current_status = "WAITING"
-        self.update_status_ui(current_status)
-
-        for k in ['qty', 'amount', 'percent']:
-            self.update_price_type_style(k)
+        # [신규 추가] 프로필, 조건식 버튼 등 현재 그려진 버튼들에 새로운 톤 반영
+        self.load_settings_to_ui()
 
     def apply_theme(self):
         """현재 ui_theme 변수에 맞춰 QMainWindow 및 기본 색상을 적용합니다."""
@@ -787,31 +756,26 @@ class KipoWindow(QMainWindow):
         header_layout.addStretch()
         
         # [신규] Theme Toggle Button (📌 앞 배치)
-        self.btn_theme = QPushButton("🌞" if self.ui_theme == 'light' else "🌙")
+        self.btn_theme = QPushButton("☀️" if self.ui_theme == 'light' else "🌙")
         self.btn_theme.setFixedSize(40, 40)
         self.btn_theme.setToolTip(self._style_tooltip("💡 [테마 전환]\n클릭 시 다크 ↔ 라이트 모드 전환"))
         self.btn_theme.setStyleSheet("""
-            QPushButton { 
-                background-color: transparent; 
-                font-size: 24px; 
-                border: none; 
-                padding: 0px; 
-                text-align: center; 
-            }
-            QPushButton:hover { 
-                background-color: rgba(128, 128, 128, 0.2); 
-                border-radius: 20px; 
-            }
+            QPushButton { background-color: transparent; font-size: 22px; border: none; }
+            QPushButton:hover { background-color: rgba(128, 128, 128, 0.2); border-radius: 20px; }
         """)
         self.btn_theme.clicked.connect(self.toggle_theme)
         header_layout.addWidget(self.btn_theme)
         
         # Always on Top Button (Fixed to Right)
         self.btn_top = QPushButton("📌")
-        self.btn_top.setObjectName("btn_top")
         self.btn_top.setCheckable(True)
         self.btn_top.setFixedSize(40, 40)
         self.btn_top.setToolTip(self._style_tooltip("📍 [핀 고정: 항상 위에]\n창을 맨 앞으로 고정"))
+        self.btn_top.setStyleSheet("""
+            QPushButton { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; text-align: center; padding: 0px; }
+            QPushButton:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
+            QPushButton:hover { background-color: #e2e6ea; }
+        """)
         self.btn_top.clicked.connect(self.toggle_always_on_top)
         
         header_layout.addWidget(self.btn_top)
@@ -1007,9 +971,19 @@ class KipoWindow(QMainWindow):
         
         qty_row = QHBoxLayout()
         self.input_qty_val = QLineEdit("1")
-        self.input_qty_val.setObjectName("input_qty_val")
         self.input_qty_val.setReadOnly(True)
         self.input_qty_val.setFixedWidth(50) # [수정] 슬림화 (60 -> 50)
+        self.input_qty_val.setStyleSheet("""
+                QLineEdit {
+                    background-color: #000; 
+                    border: 2px solid #e74c3c; 
+                    border-radius: 6px; 
+                    padding: 2px; 
+                    font-weight: bold; 
+                    font-size: 15px; 
+                    color: #e74c3c;
+                }
+        """)
         self.input_qty_val.setToolTip(self._style_tooltip("🔴 [1주 매수]\n조건 만족 시 1주 주문"))
         
         self.btn_qty_type = QPushButton("시")
@@ -1038,8 +1012,8 @@ class KipoWindow(QMainWindow):
         
         amt_row = QHBoxLayout()
         self.input_amt_val = QLineEdit("100,000")
-        self.input_amt_val.setObjectName("input_amt_val")
         self.input_amt_val.setFixedWidth(90)
+        self.input_amt_val.setStyleSheet("QLineEdit { border: 2px solid #28a745; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; }")
         self.input_amt_val.setToolTip(self._style_tooltip("🟢 [금액 매수]\n설정된 든든한 금액만큼 주문해요 (예: 100만)"))
         self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
         
@@ -1069,8 +1043,8 @@ class KipoWindow(QMainWindow):
         
         pct_row = QHBoxLayout()
         self.input_pct_val = QLineEdit("10")
-        self.input_pct_val.setObjectName("input_pct_val")
         self.input_pct_val.setFixedWidth(50) # [수정] 슬림화 (60 -> 50)
+        self.input_pct_val.setStyleSheet("QLineEdit { border: 2px solid #007bff; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 15px; }")
         self.input_pct_val.setToolTip(self._style_tooltip("🔵 [비율 매수]\n내 예수금 대비 % 비율로 유연하게 주문!"))
         
         self.btn_pct_type = QPushButton("시")
@@ -1099,10 +1073,10 @@ class KipoWindow(QMainWindow):
         
         hts_row = QHBoxLayout()
         self.input_hts_val = QLineEdit("HTS")
-        self.input_hts_val.setObjectName("input_hts_val")
         self.input_hts_val.setReadOnly(True)
         self.input_hts_val.setFixedWidth(60)
         self.input_hts_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_hts_val.setStyleSheet("QLineEdit { background-color: #f0f0f0; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #555; }")
         self.input_hts_val.setToolTip(self._style_tooltip("🖐 [직접/HTS 감시]\nHTS 등 밖에서 산 종목들도 똑똑하게 감시!"))
         
         self.input_hts_tp, self.input_hts_sl = create_tpsl_inputs("#fd7e14")
@@ -1144,9 +1118,9 @@ class KipoWindow(QMainWindow):
             btn.setFixedSize(32, 32)
             btn.setCheckable(True)
             if pid == "M":
-                btn.setToolTip(self._style_tooltip("<b>🎛️ [M: 수동 모드]</b><br>시작, 정지를 내 맘대로 자유롭게!"))
+                btn.setToolTip(self._style_tooltip("🎛️ [M: 수동 모드]\n시작, 정지를 내 맘대로 자유롭게!"))
             else:
-                btn.setToolTip(self._style_tooltip(f"<b>📑 [{pid}번 프로필]</b><br>저장해둔 {pid}번 설정을 짠! 불러와요."))
+                btn.setToolTip(self._style_tooltip(f"📑 [{pid}번 프로필]\n저장해둔 {pid}번 설정을 짠! 불러와요."))
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: #333; 
@@ -1445,21 +1419,8 @@ class KipoWindow(QMainWindow):
 
     def update_status_ui(self, status):
         """매매 상태에 따른 하단 컨트롤 버튼의 디자인 및 활성화 상태를 유동적으로 변경"""
-        is_light = getattr(self, 'ui_theme', 'dark') == 'light'
-        disabled_gray = "#adb5bd" if is_light else "#444"
-        auto_disabled_bg = "#e9ecef" if is_light else "#333"
-        auto_disabled_color = "#adb5bd" if is_light else "#aaa"
-        auto_disabled_border = "#ced4da" if is_light else "#555"
-
-        # [신규] 개별 위젯의 setStyleSheet가 전역 QToolTip 스타일을 덮어쓰지 않도록 명시적 추가
-        tooltip_fix = ""
-        if is_light:
-            tooltip_fix = "QToolTip { background-color: #333333; color: #ffffff; border: 2px solid #f1c40f; padding: 6px; border-radius: 6px; font-family: 'Malgun Gothic'; font-size: 13px; }"
-        
-        # [신규] 개별 위젯의 setStyleSheet가 전역 QToolTip 스타일을 덮어쓰지 않도록 명시적 추가
-        tooltip_fix = ""
-        if is_light:
-            tooltip_fix = "QToolTip { background-color: #333333; color: #ffffff; border: 2px solid #f1c40f; padding: 6px; border-radius: 6px; font-family: 'Malgun Gothic'; font-size: 13px; }"
+        # [출렁임 버그 픽스] 이 위치에 있던 모든 버튼을 38x38로 무조건 줄이는 옛날 코드가 
+        # 레이아웃 심호흡(Flicker 및 전체 높낮이 변동)의 진짜 흑막이었음. 완전 삭제. (Rev.13.1)
 
         if status == "RUNNING":
             self.lbl_status.setText("● RUNNING")
@@ -1469,14 +1430,14 @@ class KipoWindow(QMainWindow):
             self.btn_start.setText("▶")
             self.btn_start.setFixedSize(44, 44)
             self.btn_start.setEnabled(False)
-            self.btn_start.setStyleSheet(f"""
-                QPushButton {{
+            self.btn_start.setStyleSheet("""
+                QPushButton {
                     background-color: transparent;
-                    color: {disabled_gray};
+                    color: #444;
                     border: none;
                     font-size: 34px;
                     padding: 0px; padding-bottom: 3px; padding-left: 5px; margin: 0px;
-                }}
+                }
             """)
             
             # RUNNING: AUTO 버튼에 상태 텍스트 추가
@@ -1599,28 +1560,18 @@ class KipoWindow(QMainWindow):
                     QPushButton:hover { color: #2ecc71; }
                 """)
                 self.btn_auto_seq.setEnabled(False)
-                self.btn_auto_seq.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {auto_disabled_bg};
-                        color: {auto_disabled_color};
-                        border-radius: 8px;
-                        border: 1px solid {auto_disabled_border};
-                        font-size: 28px;
-                        padding: 0px; margin: 0px; /* [신규] 여백 강제 초기화 */
-                    }}
-                 """)
                 # ... (생략)
             else:
                 self.btn_start.setEnabled(False)
-                self.btn_start.setStyleSheet(f"""
-                    QPushButton {{
+                self.btn_start.setStyleSheet("""
+                    QPushButton {
                         background-color: transparent;
-                        color: {disabled_gray};
+                        color: #444;
                         border: none;
                         font-size: 34px;
                         font-weight: normal;
                         padding: 0px; padding-bottom: 3px; padding-left: 5px; margin: 0px; /* 초정밀 위치 보정 */
-                    }}
+                    }
                 """)
                 self.btn_auto_seq.setEnabled(True)
                 # ... (생략)
@@ -1628,17 +1579,17 @@ class KipoWindow(QMainWindow):
             # READY 상태: STOP 버튼 (비활성 프레임리스 - 튜닝 반영)
             self.btn_stop.setText("■")
             self.btn_stop.setEnabled(False)
-            self.btn_stop.setStyleSheet(f"""
-                QPushButton {{
+            self.btn_stop.setStyleSheet("""
+                QPushButton {
                     background-color: transparent;
-                    color: {disabled_gray};
+                    color: #444;
                     border: none;
                     font-size: 30px;
                     font-weight: normal;
                     padding: 0px;
                     padding-bottom: 4px;
                     margin: 0px;
-                }}
+                }
             """)
 
         # [공통 마무리] 상태 변경 시 UI 잠금 상태 동적 업데이트
@@ -2034,7 +1985,7 @@ class KipoWindow(QMainWindow):
             self.append_log("🔕 알람이 해제되었습니다.")
 
     def update_price_type_style(self, strat_key):
-        """[V2.0] 매수 방식(시장/현재) 토글 스타일 업데이트 (테마 반영)"""
+        """[V2.0] 매수 방식(시장/현재) 토글 스타일 업데이트"""
         btn_map = {
             'qty': (self.btn_qty_type, "#dc3545"),
             'amount': (self.btn_amt_type, "#28a745"),
@@ -2045,12 +1996,11 @@ class KipoWindow(QMainWindow):
 
         if btn.isChecked():
             btn.setText("현")
-            if self.ui_theme == 'light':
-                btn.setStyleSheet("background-color: #f1f3f5; color: #495057; border: 2px solid #adb5bd; border-radius: 13px; font-weight: bold; font-size: 11px; padding: 0px;")
-            else:
-                btn.setStyleSheet("background-color: #2a2a2a; color: #aaa; border: 2px solid #555; border-radius: 13px; font-weight: bold; font-size: 11px; padding: 0px;")
+            # 현재가는 차분한 실버/회색 (완전 원형)
+            btn.setStyleSheet("background-color: #f1f3f5; color: #495057; border: 2px solid #adb5bd; border-radius: 13px; font-weight: bold; font-size: 11px; padding: 0px;")
         else:
             btn.setText("시")
+            # 시장가는 강렬한 유색 (완전 원형)
             btn.setStyleSheet(f"background-color: {color}; color: white; border: 2px solid {color}; border-radius: 13px; font-weight: bold; font-size: 11px; padding: 0px;")
 
     def update_strategy_ui(self, from_user_click=False):
@@ -2160,12 +2110,6 @@ class KipoWindow(QMainWindow):
 
             # [신규] 상호 배타적 모드 적용 (M vs 1,2,3)
             # update_profile_buttons_ui 내부 로직과 별개로 기능적 제한 적용
-            is_light = getattr(self, 'ui_theme', 'dark') == 'light'
-            disabled_gray = "#adb5bd" if is_light else "#444"
-            auto_disabled_bg = "#e9ecef" if is_light else "#333"
-            auto_disabled_color = "#adb5bd" if is_light else "#aaa"
-            auto_disabled_border = "#ced4da" if is_light else "#555"
-
             if str(profile_idx).strip().upper() == "M":
                 # M (수동) 모드: 시작 버튼 활성화, 시퀀스 버튼 비활성화 & 끄기
                 # [보강] 데이터 로딩 실패 여부와 상관없이 M모드면 START 버튼을 무조건 활성화
@@ -2182,39 +2126,39 @@ class KipoWindow(QMainWindow):
                  """)
                 self.btn_auto_seq.setChecked(False) # 강제 끄기
                 self.btn_auto_seq.setEnabled(False) 
-                self.btn_auto_seq.setStyleSheet(f"""
-                    QPushButton {{
-                        background-color: {auto_disabled_bg};
-                        color: {auto_disabled_color};
+                self.btn_auto_seq.setStyleSheet("""
+                    QPushButton {
+                        background-color: #333;
+                        color: #aaa;
                         border-radius: 8px;
-                        border: 1px solid {auto_disabled_border};
+                        border: 1px solid #555;
                         font-size: 28px;
                         padding: 0px; margin: 0px; /* [신규] 여백 강제 초기화 */
-                    }}
+                    }
                  """)
             else:
                 # 1,2,3 (오토) 모드: 시작 버튼 비활성화 (오토시퀀스로만 작동 유도), 시퀀스 버튼 활성화
                 self.btn_start.setEnabled(False)
-                self.btn_start.setStyleSheet(f"""
-                    QPushButton {{
+                self.btn_start.setStyleSheet("""
+                    QPushButton {
                         background-color: transparent;
-                        color: {disabled_gray};
+                        color: #444;
                         border: none;
                         padding: 0px; padding-bottom: 3px; padding-left: 5px; margin: 0px; /* 여백 강제 고정 */
                         font-size: 34px;
-                    }}
+                    }
                  """)
                 self.btn_auto_seq.setEnabled(True)
                 if not self.btn_auto_seq.isChecked():
-                    self.btn_auto_seq.setStyleSheet(f"""
-                        QPushButton {{
-                            background-color: {auto_disabled_bg};
-                            color: {auto_disabled_color};
+                    self.btn_auto_seq.setStyleSheet("""
+                        QPushButton {
+                            background-color: #333;
+                            color: #aaa;
                             border-radius: 8px;
-                            border: 1px solid {auto_disabled_border};
+                            border: 1px solid #555;
                             font-size: 28px;
                             padding: 0px; margin: 0px; /* [신규] 여백 강제 초기화 */
-                        }}
+                        }
                      """)
 
 
@@ -2477,10 +2421,7 @@ class KipoWindow(QMainWindow):
         self.is_profile_blink_on = False
         
         # 버튼 스타일 복구 (18px로 통일)
-        if getattr(self, 'ui_theme', 'dark') == 'light':
-            self.btn_save.setStyleSheet("background-color: #ced4da; border-radius: 4px; color: #495057; border: 1px solid #adb5bd; font-size: 16px; padding: 0px; text-align: center;")
-        else:
-            self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 16px; padding: 0px; text-align: center;")
+        self.btn_save.setStyleSheet("background-color: #6c757d; border-radius: 4px; color: white; border: 1px solid #5a6268; font-size: 18px; padding: 0px; text-align: center;")
         self.update_profile_buttons_ui()
 
     # [미씽 메서드 복구] 프로필 버튼 UI 업데이트 (데이터 유무 표시)
@@ -2492,50 +2433,39 @@ class KipoWindow(QMainWindow):
                     settings = json.load(f)
             
             profiles = settings.get('profiles', {})
-            is_light = getattr(self, 'ui_theme', 'dark') == 'light'
-            
-            # [신규] 개별 위젯의 setStyleSheet가 전역 QToolTip 스타일을 덮어쓰지 않도록 명시적 추가
-            tooltip_fix = ""
-            if is_light:
-                tooltip_fix = "QToolTip { background-color: #333333; color: #ffffff; border: 2px solid #f1c40f; padding: 6px; border-radius: 6px; font-family: 'Malgun Gothic'; font-size: 13px; }"
             
             profile_ids = ["M", "1", "2", "3", "4"]
             for i, btn in enumerate(self.profile_buttons):
                 pid = profile_ids[i]
                 btn.setText(pid) # 텍스트 명시적으로 다시 설정
                 
-                base_style = "border-radius: 4px; font-weight: bold; font-size: 14px; padding: 0px;"
-                
                 if i == 0: # M 버튼
                     is_m_selected = (str(self.current_profile_idx) == "M")
                     has_m_data = "M" in profiles
                     
+                    base_m_style = "border-radius: 4px; font-weight: bold; font-size: 14px; padding: 0px;"
+                    
                     if is_m_selected:
-                        btn_style = f"background-color: #27ae60; color: #fff; border: 2px solid #27ae60; {base_style}"
+                        style = f"background-color: #27ae60; color: #fff; border: 2px solid #fff; {base_m_style}"
+                    elif has_m_data:
+                        style = f"background-color: #145a32; color: #fff; border: 1px solid #27ae60; {base_m_style}"
                     else:
-                        bg_c = "#e8f5e9" if is_light else "#145a32"
-                        f_c = "#2e7d32" if is_light else "#fff"
-                        btn_style = f"background-color: {bg_c}; color: {f_c}; border: 1px solid #27ae60; {base_style}"
+                        style = f"background-color: #145a32; color: #fff; border: 1px solid #27ae60; {base_m_style}"
+                    btn.setStyleSheet(style)
                 else: # 1, 2, 3, 4 버튼
-                    idx = i # 0-indexed for list
+                    idx = i # 0-indexed for list, 1-indexed for profile
                     has_data = str(idx) in profiles
                     is_selected = (str(self.current_profile_idx) == str(idx))
                     
+                    base_style = "border-radius: 4px; font-weight: bold; font-size: 14px; padding: 0px;"
+                    
                     if is_selected:
-                        btn_style = f"background-color: #3498db; color: #fff; border: 2px solid #3498db; {base_style}"
+                        style = f"background-color: #3498db; color: #fff; border: 2px solid #fff; {base_style}"
                     elif has_data:
-                        bg_c = "#e2e6ea" if is_light else "#333"
-                        f_c = "#212529" if is_light else "#fff"
-                        bd_c = "#adb5bd" if is_light else "#2980b9"
-                        btn_style = f"background-color: {bg_c}; color: {f_c}; border: 1px solid {bd_c}; {base_style}"
+                        style = f"background-color: #333; color: #fff; border: 1px solid #2980b9; {base_style}"
                     else:
-                        bg_c = "#f8f9fa" if is_light else "#333"
-                        f_c = "#adb5bd" if is_light else "#fff"
-                        bd_c = "#dee2e6" if is_light else "#2980b9"
-                        btn_style = f"background-color: {bg_c}; color: {f_c}; border: 1px solid {bd_c}; {base_style}"
-                
-                # [수정] QPushButton 선택자를 사용하여 스타일 범위를 명확히 하고 툴팁 수정 적용
-                btn.setStyleSheet(f"QPushButton {{ {btn_style} }} {tooltip_fix}")
+                        style = f"background-color: #333; color: #fff; border: 1px solid #2980b9; {base_style}"
+                    btn.setStyleSheet(style)
                     
         except Exception as e:
             self.append_log(f"UI 업데이트 오류: {e}")
@@ -2661,10 +2591,7 @@ class KipoWindow(QMainWindow):
                     
                     profiles = settings.get('profiles', {})
                     # 현재 프로필 번호를 기준으로 (없으면 1번)
-                    try:
-                        current_idx_int = int(str(self.current_profile_idx))
-                    except (ValueError, TypeError):
-                        current_idx_int = 1
+                    current_idx = self.current_profile_idx if self.current_profile_idx is not None else 1
                     
                     # 1. 고유한 검색식 이름 사전 접근 (RT 서버 연동)
                     condition_map = {}
@@ -2677,9 +2604,9 @@ class KipoWindow(QMainWindow):
                     found_any = False
                     # [수정] 파일에서 읽는 대신 현재 UI 메모리(혹은 저장된 데이터)를 기반으로 하되
                     # 현재 프로필의 "실제 UI 상태"를 우선적으로 반영하여 리포트 출력
-                    for i in range(current_idx_int, 5):
+                    for i in range(current_idx, 5):
                         p = profiles.get(str(i))
-                        if not p and i != current_idx_int: continue
+                        if not p and i != current_idx: continue
                         
                         # 현재 보고 있는 UI 설정이 해당 프로필 인덱스라면 UI 값을 우선 사용
                         is_current_view = (i == self.current_profile_idx or (self.current_profile_idx is None and i == 1))
@@ -2695,7 +2622,7 @@ class KipoWindow(QMainWindow):
                             et = p.get('end_time', '15:20')
                             
                         log_msg = f"<b>[프로필 {i}번]</b> {st} ~ {et}"
-                        if i == current_idx_int:
+                        if i == current_idx:
                             log_msg += " <font color='#ffc107'>[현재]</font>"
                         self.append_log(log_msg)
                         

@@ -1,7 +1,0 @@
-# 작업 목록: 오류 수정 및 UI 안정화
-
-- [/] 코드 분석 및 계획 수립 [/]
-- [ ] [today](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py#255-422) 명령어 `NameError` 수정 ([chat_command.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/chat_command.py)) [ ]
-- [ ] 압정 핀 깜빡임 문제 재해결 ([Kipo_GUI_main.py](file:///d:/Work/Python/AutoBuy/KipoStockNow/Kipo_GUI_main.py)) [ ]
-- [ ] 명령어 처리 순서 설명 준비 [ ]
-- [ ] 최종 테스트 및 확인 [ ]

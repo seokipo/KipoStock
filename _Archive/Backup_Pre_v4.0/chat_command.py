@@ -890,7 +890,6 @@ class ChatCommand:
   - today sic : 조건식순 (검색식명)
   - today son : 손익순 (손익금액)
   - (팁: 뒤에 -를 붙이면 역순 출력, 예: today jun-)
-• exp : 로그 데이터 폴더(LogData) 열기
 • voice on/off : 매수 시 음성(TTS) 켜기/끄기
 • beep on/off : 모든 비프음 소리 켜기/끄기
 • tel on/off : 텔레그램 전체 메세지 켜기/끄기
@@ -965,12 +964,6 @@ class ChatCommand:
             await asyncio.get_event_loop().run_in_executor(None, log_and_tel, cmd_full[9:].strip())
         elif cmd == 'refresh_conditions': 
             await self.rt_search.refresh_conditions(self.token)
-        elif cmd == 'exp':
-            if os.path.exists(self.data_dir):
-                os.startfile(self.data_dir)
-                log_and_tel("📂 로그 데이터 폴더(LogData)를 엽니다.")
-            else:
-                log_and_tel("❌ 로그 폴더가 존재하지 않습니다.")
         elif cmd == 'help': await self.help()
         elif cmd.startswith('tel today'):
             sub_raw = cmd_full[4:].strip() 

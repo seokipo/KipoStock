@@ -1,6 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "명령어 입력(stop, start)과 GUI 상태의 동기화를 위해 `ChatCommand`에 콜백을 추가하고, `AsyncWorker`에서 이를 처리하도록 보완하는 계획입니다. 또한 V5.4.15에서 발생한 시퀀스 모드 활성화 시 자동 시작 누락 문제도 함께 수정합니다.",
-  "updatedAt": "2026-01-27T05:46:22.524050400Z",
-  "version": "2"
-}

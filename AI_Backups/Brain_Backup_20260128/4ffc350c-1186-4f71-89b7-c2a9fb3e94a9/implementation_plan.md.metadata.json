@@ -1,5 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "Plan to fix the persistent crash in Kipo_GUI_main.py by initializing missing variables and removing broken leftover code.",
-  "updatedAt": "2026-01-20T08:38:25.239413400Z"
-}

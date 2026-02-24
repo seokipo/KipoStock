@@ -1,5 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "Implementation plan to fix the `today` command, verify alarm/auto-start logic, and build KipoBuy V4.2.",
-  "updatedAt": "2026-01-22T05:53:58.941454700Z"
-}

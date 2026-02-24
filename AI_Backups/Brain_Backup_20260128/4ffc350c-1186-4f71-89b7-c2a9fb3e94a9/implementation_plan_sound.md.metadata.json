@@ -1,5 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_IMPLEMENTATION_PLAN",
-  "summary": "Plan to re-enable sound alarm in Kipo_GUI_main.py using the native winsound module for Windows stability.",
-  "updatedAt": "2026-01-20T08:43:19.375920300Z"
-}

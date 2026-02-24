@@ -1,6 +1,0 @@
-{
-  "artifactType": "ARTIFACT_TYPE_TASK",
-  "summary": "KipoBuy 자동매매 시스템을 안드로이드 최적화 웹앱(PWA)으로 변환하기 위한 한글 작업 목록입니다. 기획, 백엔드 리팩토링, 모바일 UI 구현, PWA 설정 및 최종 검증 단계를 포함합니다.",
-  "updatedAt": "2026-01-20T09:42:36.372655500Z",
-  "version": "1"
-}
