@@ -10,73 +10,6 @@ from tel_send import tel_send
 from datetime import datetime, timedelta
 import collections
 
-class WatchListManager:
-    """[신규] 가속도 매수를 위한 실시간 포착 종목 관리 및 체결 속도 계산기"""
-    def __init__(self):
-        # 종목코드: {'detect_time': float, 'trades': deque(datetime), 'last_1s_count': 0, 'avg_5m_count': 0}
-        self.watchlist = {}
-        self.lock = asyncio.Lock()
-        
-    async def add_stock(self, code, seq_name):
-        async with self.lock:
-            if code not in self.watchlist:
-                self.watchlist[code] = {
-                    'name': seq_name,
-                    'detect_time': time.time(),
-                    'trades': collections.deque(), # 체결 시간(timestamp) 저장
-                    'last_1s_count': 0,
-                    'avg_5m_count': 0
-                }
-                print(f"📡 [WatchList] 추가: {code} ({seq_name})")
-
-    async def remove_stock(self, code):
-        async with self.lock:
-            if code in self.watchlist:
-                del self.watchlist[code]
-                print(f"🗑️ [WatchList] 제거: {code}")
-
-    async def record_trade(self, code):
-        """실시간 체결 발생 시 기록"""
-        async with self.lock:
-            if code in self.watchlist:
-                self.watchlist[code]['trades'].append(time.time())
-
-    async def calculate_acceleration(self, on_trigger_callback):
-        """1초 주기로 모든 종목의 가속도 계산 (장초반 보정 포함)"""
-        async with self.lock:
-            now = time.time()
-            # [수정] 함수명 오타 수정: is_market_open_time
-            is_open = MarketHour.is_market_open_time() 
-            if not is_open: return
-
-            # 마켓 아워 클래스에 장초반 체크가 없으면 직접 계산
-            now_dt = datetime.now()
-            is_boost_period = (now_dt.hour == 9 and 0 <= now_dt.minute <= 10)
-            
-            multi_factor = 7.5 if is_boost_period else 5.0 # 1.5배 상향 (5 * 1.5 = 7.5)
-            
-            for code, data in list(self.watchlist.items()):
-                trades = data['trades']
-                # 5분(300초) 지난 체결 데이터 삭제
-                while trades and now - trades[0] > 300:
-                    trades.popleft()
-                
-                # 최근 1초 체결 건수
-                last_1s = sum(1 for t in trades if now - t <= 1.0)
-                # 5분 평균 초당 체결 건수 (300초로 나눔)
-                avg_5m_per_sec = len(trades) / 300.0
-                
-                data['last_1s_count'] = last_1s
-                data['avg_5m_count'] = avg_5m_per_sec
-                
-                # 알고리즘: (최근 1초 체결 건수) >= (5분 평균 초당 체결 건수) * 5
-                # 단, 최소 1초에 1건 이상은 있어야 함 (0인 경우 방지)
-                if last_1s > 0 and last_1s >= avg_5m_per_sec * multi_factor:
-                    # 충분한 표본(예: 5분간 최소 10건 이상 체결)이 있을 때 신뢰도 상승
-                    if len(trades) >= 5:
-                        # 신호 발생!
-                        await on_trigger_callback(code, data['name'], last_1s, avg_5m_per_sec)
-
 class RealTimeSearch:
     def __init__(self, on_connection_closed=None):
         self.socket_url = socket_url + '/api/dostk/websocket'
@@ -97,12 +30,9 @@ class RealTimeSearch:
         
         # [신규] 현재 서버에 등록 성공하여 감시 중인 조건식 번호 집합
         self.active_conditions = set()
-        
-        # [신규] 가속도 매수 관련
-        self.watchlist_mgr = WatchListManager()
-        self.marked_indices = set() # GUI에서 전달받을 마킹된 인덱스들
-        self.accel_task = None
-        self.on_acceleration_trigger = None # 추가 매수 실행 콜백
+
+        # [신규 v5.1] 뉴스 분석 결과 전달 콜백
+        self.on_news_result = None
 
     async def connect(self, token, acnt_no=None):
         try:
@@ -115,22 +45,6 @@ class RealTimeSearch:
         except Exception as e:
             print(f'❌ 소켓 연결 실패: {e}')
             self.connected = False
-            
-        # [신규] 가속도 계산 태스크 시작
-        if self.connected and not self.accel_task:
-            self.accel_task = asyncio.create_task(self.run_accel_loop())
-            
-    async def run_accel_loop(self):
-        """1초 주기로 가속도 체크 루프"""
-        print("🚀 [가속도] 가속도 분석 엔진 가동!")
-        while self.keep_running:
-            try:
-                if self.on_acceleration_trigger:
-                    await self.watchlist_mgr.calculate_acceleration(self.on_acceleration_trigger)
-                await asyncio.sleep(1.0)
-            except Exception as e:
-                print(f"⚠️ [가속도] 루프 오류: {e}")
-                await asyncio.sleep(5)
 
     async def send_message(self, message, token=None):
         if not self.connected and token:
@@ -174,14 +88,7 @@ class RealTimeSearch:
                 if trnm in ['REAL', 'RSCN', 'CNSR']:
                     # [디버그] 서버가 보내는 모든 비밀 편지를 자기가 직접 눈으로 확인!
                     # print(f"📡 [LO-DATA] {trnm}: {response}")
-                    
-                    # [신규] 실시간 체결 데이터 추적 (WatchList 종목만 대상)
-                    if trnm == 'RSCN':
-                        data = response.get('data', {})
-                        stk_cd = data.get('stk_cd') or data.get('code')
-                        if stk_cd:
-                            stk_cd = stk_cd.replace('A', '')
-                            await self.watchlist_mgr.record_trade(stk_cd)
+                    pass
 
                 if trnm == 'LOGIN':
                     if response.get('return_code') == 0:
@@ -231,22 +138,6 @@ class RealTimeSearch:
                         data = [data]
                     
                                 # print(f"🔍 [CNSR_DEBUG] Found SEQ in data body: {seq}")
-
-                    # [신규] WatchList 관리 로직 (포착/이탈)
-                    if seq in [str(i) for i in self.marked_indices]:
-                        for item in data:
-                            stk_cd = item.get('stk_cd') or item.get('code') or (item.get('values') or {}).get('9001')
-                            if not stk_cd: continue
-                            stk_cd = stk_cd.replace('A', '')
-                            
-                            # flag 확인 (I:포착, D:이탈) - 키움 브릿지 표준
-                            flag = item.get('flag') or item.get('type') or 'I'
-                            seq_name = self.condition_map.get(seq, "이름모름")
-                            
-                            if flag == 'I': # 포착
-                                await self.watchlist_mgr.add_stock(stk_cd, seq_name)
-                            elif flag == 'D': # 이탈
-                                await self.watchlist_mgr.remove_stock(stk_cd)
 
                     # [Fallback 2] 단일 조건식 감시 중이라면 그 번호로 가정
                     if not seq:
@@ -309,6 +200,25 @@ class RealTimeSearch:
                                     # print(f"🛒 [즉각매수] {jmcode} ({seq_name})")
                                     # RTSEARCH는 비동기 루프이므로 run_in_executor로 동기 함수 호출
                                     loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name)
+                                    
+                                    # [신규 v5.1] 마킹된 조건식인 경우 뉴스 스나이퍼 즉시 출동
+                                    marked_conditions = get_setting('marked_conditions', [])
+                                    if str(seq) in map(str, marked_conditions):
+                                        from check_n_buy import get_stock_name_safe
+                                        from news_sniper import run_news_sniper
+                                        
+                                        def news_trigger_task(code, token, callback):
+                                            try:
+                                                name = get_stock_name_safe(code, token)
+                                                # [주의] news_sniper 내부에서 중복 팝업 방지 로직이 동작함
+                                                result = run_news_sniper(name)
+                                                if callback:
+                                                    callback(result)
+                                            except Exception as e:
+                                                print(f"⚠️ [뉴스트리거] 실패: {e}")
+
+                                        # 비동기로 뉴스 검색 및 분석 수행
+                                        loop.run_in_executor(None, news_trigger_task, jmcode, self.token, self.on_news_result)
                                 else:
                                     pass # print(f"⏳ [대외시간] {jmcode} 매수 건너뜀 (설정 시간 외)")
                 

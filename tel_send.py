@@ -23,18 +23,21 @@ def tel_send(message, parse_mode=None, msg_type='general'):
         
     url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
     
-    # [신규] 세련된 디자인의 헤더 구성
+    # [신규] 세련된 디자인의 헤더 구성 (사용자 요청: 일반 메시지는 간소화, 리포트만 헤더 유지)
     proc_name = get_setting('process_name', 'KipoStock')
     header_icon = "🤖" # 기본 로봇
-    if msg_type == 'log':
-        header_icon = "🔔" # 알림/로그는 종 아이콘
-    elif msg_type == 'report':
-        header_icon = "📊" # 리포트는 차트 아이콘
-        
-    if parse_mode == 'HTML':
-        header = f"💎 <b>【 {proc_name} 】</b>\n━━━━━━━━━━━━━━\n{header_icon} <b>Trading Update</b>\n━━━━━━━━━━━━━━\n"
-    else:
-        header = f"💎 【 {proc_name} 】\n━━━━━━━━━━━━━━\n{header_icon} Trading Update\n━━━━━━━━━━━━━━\n"
+    
+    header = "" # 기본적으로 헤더 없음
+    if msg_type == 'report' or msg_type == 'system':
+        if msg_type == 'report':
+            header_icon = "📊"
+        elif msg_type == 'system':
+            header_icon = "🔔"
+            
+        if parse_mode == 'HTML':
+            header = f"💎 <b>【 {proc_name} 】</b>\n━━━━━━━━━━━━━━\n{header_icon} <b>Trading Update</b>\n━━━━━━━━━━━━━━\n"
+        else:
+            header = f"💎 【 {proc_name} 】\n━━━━━━━━━━━━━━\n{header_icon} Trading Update\n━━━━━━━━━━━━━━\n"
     
     # 4000자 단위로 분할하여 전송
     msg_len = len(message)
@@ -46,13 +49,15 @@ def tel_send(message, parse_mode=None, msg_type='general'):
         end = start + chunk_size
         chunk = message[start:end]
         
-        # [신규] 텔레그램이 지원하지 않는 <font> 태그 제거
+        # [신규] 텔레그램이 지원하지 않는 특수 HTML 태그 제거
         if parse_mode == 'HTML':
             # <font color="..."> 및 </font> 제거
             chunk = re.sub(r'<font[^>]*>', '', chunk)
             chunk = chunk.replace('</font>', '')
-
-        # HTML 모드일 때 태그가 잘리지 않도록 배려 (간단히 처리)
+            # <br> 태그를 줄바꿈으로 변경
+            chunk = re.sub(r'<br\s*/?>', '\n', chunk, flags=re.IGNORECASE)
+            # <img> 태그 제거 (텔레그램 HTML 미지원)
+            chunk = re.sub(r'<img[^>]*>', '', chunk, flags=re.IGNORECASE)
         if parse_mode == 'HTML' and chunk.count('<') != chunk.count('>'):
              # 마지막 '<' 위치를 찾아 그 전까지만 자름
              last_open = chunk.rfind('<')

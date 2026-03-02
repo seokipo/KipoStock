@@ -83,15 +83,80 @@ def get_current_price(stk_cd, token=None):
                 price = int(str(val).replace(',', ''))
                 if price > 0:
                     break
-        
-        # if price == 0:
-            # print(f"⚠️ [API_DEBUG] Price is 0. Keys in data: {list(res_data.keys())}")
-            # print(f"⚠️ [API_DEBUG] Full Data: {res_data}")
 
         return name, price
     except Exception as e:
         print(f"⚠️ 가격 조회 실패: {e}")
         return None, 0
+
+# [신규] 불타기 상세 조건을 위한 확장 데이터 조회 (체결강도, 호가잔량)
+def get_extended_stock_data(stk_cd, token=None):
+    """
+    체결강도, 총매도잔량, 총매수잔량 등 불타기 필터링에 필요한 정밀 데이터를 반환합니다.
+    """
+    result = {
+        'name': '',
+        'price': 0,
+        'power': 0.0,       # 체결강도 (%)
+        'total_ask_qty': 0, # 총 매도 잔량
+        'total_bid_qty': 0  # 총 매수 잔량
+    }
+    
+    # 1. 기본 정보 및 체결강도 조회 (ka10001)
+    try:
+        headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10001' }
+        res = requests.post(host_url + '/api/dostk/stkinfo', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
+        data = res.json().get('data', res.json())
+        
+        result['name'] = data.get('stk_nm', '')
+        # 가격 추출
+        for k in ['now_prc', 'clpr', 'stck_prpr', 'price', 'cur_prc']:
+            v = data.get(k)
+            if v:
+                result['price'] = abs(int(str(v).replace(',', '')))
+                if result['price'] > 0: break
+        
+        # 체결강도 추출 (vol_strength, strength, 228 등)
+        for k in ['vol_strength', 'strength', 'vol_power', '228']:
+            v = data.get(k)
+            if v:
+                result['power'] = float(str(v).replace(',', ''))
+                break
+    except: pass
+
+    # 2. 호가 잔량 정보 조회 (ka10004)
+    try:
+        headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10004' }
+        res = requests.post(host_url + '/api/dostk/mrkcond', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
+        data = res.json().get('data', res.json())
+        
+        # 총매도잔량/총매수잔량 (total_askp_rsqn, total_bidp_rsqn 등)
+        for k_ask, k_bid in [('total_askp_rsqn', 'total_bidp_rsqn'), ('total_ask_qty', 'total_bid_qty'), ('ask_qty', 'bid_qty')]:
+            v1, v2 = data.get(k_ask), data.get(k_bid)
+            if v1 is not None and v2 is not None:
+                result['total_ask_qty'] = int(str(v1).replace(',', ''))
+                result['total_bid_qty'] = int(str(v2).replace(',', ''))
+                break
+    except: pass
+
+    # 3. [신규 v4.7.5] 정밀 체결강도 추이 조회 (ka10046) - 자기가 찾아준 보물!
+    try:
+        headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10046' }
+        res = requests.post(host_url + '/api/dostk/mrkcond', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
+        res_json = res.json()
+        data_list = res_json.get('data', {}).get('pwr_st_list', [])
+        
+        if data_list and len(data_list) > 0:
+            latest = data_list[0] # 가장 최신(첫번째) 데이터
+            pwr = latest.get('pwr_sg')
+            if pwr:
+                result['power'] = float(str(pwr).replace(',', ''))
+                # print(f"✨ [KA10046] 정밀 체결강도 획득: {result['power']}%")
+    except Exception as e:
+        # print(f"⚠️ [KA10046] 조회 실패: {e}")
+        pass
+
+    return result
 
 # 실행 구간
 if __name__ == '__main__':

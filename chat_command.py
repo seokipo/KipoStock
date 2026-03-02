@@ -69,11 +69,20 @@ class ChatCommand:
         # [신규] 시작/중지 요청 콜백 (GUI를 거쳐 실행되도록)
         self.on_start_request = None
         self.on_stop_request = None
+        self.on_news_result = None  # [신규] 뉴스 분석 결과 GUI 전달용 콜백
         
         # [신규] rt_search의 콜백을 wrapper로 연결
         self.rt_search.on_condition_loaded = self._on_condition_loaded_wrapper
+        # [신규 v5.1] 실시간 뉴스 결과 콜백 연결
+        self.rt_search.on_news_result = lambda msg: self.on_news_result(msg) if self.on_news_result else None
         # [신규] 가속도 추가 매수 콜백 등록
         self.rt_search.on_acceleration_trigger = self.on_accel_buy_trigger
+
+        # [신규] 이전 세션 데이터 복원
+        try:
+            session_logger.load_session()
+        except Exception as e:
+            print(f"⚠️ [ChatCommand] 세션 복원 중 예외: {e}")
 
     def _on_condition_loaded_wrapper(self):
         if self.on_condition_loaded:
@@ -293,8 +302,8 @@ class ChatCommand:
             diary_text, stats = await self.today(summary_only=False, return_text=True, return_stats=True)
             
             # [신규] 최고 수익 시간 정보 추출
-            peak_time_str = stats.get('peak_pnl_time', '약속된 시간 없음')
-            peak_pnl_val = stats.get('peak_pnl', 0)
+            peak_time_str = stats.get('peak_pnl_time', '약속된 시간 없음') if stats else '약속된 시간 없음'
+            peak_pnl_val = stats.get('peak_pnl', 0) if stats else 0
             
             # 2. 계좌 정보 및 세션 수익 수집
             if not self.token: self.get_token()
@@ -325,8 +334,8 @@ class ChatCommand:
             title_prefix = f"시퀀스 {seq} 종료 후 " if seq else ""
             
             # [신규] total_pnl, avg_pnl_rt, pnl_color는 q_metrics 이전에 계산되어야 함
-            total_pnl = stats.get('total_pnl', 0)
-            avg_pnl_rt = stats.get('total_rt', stats.get('avg_pnl_rt', 0))
+            total_pnl = stats.get('total_pnl', 0) if stats else 0
+            avg_pnl_rt = stats.get('total_rt', stats.get('avg_pnl_rt', 0)) if stats else 0
             pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
 
             msg = f"🚀 <b>[{title_prefix if title_prefix else '오늘 전체 '}매매 종합 리포트]</b>\n"
@@ -357,6 +366,19 @@ class ChatCommand:
                 msg += "────────────────────────────────────────\n"
 
             msg += "────────────────────────────────────────\n"
+            
+            # [신규] 매수 전략별 매매현황 집계 및 표시 (v4.1.1)
+            strat_stats = q_metrics.get('strat_stats', {}) if q_metrics else {}
+            if strat_stats:
+                msg += "📂 <b>[ 매수 전략별 매매현황 (당일 누적) ]</b>\n"
+                # 수익금액 기준 내림차순 정렬
+                sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                for s_key, s_data in sorted_strats:
+                    s_pnl = s_data['pnl']
+                    s_rt = (s_pnl / s_data['buy_amt'] * 100) if s_data['buy_amt'] > 0 else 0
+                    s_color = "#ff4444" if s_pnl >= 0 else "#33b5e5"
+                    msg += f"   🔹 {s_data['nm']:<10}: <font color='{s_color}'><b>{s_pnl:+,}원 ({s_rt:+.2f}%)</b></font> ({s_data['count']}건)\n"
+                msg += "────────────────────────────────────────\n"
 
             # [신규] 조건식별 매매현황 집계 및 표시 (v3.4)
             cond_stats = q_metrics.get('cond_stats', {}) if q_metrics else {}
@@ -397,6 +419,9 @@ class ChatCommand:
             else:
                 msg += "   현재 보유 중인 종목이 없습니다.\n"
             msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            
+            if q_metrics and 'img_html' in q_metrics:
+                msg += q_metrics['img_html']
             
             log_and_tel(msg, parse_mode='HTML', msg_type='report')
             
@@ -571,13 +596,21 @@ class ChatCommand:
             
             # [신규] 당일 전략별/조건식별 매수 건수 집계
             daily_strat_counts = {'qty': 0, 'amount': 0, 'percent': 0, 'HTS': 0, 'none': 0}
+            strat_stats = {} # { '전략키': {'pnl': 0, 'buy_amt': 0, 'count': 0, 'nm': '명칭'} }
             cond_stats = {} # { '조건식명': {'pnl': 0, 'buy_amt': 0, 'count': 0} }
 
             for r in processed_data:
                 if r.get('buy_qty', 0) > 0:
                     # 전략별 집계
                     s_key = r.get('strat_key', 'none')
+                    s_nm = r.get('strat_nm', '--')
                     daily_strat_counts[s_key] = daily_strat_counts.get(s_key, 0) + 1
+                    
+                    if s_key not in strat_stats:
+                        strat_stats[s_key] = {'pnl': 0, 'buy_amt': 0, 'count': 0, 'nm': s_nm}
+                    strat_stats[s_key]['pnl'] += r['pnl']
+                    strat_stats[s_key]['buy_amt'] += r['buy_amt']
+                    strat_stats[s_key]['count'] += 1
                     
                     # [신규] 조건식별 집계 (v3.4)
                     c_name = r.get('cond_name', '직접매매')
@@ -672,7 +705,8 @@ class ChatCommand:
                 'sharpe_ratio': sharpe_ratio,
                 'peak_pnl': peak_pnl,
                 'peak_pnl_time': peak_pnl_time,
-                'cond_stats': cond_stats # [신규] 조건식 통계 추가
+                'cond_stats': cond_stats, # [신규] 조건식 통계 추가
+                'strat_stats': strat_stats # [복구] 매수 전략별 통계 추가
             }
 
             if summary_only:
@@ -751,18 +785,57 @@ class ChatCommand:
                     c_rt = (c_pnl / c_data['buy_amt'] * 100) if c_data['buy_amt'] > 0 else 0
                     pnl_color = "#ff4444" if c_pnl >= 0 else "#33b5e5"
                     
-                    c_row = f" 🔹 {c_name[:12]:<12} : {c_pnl:>+9,}원 ({c_rt:>+6.2f}%) [{c_data['count']}건]\n"
-                    display_rows.append(f"<font color='{pnl_color}'>{c_row}</font>")
-                    tel_rows.append(c_row)
+                    c_row_html = f" 🔹 {c_name[:12]:<12} : {c_pnl:>+9,}원 ({c_rt:>+6.2f}%) [{c_data['count']}건]\n"
+                    c_row_plain = f" 🔹 {c_name[:12]:<12} : {c_pnl:>+9,}원 ({c_rt:>+6.2f}%) [{c_data['count']}건]\n"
+                    display_rows.append(f"<font color='{pnl_color}'>{c_row_html}</font>")
+                    tel_rows.append(c_row_plain)
                 
                 display_rows.append(s_h_line)
                 tel_rows.append(s_h_line)
+                
+            # [신규] 매수 전략별 요약 통계 추가 (v4.1.1)
+            if strat_stats:
+                st_header = "\n [ 매수 전략별 매매현황 ] \n"
+                st_h_line = "─────────────────────────────────────────────────────────────────\n"
+                display_rows.append(st_header + st_h_line)
+                tel_rows.append(st_header + st_h_line)
+                
+                # 수익금액 기준 내림차순 정렬
+                sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                for s_key, s_data in sorted_strats:
+                    s_pnl = s_data['pnl']
+                    s_rt = (s_pnl / s_data['buy_amt'] * 100) if s_data['buy_amt'] > 0 else 0
+                    pnl_color = "#ff4444" if s_pnl >= 0 else "#33b5e5"
+                    
+                    s_row_html = f" 🔹 {s_data['nm']:<12} : {s_pnl:>+9,}원 ({s_rt:>+6.2f}%) [{s_data['count']}건]\n"
+                    s_row_plain = f" 🔹 {s_data['nm']:<12} : {s_pnl:>+9,}원 ({s_rt:>+6.2f}%) [{s_data['count']}건]\n"
+                    display_rows.append(f"<font color='{pnl_color}'>{s_row_html}</font>")
+                    tel_rows.append(s_row_plain)
+                
+                display_rows.append(st_h_line)
+                tel_rows.append(st_h_line)
+                
+            # [신규] 상세 리포트에 전체 퀀트 지표 요약 추가
+            quant_summary = f"\n📝 [ 오늘 전체 매매 요약 리포트 ]\n"
+            quant_summary += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            quant_summary += f"👑 최고 수익 구간 : {peak_pnl_time} ({peak_pnl:+,}원)\n"
+            quant_summary += f"📊 승률 : {win_rate:.1f}% ({win_count}승 {loss_count}패)\n"
+            quant_summary += f"💰 PF (수익 지수) : {profit_factor:.2f}\n"
+            quant_summary += f"⚖️ 기댓값 : {int(expectancy):,}원 (손익비 {payoff_ratio:.2f})\n"
+            quant_summary += f"📉 MDD (최대낙폭) : {int(mdd):,}원\n"
+            quant_summary += f"📈 샤프 지수 : {sharpe_ratio:.2f}\n"
+            quant_summary += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             
-            tel_send("".join(display_rows))
+            display_rows.append(quant_summary)
+            tel_rows.append(quant_summary)
+            
+            if not return_text:
+                tel_send("".join(display_rows))
             
             if send_telegram:
+                # 텔레그램 전송 시 HTML 파싱 오류 방지를 위해 태그가 섞여있지 않은지 확인
                 real_tel_send("".join(tel_rows))
-                print("📢 텔레그램으로 상세 보고서를 전송했습니다.")
+                print("📢 텔레그램으로 상세 보고서 및 요약 통계를 전송했습니다.")
             
             try:
                 df_data = [{
@@ -801,6 +874,350 @@ class ChatCommand:
                 df.to_csv(csv_path, index=False, encoding='utf-8-sig')
                 tel_send(f"<font color='#28a745'>📂 당일 매매 일지가 로컬에 저장되었습니다: {final_filename}</font>")
                 
+                # [신규] 엑셀 파일 및 차트(그래프) 생성 로직
+                try:
+                    import matplotlib
+                    matplotlib.use('Agg')
+                    import matplotlib.pyplot as plt
+                    import matplotlib.font_manager as fm
+                    import matplotlib.dates as mdates
+                    from openpyxl import Workbook
+                    from openpyxl.drawing.image import Image as OpenpyxlImage
+                    import io
+                    
+                    # 한글 폰트 설정 (Windows 기본 맑은 고딕)
+                    font_path = "C:/Windows/Fonts/malgun.ttf"
+                    font_name = fm.FontProperties(fname=font_path).get_name()
+                    plt.rc('font', family=font_name)
+                    plt.rc('axes', unicode_minus=False)
+                    
+                    # 데이터 정제 (합계 행 제외하고, 시간순으로 정렬된 시간과 손익금액 추출)
+                    plot_data = [r for r in df_data if r['매수시간'] != '합계']
+                    img_buf = None  # 초기화하여 NameError 방지
+                    
+                    if plot_data:
+                        times = []
+                        c_pnl = []
+                        run_pnl = 0
+                        
+                        # [09:00:07] 같은 포맷에서 시간 부분 추출
+                        for r in plot_data:
+                            time_str = r['매수시간'].replace('[', '').replace(']', '').strip()
+                            if '전일' in time_str:
+                                # 전일 데이터는 오늘 08:50 정도로 매핑 (차트 앞부분 시각화)
+                                ts = datetime.strptime(f"{date_str} 08:50:00", "%Y%m%d %H:%M:%S")
+                            else:
+                                try:
+                                    ts = datetime.strptime(f"{date_str} {time_str}", "%Y%m%d %H:%M:%S")
+                                except:
+                                    ts = datetime.strptime(f"{date_str} 09:00:00", "%Y%m%d %H:%M:%S")
+                            
+                            run_pnl += r['손익금액']
+                            times.append(ts)
+                            c_pnl.append(run_pnl)
+                        
+                        # 그래프 생성 (다크 테마 적용)
+                        plt.style.use('dark_background')
+                        fig, ax = plt.subplots(figsize=(10, 5))
+                        
+                        # 배경색 설정 (KipoStock 느낌)
+                        fig.patch.set_facecolor('#0d0d0d')
+                        ax.set_facecolor('#1a1a1a')
+                        
+                        # 0원 수평선 추가
+                        ax.axhline(y=0, color='#ff4444', linestyle='--', linewidth=1.5, alpha=0.8)
+                        
+                        # 선 및 마커 그리기 (최종 수익선 전까지)
+                        ax.plot(times, c_pnl, marker='o', linestyle='-', color='#00d1b2', markersize=5, linewidth=2.5)
+                        
+                        # [수정] 차트 X축 끝점을 현재 시간(또는 15:30)으로 설정하여 빈 공간 제거
+                        now = datetime.now()
+                        market_close_fixed = datetime.strptime(f"{date_str} 15:30:00", "%Y%m%d %H:%M:%S")
+                        
+                        # 차트의 끝을 현재 시간으로 하되, 장 종료 이후라면 15:30으로 캡
+                        chart_end_time = min(now, market_close_fixed)
+                        
+                        # [신규] 마지막 수익금에서 '차트 끝 시간'까지 이어지는 가로선을 황색으로 추가
+                        if times and c_pnl:
+                            last_time = times[-1]
+                            last_pnl = c_pnl[-1]
+                            
+                            # 마지막 거래시간이 차트 끝 시간 이전인 경우에만 선 연장
+                            if last_time < chart_end_time:
+                                ax.plot([last_time, chart_end_time], [last_pnl, last_pnl], linestyle='-', color='#f1c40f', linewidth=2.5)
+                        
+                        # 라벨 및 타이틀 (글자 크기 및 색상)
+                        ax.set_title(f"[{date_str}] 시간대별 누적 수익", fontsize=16, fontweight='bold', color='white', pad=15)
+                        ax.set_ylabel("누적 손익금액 (원)", fontsize=13, color='#e0e0e0', labelpad=10)
+                        ax.set_xlabel("시간", fontsize=13, color='#e0e0e0', labelpad=10)
+                        
+                        # [신규] X축 범위 명시적 설정 (끝점을 chart_end_time으로 고정)
+                        ax.set_xlim(right=chart_end_time)
+                        
+                        # X/Y축 눈금 (글자 크기 및 색상)
+                        ax.tick_params(axis='x', colors='#cccccc', labelsize=11)
+                        ax.tick_params(axis='y', colors='#cccccc', labelsize=11)
+                        
+                        # X축 시간 포맷 맞춤
+                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+                        fig.autofmt_xdate(rotation=30)
+                        
+                        # 천단위 콤마
+                        ax.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
+                        
+                        # 배경 그리드
+                        ax.grid(True, color='#333333', linestyle='-', linewidth=0.5, alpha=0.7)
+                        
+                        # 축 테두리(Spine) 색상 변경
+                        for spine in ax.spines.values():
+                            spine.set_color('#444444')
+                        
+                        plt.tight_layout()
+
+                        # Save plot to a buffer for Excel and a file for HTML
+                        img_buf = io.BytesIO()
+                        plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=150)
+                        img_buf.seek(0)
+                        plt.close(fig) # Close the figure to free memory
+
+                        png_filename = final_filename.replace('.csv', '.png')
+                        png_path = os.path.join(self.data_dir, png_filename)
+                        with open(png_path, 'wb') as f:
+                            f.write(img_buf.getvalue())
+                        
+                        # [신규] 통계 텍스트 하단에 HTML 이미지 태그 생성 및 저장
+                        # 절대 경로를 URL 형식으로 변환 (file:///)
+                        img_url = f"file:///{png_path.replace(chr(92), '/')}" 
+                        # QTextEdit은 % 너비를 지원하지 않으므로 고정 픽셀(480px, 80% 스케일) 사용
+                        img_html = f"<br><img src='{img_url}' width='480'/><br>"
+                        display_rows.append(img_html)
+                        current_stats['img_html'] = img_html  # report()로 전달
+                        
+                        # 엑셀 파일 저장 경로 설정 (.xlsx)
+                        excel_filename = final_filename.replace('.csv', '.xlsx')
+                        excel_path = os.path.join(self.data_dir, excel_filename)
+                        
+                        # 엑셀에 데이터프레임 기록
+                        # xlsxwriter 엔진 대신 openpyxl을 사용하면 이미지를 쉽게 삽입할 수 있음
+                        with pd.ExcelWriter(excel_path, engine='openpyxl') as writer:
+                            df.to_excel(writer, index=False, sheet_name='매매일지')
+                            workbook = writer.book
+                            worksheet = writer.sheets['매매일지']
+                            
+                            # 차트 이미지 삽입 (우측 P2 셀 쯤에 위치)
+                            if plot_data and img_buf:
+                                try:
+                                    img = OpenpyxlImage(img_buf)
+                                    worksheet.add_image(img, 'P2')
+                                except Exception as img_err:
+                                    print(f"⚠️ 이미지를 엑셀에 삽입하지 못했습니다: {img_err}")
+
+                            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+                            
+                            # --- [신규] 표 내용(매수전략별) 글씨 색상 및 전체적인 디자인 적용 ---
+                            thin_border = Border(left=Side(style='thin'), 
+                                                 right=Side(style='thin'), 
+                                                 top=Side(style='thin'), 
+                                                 bottom=Side(style='thin'))
+
+                            header_fill = PatternFill(start_color="333333", end_color="333333", fill_type="solid")
+                            header_font = Font(color="FFFFFF", bold=True)
+                            sum_fill = PatternFill(start_color="F2F2F2", end_color="F2F2F2", fill_type="solid")
+                            sum_font = Font(bold=True)
+                            
+                            font_red = Font(color="E74C3C")      # 적색 (1주)
+                            font_green = Font(color="28A745")    # 초록색 (금액)
+                            font_blue = Font(color="007BFF")     # 파란색 (비율)
+                            font_purple = Font(color="9B59B6")   # 보라색 (HTS)
+                            
+                            max_row = worksheet.max_row
+                            max_col = worksheet.max_column
+                            
+                            # 1. 헤더 (1행) 디자인
+                            for c in range(1, max_col + 1):
+                                cell = worksheet.cell(row=1, column=c)
+                                cell.fill = header_fill
+                                cell.font = header_font
+                                cell.alignment = Alignment(horizontal="center", vertical="center")
+                                
+                            # 2. 합계 줄 (마지막 행) 디자인
+                            for c in range(1, max_col + 1):
+                                cell = worksheet.cell(row=max_row, column=c)
+                                cell.fill = sum_fill
+                                cell.font = sum_font
+                            
+                            # 3. 데이터 줄 (매수전략 조건별로 글씨 색상 적용) 및 전체 테두리
+                            for r in range(1, max_row + 1):
+                                # r이 데이터 행일 때 글자색 판단을 위해 전략(column=2) 미리 읽기
+                                strat_val = ""
+                                if 1 < r < max_row:
+                                    strat_val = str(worksheet.cell(row=r, column=2).value or "")
+                                    
+                                t_font = None
+                                if '한주' in strat_val: t_font = font_red
+                                elif '금액' in strat_val: t_font = font_green
+                                elif '비율' in strat_val or '비중' in strat_val: t_font = font_blue
+                                elif '수동' in strat_val or 'HTS' in strat_val or '직접' in strat_val: t_font = font_purple
+                                
+                                for c in range(1, max_col + 1):
+                                    cell = worksheet.cell(row=r, column=c)
+                                    cell.border = thin_border # 모든 셀 테두리 적용
+                                    
+                                    # 헤더나 합계 줄이 아닐 때만 폰트 색상 덮어쓰기
+                                    if 1 < r < max_row and t_font:
+                                        cell.font = t_font
+                            
+                            # 4. 각 열 너비 데이터에 맞춰 자동 조절
+                            for col in worksheet.columns:
+                                max_length = 0
+                                column_letter = col[0].column_letter
+                                for cell in col:
+                                    try:
+                                        val = str(cell.value) if cell.value is not None else ""
+                                        # 한글/영문 차이를 보정하기 위해 euc-kr 인코딩 길이로 추정
+                                        length = len(val.encode('euc-kr'))
+                                        if length > max_length:
+                                            max_length = length
+                                    except:
+                                        pass
+                                # 텍스트 길이에 맞춰 약간의 여백 추가
+                                adjusted_width = max_length * 1.1 + 2
+                                if adjusted_width > 40: 
+                                    adjusted_width = 40
+                                worksheet.column_dimensions[column_letter].width = adjusted_width
+
+                            # --- [신규] 리포트 요약 텍스트 추가 (차트 하단 'P35' 부터) ---
+                            
+                            # 색상 및 스타일 정의
+                            bg_fill = PatternFill(start_color="000000", end_color="000000", fill_type="solid")
+                            white_font = Font(color="FFFFFF", bold=True)
+                            red_font = Font(color="FF4444", bold=True)
+                            blue_font = Font(color="33B5E5", bold=True)
+                            gold_font = Font(color="F1C40F", bold=True)
+                            green_font = Font(color="00C851", bold=False)
+
+                            # 차트가 없으면 P2부터 바로 텍스트 출력, 있으면 P38부터 (이미지가 꽤 크기 때문에 겹침 방지)
+                            start_row = 38 if plot_data else 2
+                            col_p = 16  # 'P' column is 16th
+
+                            def write_cell(r, text, font=white_font, fill=bg_fill):
+                                cell = worksheet.cell(row=r, column=col_p)
+                                cell.value = text
+                                cell.font = font
+                                cell.fill = fill
+                                cell.alignment = Alignment(vertical='center')
+                                return cell
+                            
+                            r = start_row
+                            write_cell(r, f"📝 [ 오늘 전체 매매 종합 리포트 ]")
+                            r += 1
+                            write_cell(r, f"📅 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", green_font)
+                            r += 1
+                            
+                            total_pnl = current_stats.get('total_pnl', 0)
+                            avg_pnl_rt = current_stats.get('avg_pnl_rt', 0)
+                            pnl_font = red_font if total_pnl >= 0 else blue_font
+                            write_cell(r, f"💰 당일 총손익 : {total_pnl:+,}원 ({avg_pnl_rt:+.2f}%)", pnl_font)
+                            r += 1
+                            
+                            peak_time_str = current_stats.get('peak_pnl_time', '약속된 시간 없음')
+                            peak_pnl_val = current_stats.get('peak_pnl', 0)
+                            write_cell(r, f"👑 최고 수익 시간 : {peak_time_str} ({peak_pnl_val:+,}원)", gold_font)
+                            r += 1
+                            
+                            wr = current_stats.get('win_rate', 0)
+                            pf = current_stats.get('profit_factor', 0)
+                            pr = current_stats.get('payoff_ratio', 0)
+                            ex = current_stats.get('expectancy', 0)
+                            mdd = current_stats.get('mdd', 0)
+                            sr = current_stats.get('sharpe_ratio', 0)
+                            
+                            wr_font = red_font if wr >= 70 else (blue_font if wr <= 40 else white_font)
+                            pf_font = red_font if pf >= 2.0 else (blue_font if pf < 1.0 else white_font)
+                            
+                            write_cell(r, f"📊 승률 : {wr:.1f}%", wr_font)
+                            r += 1
+                            write_cell(r, f"💰 PF(Profit Factor) : {pf:.2f}", pf_font)
+                            r += 1
+                            write_cell(r, f"⚖️ 손익비(Payoff Ratio) : {pr:.2f}")
+                            r += 1
+                            write_cell(r, f"🎯 매매 기댓값 : {int(ex):,}원", gold_font)
+                            r += 1
+                            write_cell(r, f"📉 MDD(최대낙폭) : {int(mdd):,}원", gold_font)
+                            r += 1
+                            write_cell(r, f"📈 샤프 지수 : {sr:.2f}")
+                            r += 2
+                            
+                            # [신규] 매수 전략별 매매현황 (v4.1.2)
+                            strat_stats = current_stats.get('strat_stats', {})
+                            if strat_stats:
+                                write_cell(r, "📂 [ 매수 전략별 매매현황 ]")
+                                r += 1
+                                # 수익금액 기준 내림차순 정렬
+                                sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                                for s_key, s_data in sorted_strats:
+                                    s_pnl = s_data['pnl']
+                                    s_rt = (s_pnl / s_data['buy_amt'] * 100) if s_data['buy_amt'] > 0 else 0
+                                    s_font = red_font if s_pnl >= 0 else blue_font
+                                    write_cell(r, f" 🔹 {s_data['nm']:<10}: {s_pnl:+,}원 ({s_rt:+.2f}%)", s_font)
+                                    r += 1
+                                r += 1
+
+                            # [신규] 조건식별 매매현황 (v4.1.2)
+                            cond_stats = current_stats.get('cond_stats', {})
+                            if cond_stats:
+                                write_cell(r, "📂 [ 조건식별 매매현황 ]")
+                                r += 1
+                                # 수익금액 기준 내림차순 정렬
+                                sorted_conds = sorted(cond_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                                for c_name, c_data in sorted_conds:
+                                    c_pnl = c_data['pnl']
+                                    c_rt = (c_pnl / c_data['buy_amt'] * 100) if c_data['buy_amt'] > 0 else 0
+                                    c_font = red_font if c_pnl >= 0 else blue_font
+                                    write_cell(r, f" 🔹 {c_name[:12]:<12}: {c_pnl:+,}원 ({c_rt:+.2f}%)", c_font)
+                                    r += 1
+                                r += 1
+                            
+                            write_cell(r, "📂 [ 오늘 전체 누적 매매현황 ]")
+                            r += 1
+                            write_cell(r, f"🔹 총매수 : {current_stats.get('total_buy', 0):,}", green_font)
+                            r += 1
+                            write_cell(r, f"🔹 총매도 : {current_stats.get('total_sell', 0):,}", green_font)
+                            r += 1
+                            write_cell(r, f"🔹 세금외 : {current_stats.get('total_tax', 0):,}", green_font)
+                            r += 1
+                            write_cell(r, f"✨ 손익 : {total_pnl:+,}원 ({avg_pnl_rt:+.2f}%)", pnl_font)
+                            r += 2
+                            
+                            # 보유 종목 정보
+                            write_cell(r, "📈 [ 현재 보유 종목 ]")
+                            r += 1
+                            try:
+                                account_cache = ACCOUNT_CACHE.get('holdings', {})
+                                if account_cache:
+                                    for code, s in account_cache.items():
+                                        try:
+                                            pl_rt = float(s.get('pl_rt', 0))
+                                            emoji = "📈" if pl_rt > 0 else "📉"
+                                            color_font = red_font if pl_rt > 0 else blue_font
+                                            write_cell(r, f"{emoji} {s.get('name', 'N/A')}: {pl_rt:+.2f}% ({int(s.get('pnl', 0)):,}원)", color_font)
+                                            r += 1
+                                        except:
+                                            pass
+                                else:
+                                    write_cell(r, "현재 보유 중인 종목이 없습니다.", green_font)
+                            except Exception as e:
+                                write_cell(r, "보유 종목 조회 불가", white_font)
+                            
+                            # 열 너비 조정 (보고서 텍스트 짤림 방지용)
+                            worksheet.column_dimensions['P'].width = 60
+
+                        tel_send(f"<font color='#00d1b2'>📊 <b>그래프가 포함된 엑셀 보고서 생성 완료:</b> {excel_filename}</font>")
+                        print(f"✅ 엑셀 및 차트 파일 생성 완료: {excel_path}")
+                except Exception as ex_err:
+                    print(f"❌ 엑셀 및 그래프 생성 오류: {ex_err}")
+                    
+
             except Exception as save_err: 
                 print(f"❌ csv 저장 오류: {save_err}")
 
@@ -971,6 +1388,26 @@ class ChatCommand:
                 log_and_tel("📂 로그 데이터 폴더(LogData)를 엽니다.")
             else:
                 log_and_tel("❌ 로그 폴더가 존재하지 않습니다.")
+        elif cmd.startswith('ai 뉴스'):
+            parts = cmd_full.split()
+            if len(parts) > 2:
+                stock_name = parts[2].strip()
+                tel_send(f"⏳ '{stock_name}' 최신 뉴스 검색 및 AI 분석 시작... (최대 10초 소요)")
+                from news_sniper import run_news_sniper
+                
+                # 웹 스크래핑과 AI 통신은 시간이 걸리므로 메인 스레드 블로킹 방지를 위해 비동기 실행
+                loop = asyncio.get_event_loop()
+                result_msg = await loop.run_in_executor(None, run_news_sniper, stock_name)
+                
+                # HTML 태그가 포함되어 있으므로 parse_mode='HTML'을 사용해 전송
+                # HTML 태그가 포함되어 있으므로 parse_mode='HTML'을 사용해 전송
+                await loop.run_in_executor(None, real_tel_send, result_msg, 'HTML')
+                
+                # [신규] GUI가 켜져 있다면 팝업창으로도 결과 전송
+                if self.on_news_result:
+                    self.on_news_result(result_msg)
+            else:
+                tel_send("❓ 종목명을 함께 입력해주세요. (예: ai 뉴스 삼성전자)")
         elif cmd == 'help': await self.help()
         elif cmd.startswith('tel today'):
             sub_raw = cmd_full[4:].strip() 

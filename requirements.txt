@@ -4,3 +4,5 @@ pandas
 websockets
 python-dateutil
 numpy
+openpyxl
+matplotlib

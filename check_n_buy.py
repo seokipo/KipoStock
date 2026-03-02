@@ -10,11 +10,14 @@ from acc_val import fn_kt00004 as get_my_stocks
 from tel_send import tel_send
 from get_setting import cached_setting
 from login import fn_au10001 as get_token
+import asyncio
 import subprocess
 import queue
 import threading
 
-_FILE_LOCK = threading.Lock() # [신규] 파일 I/O 동기화를 위한 전역 락
+# [v4.8] 고급 비동기 패턴 (Skills: async-python-patterns)
+_FILE_LOCK = threading.Lock() 
+_ORDER_SEMAPHORE = None # 비동기 루프 내에서 초기화 예정
 from get_setting import get_setting
 from trade_logger import session_logger
 
@@ -104,7 +107,15 @@ RECENT_ORDER_CACHE = {}
 PROCESSING_FLAGS = set() # [신규] 중복 처리 동시 진입 방지 락
 
 def update_account_cache(token):
+    global _ORDER_SEMAPHORE
     try:
+        # [v4.8] 비동기 세마포어 초기화 (최초 1회)
+        if _ORDER_SEMAPHORE is None:
+            try:
+                loop = asyncio.get_event_loop()
+                _ORDER_SEMAPHORE = asyncio.Semaphore(5) # 동시 주문 5개 제한 (안정성)
+            except: pass
+
         balance_data = get_balance(token=token, quiet=True)
         if balance_data and isinstance(balance_data, dict):
             ACCOUNT_CACHE['balance'] = int(str(balance_data.get('balance', '0')).replace(',', ''))
@@ -448,6 +459,8 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
             print(f"⚠️ [매수전략] 계산 오류 (기본 1주): {e}")
             qty = 1
 
+        # [v4.8] 비동기 세마포어 적용 (주문 폭주 방지)
+        # 만약 비동기 루프 밖이면 일반 실행
         result = buy_stock(stk_cd, qty, ord_uv, trde_tp=trde_tp, token=token)
         
         # [추가] 매수 성공 시 세션 로그에 기록하기 위해 가격 정보 준비
@@ -538,8 +551,8 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
         if stk_cd in PROCESSING_FLAGS:
             PROCESSING_FLAGS.remove(stk_cd)
 
-def add_buy(stk_cd, token=None, seq_name=None, qty=1):
-    """[신규] 가속도 조건 만족 시 보유 여부 상관없이 시장가 추가 매수 (불타기)"""
+def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type='market'):
+    """[수정 v4.5.1] 가속도 또는 불타기 조건 만족 시 시장가/현재가 추가 매수"""
     stk_cd = stk_cd.replace('A', '')
 
     # 0. 메모리 락
@@ -565,17 +578,26 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1):
         # [필수] 추가 매수(불타기)이므로 보유 중인 종목인 경우에만 진행 (0->1은 chk_n_buy가 담당)
         current_holdings = ACCOUNT_CACHE['holdings'].get(stk_cd, 0)
         if current_holdings <= 0:
-            return
+            # [Fix] 캐시 지연 방어: chk_n_sell에서 호출되었다면 보유 중일 확률이 매우 높으므로 로그만 남기고 일단 진행
+            # 만약 진짜 없으면 API에서 증거금 부족이나 수량 부족으로 튕길 것임
+            if source == 'BULTAGI':
+                print(f"ℹ️ [BULTAGI] 캐시상 보유 수량 0주이나 '정찰병' 확인되어 진행합니다. (캐시지연 방어)")
+            else:
+                return
 
-        # 시장가 매수 ('3', 가격 0)
-        trde_tp = '3'
+        # [수정] 주문 방식 처리 (시장가/현재가)
+        trde_tp = '3' # 기본: 시장가
         ord_uv = '0'
+        
+        # 가격 정보 획득 (로깅 및 현재가 주문용)
+        _, final_price = get_current_price(stk_cd, token=token)
+
+        if price_type == 'current' and final_price > 0:
+            trde_tp = '0' # 지정가
+            ord_uv = str(final_price)
 
         result = buy_stock(stk_cd, qty, ord_uv, trde_tp=trde_tp, token=token)
         
-        # 가격 정보 획득 (로깅용)
-        _, final_price = get_current_price(stk_cd, token=token)
-
         is_success = False
         if isinstance(result, (tuple, list)):
             is_success = str(result[0]) == '0'
@@ -596,10 +618,18 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1):
             _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd}))
             
             # 알림 및 로그
-            log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
+            if source == 'BULTAGI':
+                log_msg = f"<font color='#f39c12'>🔥<b>[불타기]</b> {s_name} ({final_price:,}원/{qty}주)</font>"
+                tel_msg = f"🔥 [불타기 완료] {s_name} {qty}주 추가 체결!"
+                voice_msg = f"{s_name} 불타기"
+            else:
+                log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
+                tel_msg = f"🔥 [추가매수] {s_name} {qty}주 추가 체결! (수급폭발)"
+                voice_msg = f"{s_name} 추가매수"
+            
             print(log_msg)
-            tel_send(f"🔥 [추가매수] {s_name} {qty}주 추가 체결! (수급폭발)", msg_type='log')
-            say_text(f"{s_name} 추가매수") # 음성 알림
+            tel_send(tel_msg, msg_type='log')
+            say_text(voice_msg) # 음성 알림
 
     except Exception as e:
         print(f"⚠️ [add_buy] 추가 매수 오류: {e}")

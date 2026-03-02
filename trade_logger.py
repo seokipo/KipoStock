@@ -1,5 +1,9 @@
 import time
 import math
+import json
+import os
+import sys
+from datetime import datetime
 
 class TradeLogger:
     def __init__(self):
@@ -8,12 +12,66 @@ class TradeLogger:
         self.cumulative_pnl = 0
         self.pnl_history = [0] # MDD 계산용 누적 손익 히스토리
         self.returns_history = [] # 샤프 지수 계산용 개별 매매 수익률 히스토리
+        
+        # [신규] 경로 설정
+        if getattr(sys, 'frozen', False):
+            self.script_dir = os.path.dirname(sys.executable)
+        else:
+            self.script_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        self.data_dir = os.path.join(self.script_dir, 'LogData')
+        if not os.path.exists(self.data_dir):
+            try: os.makedirs(self.data_dir)
+            except: pass
+        self.backup_file = os.path.join(self.data_dir, 'session_trades.json')
+
+    def save_session(self):
+        """[신규] 현재 세션 데이터를 파일로 백업"""
+        try:
+            data = {
+                'date': datetime.now().strftime("%Y%m%d"),
+                'trades': self.trades,
+                'cumulative_pnl': self.cumulative_pnl,
+                'pnl_history': self.pnl_history,
+                'returns_history': self.returns_history
+            }
+            with open(self.backup_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4, ensure_ascii=False)
+        except Exception as e:
+            print(f"⚠️ [TradeLogger] 세션 저장 실패: {e}")
+
+    def load_session(self):
+        """[신규] 파일에서 세션 데이터 로드 (당일 데이터인 경우에만)"""
+        if not os.path.exists(self.backup_file):
+            return False
+            
+        try:
+            with open(self.backup_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            # 날짜 확인 (오늘 데이터가 아니면 초기화)
+            today_str = datetime.now().strftime("%Y%m%d")
+            if data.get('date') == today_str:
+                self.trades = data.get('trades', [])
+                self.cumulative_pnl = data.get('cumulative_pnl', 0)
+                self.pnl_history = data.get('pnl_history', [0])
+                self.pnl_history = data.get('pnl_history', [{'time': time.strftime("%H:%M:%S"), 'pnl': 0}]) # 초기값 형식 유지
+                self.returns_history = data.get('returns_history', [])
+                print(f"✅ [TradeLogger] 이전 세션 복원 완료 ({len(self.trades)}건의 거래)")
+                return True
+            else:
+                print(f"ℹ️ [TradeLogger] 이전 세션이 오늘 데이터가 아니므로 새로 시작합니다.")
+                return False
+        except Exception as e:
+            print(f"⚠️ [TradeLogger] 세션 로드 실패: {e}")
+            return False
 
     def record_buy(self, code, name, qty, price, strat_mode='qty', seq=None):
         """매수 기록"""
+        current_time_str = time.strftime("%H:%M:%S")
         amount = qty * price
         self.trades.append({
-            'time': time.strftime("%H:%M:%S"),
+            'time': current_time_str,
             'type': 'BUY',
             'code': code,
             'name': name,
@@ -23,12 +81,16 @@ class TradeLogger:
             'strat_mode': strat_mode,
             'seq': seq # [신규] 시퀀스(프로필) 번호 기록
         })
+        # [v4.7.2] 매수 시에도 현재 누적 수익 현황 기록 (그래프 실시간 갱신용)
+        self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
+        self.save_session() # [신규] 실시간 백업
 
     def record_sell(self, code, name, qty, price, pl_rt, pnl_amt, tax=0, seq=None):
         """매도 기록"""
+        current_time_str = time.strftime("%H:%M:%S")
         amount = qty * price
         self.trades.append({
-            'time': time.strftime("%H:%M:%S"),
+            'time': current_time_str,
             'type': 'SELL',
             'code': code,
             'name': name,
@@ -42,8 +104,9 @@ class TradeLogger:
         })
         # 퀀트 분석용 데이터 업데이트
         self.cumulative_pnl += pnl_amt
-        self.pnl_history.append(self.cumulative_pnl)
+        self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
         self.returns_history.append(pl_rt)
+        self.save_session() # [신규] 실시간 백업
 
     def get_session_report(self, target_seq=None):
         """세션 전체 또는 특정 시퀀스 리포트 생성"""
