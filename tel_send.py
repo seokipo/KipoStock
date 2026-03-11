@@ -61,7 +61,7 @@ def tel_send(message, parse_mode=None, msg_type='general'):
         if parse_mode == 'HTML' and chunk.count('<') != chunk.count('>'):
              # 마지막 '<' 위치를 찾아 그 전까지만 자름
              last_open = chunk.rfind('<')
-             if last_open > chunk.rfind('>'):
+             if last_open > chunk.rfind('>') and last_open > 0:
                  end = start + last_open
                  chunk = message[start:end]
         
@@ -81,6 +81,29 @@ def tel_send(message, parse_mode=None, msg_type='general'):
         start = end
         
     return results
+
+def tel_send_photo(photo_path, caption=None):
+    """
+    텔레그램으로 이미지 파일 전송 (로컬 이미지 지원)
+    :param photo_path: 전송할 이미지 파일의 로컬 경로
+    :param caption: (선택) 하단에 붙일 캡션 텍스트
+    """
+    tel_on = get_setting('tel_on', True)
+    if not tel_on: return None
+
+    url = f"https://api.telegram.org/bot{telegram_token}/sendPhoto"
+    
+    try:
+        with open(photo_path, 'rb') as photo:
+            files = {'photo': photo}
+            data = {'chat_id': telegram_chat_id}
+            if caption:
+                data['caption'] = caption
+            response = requests.post(url, files=files, data=data, timeout=30)
+            return response.json()
+    except Exception as e:
+        print(f"⚠️ Telegram 사진 전송 실패: {e}")
+        return None
 
 if __name__ == "__main__":
 	tel_send("키움 API 테스트")

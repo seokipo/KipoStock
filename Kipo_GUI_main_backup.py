@@ -19,9 +19,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QTextEdit, QFrame, QGridLayout, QMessageBox, QGroupBox,
                            QScrollArea, QRadioButton, QButtonGroup, QCheckBox, QSizePolicy,
                            QSpinBox, QComboBox, QDialog, QFormLayout, QSplitter, QTextBrowser,
-                           QStyle, QSlider, QStyleOptionSlider, QWidgetAction, QMenu,
-                           QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-                           QFileDialog, QDoubleSpinBox, QProgressBar, QListWidget, QListWidgetItem, QTabWidget) 
+                           QStyle, QSlider, QStyleOptionSlider, QWidgetAction, QMenu)
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QTimer, QEvent, 
                           QSharedMemory, QSize, QUrl, QPoint, QRect)
 from PyQt6.QtGui import (QFont, QIcon, QColor, QPalette, QPainter, QPolygon, 
@@ -35,7 +33,6 @@ from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter # [신규] 명시적 임포트
 from trade_logger import session_logger
-from kipodb import kipo_db
 
 # 기존 모듈 임포트
 from config import telegram_token, telegram_chat_id
@@ -44,18 +41,6 @@ from chat_command import ChatCommand
 from get_setting import get_setting, cached_setting
 import ctypes # [신규] 윈도우 API 호출용
 from market_hour import MarketHour
-
-def load_json_safe(path, retries=5):
-    """파일 I/O 충돌을 방지하기 위한 안전한 JSON 로드 함수"""
-    for i in range(retries):
-        try:
-            if not os.path.exists(path): return {}
-            with open(path, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except:
-            import time
-            time.sleep(0.1)
-    return {}
 
 # ----------------- Custom Widgets -----------------
 class ZoomableTextEdit(QTextEdit):
@@ -204,10 +189,7 @@ class WorkerSignals(QObject):
     graph_update_signal = pyqtSignal() # [신규] 수익 그래프 업데이트 시그널
     news_signal = pyqtSignal(str)     # [신규 v5.0.1] AI 뉴스 분석 결과 팝업용 시그널
     ai_voice_signal = pyqtSignal(str) # [NEW V5.6.3] 제미나이 AI 음성 대답용 시그널
-    report_signal = pyqtSignal(str) # [v6.3.3] 리포트 데이터 (HTML) - dict에서 str로 수정하여 데이터 누락 해결
-    perspective_signal = pyqtSignal(list) # [신규 v6.1.17] KipoStock 관점 종목 리스트
-    open_config_signal = pyqtSignal() # [신규 v6.1.21] 메인 설정창 팝업 시그널
-    open_ai_settings_signal = pyqtSignal() # [신규 v6.1.21] AI 음성 설정창 팝업 시그널
+    report_signal = pyqtSignal(str)   # [v5.7.16] REPORT 전용 HTML 안전 전송 시그널 (HTML 태그 파손 방지)
 
 class AsyncWorker(QThread):
     def __init__(self, main_window):
@@ -219,8 +201,6 @@ class AsyncWorker(QThread):
         self.keep_running = True
         self.pending_start = False # [추가] 장외 시간 예약 시작 기능용
         self.pending_profile_info = None
-        self.perspective_opened_today = False # [v6.4.8] 종가 분석 팝업 오늘 실행 여부
-        self.last_check_date = datetime.datetime.now().date()
 
     def run(self):
         # Create a new event loop for this thread
@@ -240,38 +220,38 @@ class AsyncWorker(QThread):
         # [v5.7.9 핵심 조치] 대용량 리포트 HTML 문자열이나 빈번한 print가 
         # 메인 GUI 이벤트 루프를 장시간 블로킹하는 현상 방지를 위해 즉시 emit 대신 
         # 내부 큐잉 및 청크 분할 방식을 도입합니다.
-        # [v6.5.1] 스레드별 리다이렉션 상태를 독립적으로 관리 (threading.local)
-        import threading as py_threading
-        _tls = py_threading.local()
-
         class StreamRedirector:
             def __init__(self, emitter, report_emitter=None):
                 self.emitter = emitter
                 self.report_emitter = report_emitter or emitter
+                self.is_redirecting = False
+                self._buffer = ""
+                # [신규] PyQt의 Event Loop를 보호하기 위해 타이머 기반 또는 QMetaObject.invokeMethod 활용 권장되나
+                # 가장 간단한 방법은 emit() 자체를 스레드 안전하게 호출하도록 유지하되
+                # text가 너무 클 경우 잘라서 보내거나 한 프레임에 모아서 보내는 것입니다.
 
             def write(self, text):
-                # 스레드별 재귀 방지 플래그 체크
-                if getattr(_tls, 'is_redirecting', False): return
+                if self.is_redirecting: return
+                # 공백만 있는 쓰레기 로그 무시
                 if not text or text.isspace(): return
                 
-                from PyQt6.QtCore import QThread, QCoreApplication
-                app = QCoreApplication.instance()
-                is_main = (app and QThread.currentThread() == app.thread())
-
                 try:
-                    _tls.is_redirecting = True
+                    self.is_redirecting = True
+                    # [v5.7.16] 리포트 전용 텍스트 감지: HTML 태그가 잘리지 않도록 접두사를 확인
                     if text.startswith('DEBUG_HTML_LOG:'):
+                        # HTML 전체를 보고서 전용 시그널로 안전하게 보냅니다 (절대 잘리지 않음)
                         html_content = text[len('DEBUG_HTML_LOG:'):].strip()
                         self.report_emitter(html_content)
                     elif len(text) > 4000:
+                        # 일반 일반 로그가 너무 길면 역시 잘라서 출력
                         for i in range(0, len(text), 4000):
                             self.emitter(text[i:i+4000])
-                            if not is_main: time.sleep(0.01)
+                            time.sleep(0.01)
                     else:
                         self.emitter(text.rstrip())
                 except: pass
                 finally:
-                    _tls.is_redirecting = False
+                    self.is_redirecting = False
 
             def flush(self):
                 pass
@@ -302,10 +282,6 @@ class AsyncWorker(QThread):
         
         # [NEW V5.6.3] 제미나이 AI 텍스트 응답 수신 시 TTS 낭독 신호 발생
         self.chat_command.on_ai_voice_response = lambda msg: self.signals.ai_voice_signal.emit(msg)
-        
-        # [신규 v6.1.21] AI 설정창 및 불타기 설정창 팝업 콜백 연결
-        self.chat_command.on_open_config = lambda: self.signals.open_config_signal.emit()
-        self.chat_command.on_open_ai_settings = lambda: self.signals.open_ai_settings_signal.emit()
         
         # [신규] 외부(텔레그램, 명령창)에서 시작/중지 요청 시 GUI 신호로 전달
         self.chat_command.on_start_request = lambda: self.signals.log_signal.emit("🤖 외부 시작 명령 수신") or self.schedule_command('start')
@@ -379,19 +355,11 @@ class AsyncWorker(QThread):
                     # 2. 통합 리포트 생성 (Trade Diary + CSV/TXT + Balance)
                     await self.chat_command.report()
 
-                # [v6.4.8] 종가 분석 시간 자동 팝업 (설정된 kipostock_perspective_time 시각)
-                p_time = get_setting('kipostock_perspective_time', '15:10')
-                if p_time and now.strftime("%H:%M") == p_time and not self.perspective_opened_today:
-                    # 장 중이거나 사용자가 장외 테스트를 원하는 경우 모두 실행 (유저 요청 반영)
-                    self.perspective_opened_today = True
-                    self.signals.perspective_signal.emit([]) # 슬롯에서 다이얼로그 오픈
-
                 # 날짜가 바뀌면 종료 플래그 초기화
                 current_date = now.date()
                 if self.last_check_date != current_date:
                     self.last_check_date = current_date
                     self.today_stopped = False
-                    self.perspective_opened_today = False # [v6.4.8] 날짜 바뀌면 리셋
 
                 # 장 시작/종료 시간 자동 확인 로직
                 # [수정] 대기 시간(is_waiting_period)이 아닐 때만 자동 시작 진행하여 무한 루프 방지
@@ -547,11 +515,6 @@ class AsyncWorker(QThread):
                 marked_indices = args[0]
                 if hasattr(self.chat_command, 'sync_marked_indices'):
                     await self.chat_command.sync_marked_indices(marked_indices)
-                    
-            elif cmd_type == 'close_bet':
-                # [v6.3.0 버그수정] _execute_command에 close_bet 케이스 누락으로 인한 미실행 버그 수정
-                # schedule_command('close_bet') 호출 시 chat_command의 close_bet 로직이 실행되도록 연결
-                await self.chat_command.process_command('close_bet')
 
         except Exception as e:
             self.signals.log_signal.emit(f"❌ 명령 실행 오류: {e}")
@@ -585,11 +548,11 @@ class BultagiSettingsDialog(QDialog):
         self.profile_idx = getattr(parent, 'current_profile_idx', None)
 
         self.setWindowTitle("🔥 불타기(Fire-up) 상세 설정")
-        self.setFixedWidth(420)
+        self.setFixedSize(400, 600)
         self.setStyleSheet("""
             QDialog { background-color: #1e1e1e; color: #ffffff; }
             QLabel { color: #ffffff; font-weight: bold; }
-            QLineEdit, QComboBox, QDoubleSpinBox, QTabWidget { 
+            QLineEdit, QComboBox { 
                 background-color: #333333; color: #ffffff; 
                 border: 1px solid #555555; border-radius: 4px; padding: 4px;
             }
@@ -601,261 +564,185 @@ class BultagiSettingsDialog(QDialog):
             QPushButton#btn_cancel { background-color: #6c757d; }
             QPushButton#btn_cancel:hover { background-color: #5a6268; }
         """)
-
-        # [v6.8] 메인 레이아웃 및 탭 위젯 도입 (불타기와 종가 분리)
-        main_vbox = QVBoxLayout(self)
-        self.tab_widget = QTabWidget()
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #444; top: -1px; background-color: #1e1e1e; }
-            QTabBar::tab {
-                background: #2b2b2b; color: #888; border: 1px solid #444;
-                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px;
-                padding: 10px 20px; min-width: 120px; font-weight: bold;
-            }
-            QTabBar::tab:selected { background: #333; color: #f1c40f; border-bottom: 2px solid #f1c40f; }
-            QTabBar::tab:hover { background: #3a3a3a; color: #ddd; }
-        """)
-
-        # --- Tab 1: 🔥 실시간 불타기 ---
-        tab_fire = QWidget()
-        fire_vbox = QVBoxLayout(tab_fire)
-        fire_form = QFormLayout()
-        fire_form.setVerticalSpacing(12); fire_form.setHorizontalSpacing(12)
+        
+        layout = QVBoxLayout(self)
+        form_layout = QFormLayout()
+        form_layout.setSpacing(15)
         
         self.input_wait = QLineEdit()
         self.input_wait.setPlaceholderText("초 단위 (예: 30)")
-        fire_form.addRow("⏳ 타겟 포착 대기(초):", self.input_wait)
+        form_layout.addRow("⏳ 타겟 포착 대기(초):", self.input_wait)
         
-        h_mode = QHBoxLayout()
+        h_layout = QHBoxLayout()
         self.combo_mode = QComboBox()
+        # [UX 피드백] (만원) 텍스트 명확히 하귀 위해 뒤의 라벨 등으로 분리하거나 단순화
         self.combo_mode.addItems(["배수", "금액"])
         self.input_val = QLineEdit()
         self.input_val.setPlaceholderText("숫자 입력")
+        # [UX 신규] 콤마(,) 1000단위 자동 입력
         self.input_val.textChanged.connect(self.format_money)
-        h_mode.addWidget(self.combo_mode)
-        h_mode.addWidget(self.input_val)
-        fire_form.addRow("💰 추가 매수 단위:", h_mode)
+        h_layout.addWidget(self.combo_mode)
+        h_layout.addWidget(self.input_val)
+        form_layout.addRow("💰 추가 매수 단위:", h_layout)
         
         self.combo_price_type = QComboBox()
         self.combo_price_type.addItems(["시장가", "현재가"])
-        fire_form.addRow("🛒 매수 주문 방식:", self.combo_price_type)
+        form_layout.addRow("🛒 매수 주문 방식:", self.combo_price_type)
 
+        # --- [신규 v4.6.8] 키움 스타일 스탑로스 설정 ---
         line_top = QFrame()
-        line_top.setFrameShape(QFrame.Shape.HLine); line_top.setStyleSheet("background-color: #444;")
-        fire_form.addRow(line_top)
+        line_top.setFrameShape(QFrame.Shape.HLine)
+        line_top.setStyleSheet("background-color: #444;")
+        form_layout.addRow(line_top)
 
-        # 스탑로스 설정
+        # 1. 이익실현
         self.chk_tp = QCheckBox(" 이익실현")
-        self.input_tp = QLineEdit(); self.input_tp.setFixedWidth(80); self.input_tp.setPlaceholderText("5.0")
-        h_tp = QHBoxLayout(); h_tp.addWidget(self.chk_tp); h_tp.addStretch(); h_tp.addWidget(self.input_tp); h_tp.addWidget(QLabel("%"))
-        fire_form.addRow(h_tp)
+        self.input_tp = QLineEdit()
+        self.input_tp.setFixedWidth(80)
+        self.input_tp.setPlaceholderText("5.0")
+        h_tp = QHBoxLayout()
+        h_tp.addWidget(self.chk_tp)
+        h_tp.addStretch()
+        h_tp.addWidget(self.input_tp)
+        h_tp.addWidget(QLabel("%"))
+        form_layout.addRow(h_tp)
 
+        # 2. 이익보존 (트레일링)
         self.chk_preservation = QCheckBox(" 이익보존")
-        self.input_p_trigger = QLineEdit(); self.input_p_trigger.setFixedWidth(60); self.input_p_trigger.setPlaceholderText("3.0")
-        self.input_p_limit = QLineEdit(); self.input_p_limit.setFixedWidth(60); self.input_p_limit.setPlaceholderText("2.0")
+        self.input_p_trigger = QLineEdit()
+        self.input_p_trigger.setFixedWidth(60)
+        self.input_p_trigger.setPlaceholderText("3.0")
+        self.input_p_limit = QLineEdit()
+        self.input_p_limit.setFixedWidth(60)
+        self.input_p_limit.setPlaceholderText("2.0")
         h_p = QHBoxLayout()
-        h_p.addWidget(self.chk_preservation); h_p.addStretch(); h_p.addWidget(self.input_p_trigger)
-        h_p.addWidget(QLabel("% 도달 시")); h_p.addWidget(self.input_p_limit); h_p.addWidget(QLabel("% 매도"))
-        fire_form.addRow(h_p)
+        h_p.addWidget(self.chk_preservation)
+        h_p.addStretch()
+        h_p.addWidget(self.input_p_trigger)
+        h_p.addWidget(QLabel("% 도달 시"))
+        h_p.addWidget(self.input_p_limit)
+        h_p.addWidget(QLabel("% 매도"))
+        form_layout.addRow(h_p)
 
+        # 3. 손실제한
         self.chk_sl = QCheckBox(" 손실제한")
-        self.input_sl = QLineEdit(); self.input_sl.setFixedWidth(80); self.input_sl.setPlaceholderText("-2.0")
-        h_sl = QHBoxLayout(); h_sl.addWidget(self.chk_sl); h_sl.addStretch(); h_sl.addWidget(self.input_sl); h_sl.addWidget(QLabel("%"))
-        fire_form.addRow(h_sl)
-        
-        # [UX] 텍스트 입력 시그널 연결
+        self.input_sl = QLineEdit()
+        self.input_sl.setFixedWidth(80)
+        self.input_sl.setPlaceholderText("-2.0")
+        h_sl = QHBoxLayout()
+        h_sl.addWidget(self.chk_sl)
+        h_sl.addStretch()
+        h_sl.addWidget(self.input_sl)
+        h_sl.addWidget(QLabel("%"))
+        form_layout.addRow(h_sl)
+
+        # [UX 신규] 양수/음수 기호 자동 보정
         self.input_tp.textChanged.connect(lambda t: self.format_percent(self.input_tp, t, is_profit=True))
         self.input_p_trigger.textChanged.connect(lambda t: self.format_percent(self.input_p_trigger, t, is_profit=True))
         self.input_p_limit.textChanged.connect(lambda t: self.format_percent(self.input_p_limit, t, is_profit=True))
         self.input_sl.textChanged.connect(lambda t: self.format_percent(self.input_sl, t, is_profit=False))
-
-        line_mid = QFrame(); line_mid.setFrameShape(QFrame.Shape.HLine); line_mid.setStyleSheet("background-color: #444;")
-        fire_form.addRow(line_mid)
+        
+        # --- [신규 v4.6.6] 체결강도 및 호가잔량 조건 ---
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setFrameShadow(QFrame.Shadow.Sunken)
+        line.setStyleSheet("background-color: #444;")
+        form_layout.addRow(line)
         
         self.chk_power = QCheckBox(" 체결강도 필터 사용")
-        self.input_power = QLineEdit(); self.input_power.setFixedWidth(80); self.input_power.setPlaceholderText("120")
-        h_power = QHBoxLayout(); h_power.addWidget(self.chk_power); h_power.addStretch(); h_power.addWidget(self.input_power); h_power.addWidget(QLabel("% 이상"))
-        fire_form.addRow(h_power)
+        self.input_power = QLineEdit()
+        self.input_power.setFixedWidth(80)
+        self.input_power.setPlaceholderText("120")
+        h_power = QHBoxLayout()
+        h_power.addWidget(self.chk_power)
+        h_power.addStretch()
+        h_power.addWidget(self.input_power)
+        h_power.addWidget(QLabel("% 이상"))
+        form_layout.addRow(h_power)
 
         self.chk_slope = QCheckBox(" 체결강도 강화(상승 추세) 시에만 매수")
-        fire_form.addRow(self.chk_slope)
+        form_layout.addRow(self.chk_slope)
 
         self.chk_orderbook = QCheckBox(" 호가잔량비 역전 필터 사용")
-        self.input_orderbook = QLineEdit(); self.input_orderbook.setFixedWidth(80); self.input_orderbook.setPlaceholderText("2.0")
-        h_ob = QHBoxLayout(); h_ob.addWidget(self.chk_orderbook); h_ob.addStretch(); h_ob.addWidget(self.input_orderbook); h_ob.addWidget(QLabel("배 이상"))
-        fire_form.addRow(h_ob)
-
-        # [신규 v6.9.5] Turbo VI (VI 해제 시 즉시 매수) 설정
-        self.chk_turbo_vi = QCheckBox(" VI 해제/재개 시 즉시 매수 (Turbo VI)")
-        self.combo_turbo_vi_type = QComboBox()
-        self.combo_turbo_vi_type.addItems(["시장가", "현재가"])
-        self.combo_turbo_vi_type.setFixedWidth(100)
-        h_turbo = QHBoxLayout(); h_turbo.addWidget(self.chk_turbo_vi); h_turbo.addStretch(); h_turbo.addWidget(self.combo_turbo_vi_type)
-        fire_form.addRow(h_turbo)
+        self.input_orderbook = QLineEdit()
+        self.input_orderbook.setFixedWidth(80)
+        self.input_orderbook.setPlaceholderText("2.0")
+        h_ob = QHBoxLayout()
+        h_ob.addWidget(self.chk_orderbook)
+        h_ob.addStretch()
+        h_ob.addWidget(self.input_orderbook)
+        h_ob.addWidget(QLabel("배 이상"))
+        form_layout.addRow(h_ob)
         
-        fire_vbox.addLayout(fire_form)
-        fire_vbox.addStretch()
-
-        # --- Tab 2: 🌙 종가 분석 ---
-        tab_jongga = QWidget()
-        jongga_vbox = QVBoxLayout(tab_jongga)
-        jongga_form = QFormLayout()
-        jongga_form.setVerticalSpacing(15); jongga_form.setHorizontalSpacing(12)
-
-        lbl_kipo_info = QLabel("🌙 KipoStock 관점 필터 설정")
-        lbl_kipo_info.setStyleSheet("color: #f1c40f; font-size: 15px; margin-bottom: 10px;")
-        jongga_form.addRow(lbl_kipo_info)
-
-        self.spin_peak = QDoubleSpinBox()
-        self.spin_peak.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_peak.setDecimals(1)
-        self.spin_peak.setRange(0, 100); self.spin_peak.setSuffix(" % 이상"); self.spin_peak.setSingleStep(1.0); self.spin_peak.setFixedHeight(32)
-        jongga_form.addRow("🎯 당일 고가 달성:", self.spin_peak)
-
-        self.spin_now_min = QDoubleSpinBox(); self.spin_now_min.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_now_min.setDecimals(1)
-        self.spin_now_min.setRange(-30, 30); self.spin_now_min.setSuffix(" %"); self.spin_now_min.setFixedHeight(32)
-        self.spin_now_max = QDoubleSpinBox(); self.spin_now_max.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_now_max.setDecimals(1)
-        self.spin_now_max.setRange(-30, 30); self.spin_now_max.setSuffix(" %"); self.spin_now_max.setFixedHeight(32)
+        lbl_info = QLabel("※ 매도잔량이 매수잔량보다 많아야 에너지가 응축됨")
+        lbl_info.setStyleSheet("color: #888; font-size: 11px; font-weight: normal;")
+        form_layout.addRow(lbl_info)
+        # ----------------------------------------------
         
-        h_now = QHBoxLayout(); h_now.addWidget(self.spin_now_min); h_now.addWidget(QLabel("~")); h_now.addWidget(self.spin_now_max)
-        jongga_form.addRow("📊 현재 수익률 구간:", h_now)
-
-        self.input_perspective_time = QLineEdit(); self.input_perspective_time.setPlaceholderText("예: 15:10"); self.input_perspective_time.setFixedWidth(120); self.input_perspective_time.setFixedHeight(32)
-        self.btn_search_stocks = QPushButton("🔍 종목 탐색"); self.btn_search_stocks.setFixedHeight(35)
-        self.btn_search_stocks.setStyleSheet("background-color: #f1c40f; color: #1a1a1a; font-weight: bold; border-radius: 6px; font-size: 13px;")
-        self.btn_search_stocks.clicked.connect(self._open_kipo_filter_dialog)
+        layout.addLayout(form_layout)
         
-        jongga_form.addRow("⏰ 종가 분석 시간:", self.input_perspective_time)
-        jongga_form.addRow("", self.btn_search_stocks)
-        
-        jongga_vbox.addLayout(jongga_form)
-        jongga_vbox.addStretch()
-
-        self.tab_widget.addTab(tab_fire, "🔥 실시간 불타기")
-        self.tab_widget.addTab(tab_jongga, "🌙 종가 분석")
-
-        # --- Tab 3: [신규] 🌅 시초가 베팅 ---
-        tab_morning = QWidget()
-        morning_vbox = QVBoxLayout(tab_morning)
-        morning_form = QFormLayout()
-        morning_form.setVerticalSpacing(15); morning_form.setHorizontalSpacing(12)
-
-        self.chk_morning_enabled = QCheckBox(" 🌅 시초가 베팅(초단타) 기능 활성화")
-        self.chk_morning_enabled.setStyleSheet("font-size: 14px; color: #00e5ff; margin-bottom: 5px;")
-        morning_form.addRow(self.chk_morning_enabled)
-
-        # 1. 🕒 매매 제한 시간
-        self.input_morning_time = QLineEdit()
-        self.input_morning_time.setPlaceholderText("예: 09:10")
-        self.input_morning_time.setFixedWidth(120); self.input_morning_time.setFixedHeight(32)
-        morning_form.addRow("🕒 매매 제한 시간:", self.input_morning_time)
-
-        # 2. 📈 갭 상승 조건 (최소 ~ 최대)
-        self.spin_morning_gap_min = QDoubleSpinBox()
-        self.spin_morning_gap_min.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_morning_gap_min.setDecimals(1)
-        self.spin_morning_gap_min.setRange(0, 30); self.spin_morning_gap_min.setSuffix(" %"); self.spin_morning_gap_min.setFixedHeight(32)
-        
-        self.spin_morning_gap_max = QDoubleSpinBox()
-        self.spin_morning_gap_max.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_morning_gap_max.setDecimals(1)
-        self.spin_morning_gap_max.setRange(0, 30); self.spin_morning_gap_max.setValue(5.0); self.spin_morning_gap_max.setSuffix(" %"); self.spin_morning_gap_max.setFixedHeight(32)
-        
-        h_morning_gap = QHBoxLayout(); h_morning_gap.addWidget(self.spin_morning_gap_min); h_morning_gap.addWidget(QLabel("~")); h_morning_gap.addWidget(self.spin_morning_gap_max)
-        morning_form.addRow("📈 전일 대비 갭상승:", h_morning_gap)
-
-        # 3. 🚀 시가 돌파 조건
-        self.spin_morning_break = QDoubleSpinBox()
-        self.spin_morning_break.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_morning_break.setDecimals(1)
-        self.spin_morning_break.setRange(0, 30); self.spin_morning_break.setValue(2.0); self.spin_morning_break.setSuffix(" % 돌파 시"); self.spin_morning_break.setFixedHeight(32)
-        morning_form.addRow("🚀 시가 대비 돌파:", self.spin_morning_break)
-
-        # 4. ⚔️ 초단타 리스크 관리 (손익절)
-        self.spin_morning_tp = QDoubleSpinBox()
-        self.spin_morning_tp.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_morning_tp.setDecimals(1)
-        self.spin_morning_tp.setRange(0, 30); self.spin_morning_tp.setValue(2.0); self.spin_morning_tp.setSuffix(" %"); self.spin_morning_tp.setFixedHeight(32)
-        
-        self.spin_morning_sl = QDoubleSpinBox()
-        self.spin_morning_sl.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons); self.spin_morning_sl.setDecimals(1)
-        self.spin_morning_sl.setRange(-30, 0); self.spin_morning_sl.setSuffix(" %"); self.spin_morning_sl.setFixedHeight(32)
-        
-        h_morning_risk = QHBoxLayout(); h_morning_risk.addWidget(QLabel("익절:")); h_morning_risk.addWidget(self.spin_morning_tp)
-        h_morning_risk.addSpacing(15); h_morning_risk.addWidget(QLabel("손절:")); h_morning_risk.addWidget(self.spin_morning_sl)
-        morning_form.addRow("⚔️ 전용 손익절:", h_morning_risk)
-
-        # 5. 🤖 AI 종목 필터링
-        self.chk_morning_ai = QCheckBox(" 🤖 (추천) AI 뉴스 스나이퍼 호재 판정 시에만 진입")
-        morning_form.addRow(self.chk_morning_ai)
-
-        # 6. 🎯 [신규] 종목 소싱 방식 선택 (투트랙)
-        self.combo_morning_source = QComboBox()
-        self.combo_morning_source.addItems(["A. 실시간 조건검색식 감시", "B. 예상 체결량 상위 스캔"])
-        self.combo_morning_source.setFixedWidth(200)
-        morning_form.addRow("🎯 종목 발굴 방식:", self.combo_morning_source)
-
-        morning_vbox.addLayout(morning_form)
-        morning_vbox.addStretch()
-
-        self.tab_widget.addTab(tab_morning, "🌅 시초가 베팅")
-
-        main_vbox.addWidget(self.tab_widget)
-        
-        # 하단 버튼
         btn_layout = QHBoxLayout()
-        self.btn_save = QPushButton("💾 설정 저장")
-        self.btn_save.setFixedWidth(120)
+        self.btn_save = QPushButton("💾 설정 저장") # [수정] 클래스 변수로 전환
         self.btn_save.clicked.connect(self.apply_settings)
         btn_cancel = QPushButton("취소")
-        btn_cancel.setFixedWidth(80)
         btn_cancel.setObjectName("btn_cancel")
         btn_cancel.clicked.connect(self.reject)
         
         btn_layout.addStretch()
         btn_layout.addWidget(btn_cancel)
-        btn_layout.addWidget(self.btn_save)
-        main_vbox.addLayout(btn_layout)
+        btn_layout.addWidget(self.btn_save) # [수정] 클래스 변수
+        layout.addLayout(btn_layout)
         
+        # [신규] 부모 테마에 맞춰 초기 스타일 적용
         if parent:
             self.apply_theme(parent.ui_theme)
         self.load_settings()
 
     def apply_theme(self, theme):
         """[신규] 부모의 테마 상태에 맞춰 다이얼로그 스타일 갱신"""
-        is_light = (theme == 'light')
-        style_vars = {
-            'bg_color': "#f8f9fa" if is_light else "#1e1e1e",
-            'fg_color': "#333333" if is_light else "#ffffff",
-            'input_bg': "#ffffff" if is_light else "#333333",
-            'input_border': "#cccccc" if is_light else "#555555"
-        }
-        
-        self.setStyleSheet("""
-            QDialog {{ background-color: {bg_color}; color: {fg_color}; }}
-            QLabel {{ color: {fg_color}; font-weight: bold; }}
-            QCheckBox {{ color: {fg_color}; }}
-            QTabWidget::pane {{ border: 1px solid #444; top: -1px; background-color: {bg_color}; }}
-            QTabBar::tab {{
-                background: {input_bg}; color: {fg_color}; border: 1px solid {input_border};
-                border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px;
-                padding: 10px 20px; min-width: 120px; font-weight: bold;
-            }}
-            QTabBar::tab:selected {{ background: {bg_color}; color: #f1c40f; border-bottom: 2px solid #f1c40f; }}
-            QLineEdit, QComboBox, QDoubleSpinBox {{ 
-                background-color: {input_bg}; color: {fg_color}; 
-                border: 1px solid {input_border}; border-radius: 4px; padding: 4px;
-            }}
-            QPushButton {{ 
-                background-color: #dc3545; color: white; font-weight: bold;
-                border-radius: 6px; padding: 8px; font-size: 13px;
-            }}
-            QPushButton:hover {{ background-color: #c82333; }}
-            QPushButton#btn_cancel {{ background-color: #6c757d; }}
-            QPushButton#btn_cancel:hover {{ background-color: #5a6268; }}
-        """.format(**style_vars))
+        if theme == 'light':
+            self.setStyleSheet("""
+                QDialog { background-color: #f0f2f5; color: #212529; }
+                QLabel { color: #212529; font-weight: bold; }
+                QLineEdit, QComboBox { 
+                    background-color: #ffffff; color: #212529; 
+                    border: 1px solid #ced4da; border-radius: 4px; padding: 4px;
+                }
+                QCheckBox { color: #495057; font-weight: bold; }
+                QPushButton { 
+                    background-color: #dc3545; color: white; font-weight: bold;
+                    border-radius: 6px; padding: 8px; font-size: 13px;
+                }
+                QPushButton:hover { background-color: #c82333; }
+                QPushButton#btn_cancel { background-color: #adb5bd; color: #212529; }
+                QPushButton#btn_cancel:hover { background-color: #9ea7af; }
+                QFrame { background-color: #dee2e6; }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog { background-color: #1e1e1e; color: #ffffff; }
+                QLabel { color: #ffffff; font-weight: bold; }
+                QLineEdit, QComboBox { 
+                    background-color: #333333; color: #ffffff; 
+                    border: 1px solid #555555; border-radius: 4px; padding: 4px;
+                }
+                QCheckBox { color: #aaa; font-weight: bold; }
+                QPushButton { 
+                    background-color: #dc3545; color: white; font-weight: bold;
+                    border-radius: 6px; padding: 8px; font-size: 13px;
+                }
+                QPushButton:hover { background-color: #c82333; }
+                QPushButton#btn_cancel { background-color: #6c757d; }
+                QPushButton#btn_cancel:hover { background-color: #5a6268; }
+                QFrame { background-color: #444; }
+            """)
 
     # [UX 신규] 1000 단위 콤마 자동 입력
     def format_money(self):
         text = self.input_val.text().replace(',', '')
         if text.isdigit():
             self.input_val.blockSignals(True)
-            self.input_val.setText(format(int(text), ','))
+            self.input_val.setText(f"{int(text):,}")
             self.input_val.blockSignals(False)
 
     # [UX 신규] 소수점 정밀 입력 개선 (소수점 뒤 0이나 마침표 허용)
@@ -883,100 +770,52 @@ class BultagiSettingsDialog(QDialog):
         except: return {}
 
     def load_settings(self):
-        try:
-            # 1. 파일에서 설정 직접 로드 (가장 안전한 방법)
-            try:
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    root = json.load(f)
-            except:
-                root = {}
-            
-            target = root
-            # 2. 부모(KipoWindow)로부터 현재 프로필 인덱스 참조
-            p = self.parent() if self.parent() else None
-            profile_idx = str(getattr(p, 'current_profile_idx', 'M')) if p else 'M'
-            
-            if 'profiles' in root and profile_idx in root['profiles']:
-                 target = root['profiles'][profile_idx]
-            
-            # 3. 위젯 값 설정
-            self.input_wait.setText(str(target.get('bultagi_wait_sec', 30)))
-            
-            mode = target.get('bultagi_mode', 'multiplier')
-            self.combo_mode.setCurrentIndex(0 if mode == 'multiplier' else 1)
-            self.input_val.setText(str(target.get('bultagi_val', '10')))
-            
-            ptype = target.get('bultagi_price_type', 'market')
-            self.combo_price_type.setCurrentIndex(0 if ptype == 'market' else 1)
-            
-            self.chk_tp.setChecked(target.get('bultagi_tp_enabled', True))
-            self.input_tp.setText(str(target.get('bultagi_tp', 5.0)))
-            
-            self.chk_preservation.setChecked(target.get('bultagi_preservation_enabled', False))
-            self.input_p_trigger.setText(str(target.get('bultagi_preservation_trigger', 3.0)))
-            self.input_p_limit.setText(str(target.get('bultagi_preservation_limit', 2.0)))
-            
-            self.chk_sl.setChecked(target.get('bultagi_sl_enabled', True))
-            self.input_sl.setText(str(target.get('bultagi_sl', -2.0)))
-            
-            self.chk_power.setChecked(target.get('bultagi_power_enabled', False))
-            self.input_power.setText(str(target.get('bultagi_power_val', 120)))
-            self.chk_slope.setChecked(target.get('bultagi_slope_enabled', False))
-            self.chk_orderbook.setChecked(target.get('bultagi_orderbook_enabled', False))
-            self.input_orderbook.setText(str(target.get('bultagi_orderbook_val', 2.0)))
-
-            # [신규 v6.9.5] Turbo VI 로드
-            self.chk_turbo_vi.setChecked(target.get('bultagi_turbo_vi', False))
-            turbo_type = target.get('bultagi_turbo_vi_type', 'current') # 기본 현재가
-            self.combo_turbo_vi_type.setCurrentIndex(0 if turbo_type == 'market' else 1)
-
-            # [핵심] KipoStock 관점 로드 (Float 변환 필수 - 타입 에러 방지)
-            from get_setting import get_setting
-            try:
-                self.spin_peak.setValue(float(get_setting('kipostock_peak_rt', 15.0)))
-                self.spin_now_min.setValue(float(get_setting('kipostock_now_rt_min', 5.0)))
-                self.spin_now_max.setValue(float(get_setting('kipostock_now_rt_max', 12.0)))
-                self.input_perspective_time.setText(str(get_setting('kipostock_perspective_time', '15:10')))
-
-                # [신규] 시초가 베팅 파라미터 로드
-                self.chk_morning_enabled.setChecked(get_setting('morning_bet_enabled', False))
-                self.input_morning_time.setText(str(get_setting('morning_time', '09:10')))
-                self.spin_morning_gap_min.setValue(float(get_setting('morning_gap_min', 3.0)))
-                self.spin_morning_gap_max.setValue(float(get_setting('morning_gap_max', 5.0)))
-                self.spin_morning_break.setValue(float(get_setting('morning_break_rt', 2.0)))
-                self.spin_morning_tp.setValue(float(get_setting('morning_tp', 2.0)))
-                self.spin_morning_sl.setValue(float(get_setting('morning_sl', -1.5)))
-                self.chk_morning_ai.setChecked(get_setting('morning_ai_filter', True))
-                
-                source_idx = get_setting('morning_source_type', 0)
-                self.combo_morning_source.setCurrentIndex(int(source_idx))
-
-            except Exception as e2:
-                print(f"⚠️ Perspective/Morning Settings Load Error: {e2}")
-
-        except Exception as e:
-            print(f"❌ load_settings 치명적 오류: {e}")
+        root = getattr(self.parent(), 'settings', self._read_json()) if getattr(self.parent(), 'settings', None) else self._read_json()
+        target = root
+        
+        # [신규] 생성 당시의 일회성 index가 아닌 부모의 현재 프로필 인덱스 참조
+        current_profile = getattr(self.parent(), 'current_profile_idx', None)
+        if current_profile is not None and 'profiles' in root:
+             target = root['profiles'].get(str(current_profile), root)
+             
+        self.input_wait.setText(str(target.get('bultagi_wait_sec', 30)))
+        
+        mode = target.get('bultagi_mode', 'multiplier')
+        self.combo_mode.setCurrentIndex(0 if mode == 'multiplier' else 1)
+        self.input_val.setText(str(target.get('bultagi_val', '10')))
+        
+        ptype = target.get('bultagi_price_type', 'market')
+        self.combo_price_type.setCurrentIndex(0 if ptype == 'market' else 1)
+        
+        # [신규 v4.6.8] 3단 스탑로스 로드
+        self.chk_tp.setChecked(target.get('bultagi_tp_enabled', True))
+        self.input_tp.setText(str(target.get('bultagi_tp', 5.0)))
+        
+        self.chk_preservation.setChecked(target.get('bultagi_preservation_enabled', False))
+        self.input_p_trigger.setText(str(target.get('bultagi_preservation_trigger', 3.0)))
+        self.input_p_limit.setText(str(target.get('bultagi_preservation_limit', 2.0)))
+        
+        self.chk_sl.setChecked(target.get('bultagi_sl_enabled', True))
+        self.input_sl.setText(str(target.get('bultagi_sl', -2.0)))
+        
+        # [신규 v4.6.6]
+        self.chk_power.setChecked(target.get('bultagi_power_enabled', False))
+        self.input_power.setText(str(target.get('bultagi_power_val', 120)))
+        self.chk_slope.setChecked(target.get('bultagi_slope_enabled', False))
+        self.chk_orderbook.setChecked(target.get('bultagi_orderbook_enabled', False))
+        self.input_orderbook.setText(str(target.get('bultagi_orderbook_val', 2.0)))
 
     def apply_settings(self):
         try:
             from PyQt6.QtWidgets import QMessageBox
-            from get_setting import get_setting
-            import re
             
-            # [Fix] 입력값 추출 시 공백 제거 및 기본값 처리
-            def _get_float(widget, default=0.0):
-                try: return float(widget.text().replace('%', '').strip() or default)
-                except: return default
-
             tp_en = self.chk_tp.isChecked()
-            tp_val = _get_float(self.input_tp, 5.0)
-            
+            tp_val = float(self.input_tp.text() or 5.0)
             p_en = self.chk_preservation.isChecked()
-            p_trigger = _get_float(self.input_p_trigger, 3.0)
-            p_limit = _get_float(self.input_p_limit, 2.0)
-            
+            p_trigger = float(self.input_p_trigger.text() or 3.0)
+            p_limit = float(self.input_p_limit.text() or 2.0)
             sl_en = self.chk_sl.isChecked()
-            sl_val = _get_float(self.input_sl, -2.0)
+            sl_val = float(self.input_sl.text() or -2.0)
 
             # --- [신규 v4.6.8] 입력 유효성 검사 ---
             if p_en:
@@ -990,21 +829,16 @@ class BultagiSettingsDialog(QDialog):
                     QMessageBox.warning(self, "설정 오류", "손실제한선은 이익보존 매도선보다 낮아야 합니다!")
                     return
 
-            val_text = self.input_val.text().replace(',', '').strip()
+            val_text = self.input_val.text().replace(',', '')
             if not val_text: val_text = '10'
-
-            # [신규 v6.1.19] 시간 형식 검사 (HH:MM)
-            p_time = self.input_perspective_time.text().strip()
-            if not re.match(r"^\d{2}:\d{2}$", p_time):
-                QMessageBox.warning(self, "입력 오류", "분석 시간 형식이 올바르지 않습니다. (예: 15:10)")
-                return
             
             root = self._read_json()
             updates = {
-                'bultagi_wait_sec': int(self.input_wait.text().strip() or 30),
+                'bultagi_wait_sec': int(self.input_wait.text() or 30),
                 'bultagi_mode': 'multiplier' if self.combo_mode.currentIndex() == 0 else 'amount',
                 'bultagi_val': val_text,
                 'bultagi_price_type': 'market' if self.combo_price_type.currentIndex() == 0 else 'current',
+                # [신규 v4.6.8] 3단 스탑로스 저장
                 'bultagi_tp_enabled': tp_en,
                 'bultagi_tp': tp_val,
                 'bultagi_preservation_enabled': p_en,
@@ -1012,696 +846,45 @@ class BultagiSettingsDialog(QDialog):
                 'bultagi_preservation_limit': p_limit,
                 'bultagi_sl_enabled': sl_en,
                 'bultagi_sl': sl_val,
+                # [신규 v4.6.6]
                 'bultagi_power_enabled': self.chk_power.isChecked(),
-                'bultagi_power_val': int(self.input_power.text().strip() or 120),
+                'bultagi_power_val': int(self.input_power.text() or 120),
                 'bultagi_slope_enabled': self.chk_slope.isChecked(),
                 'bultagi_orderbook_enabled': self.chk_orderbook.isChecked(),
-                'bultagi_orderbook_val': float(self.input_orderbook.text().strip() or 2.0),
-                'bultagi_turbo_vi': self.chk_turbo_vi.isChecked(),
-                'bultagi_turbo_vi_type': 'market' if self.combo_turbo_vi_type.currentIndex() == 0 else 'current',
-                'kipostock_peak_rt': self.spin_peak.value(),
-                'kipostock_now_rt_min': self.spin_now_min.value(),
-                'kipostock_now_rt_max': self.spin_now_max.value(),
-                'kipostock_perspective_time': p_time,
-                'morning_bet_enabled': self.chk_morning_enabled.isChecked(),
-                'morning_time': self.input_morning_time.text().strip() or '09:10',
-                'morning_gap_min': self.spin_morning_gap_min.value(),
-                'morning_gap_max': self.spin_morning_gap_max.value(),
-                'morning_break_rt': self.spin_morning_break.value(),
-                'morning_tp': self.spin_morning_tp.value(),
-                'morning_sl': self.spin_morning_sl.value(),
-                'morning_ai_filter': self.chk_morning_ai.isChecked(),
-                'morning_source_type': self.combo_morning_source.currentIndex()
+                'bultagi_orderbook_val': float(self.input_orderbook.text() or 2.0)
             }
             
             # Update root
             for k, v in updates.items(): root[k] = v
-            
             # Update active profile
-            p = self.parent()
-            current_profile = getattr(p, 'current_profile_idx', None)
+            current_profile = getattr(self.parent(), 'current_profile_idx', None)
             if current_profile is not None and 'profiles' in root and str(current_profile) in root['profiles']:
                 for k, v in updates.items(): root['profiles'][str(current_profile)][k] = v
+            else:
+                # [안전장치] 만약 프로필 구조가 없거나 인덱스가 없다면 root 에 같이 업데이트
+                for k, v in updates.items(): root[k] = v
             
-            # 파일 저장 (AsyncWorker가 동시에 쓸 수 있으므로 안전하게 처리)
-            try:
-                with open(self.settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(root, f, ensure_ascii=False, indent=2)
-            except Exception as fe:
-                print(f"⚠️ 설정 파일 쓰기 오류: {fe}")
-
+            with open(self.settings_file, 'w', encoding='utf-8') as f:
+                json.dump(root, f, ensure_ascii=False, indent=2)
+            
             # Live hot-reload into check_n_sell
-            if p and hasattr(p, 'worker') and p.worker:
+            p = self.parent()
+            if hasattr(p, 'worker') and p.worker:
                 p.worker.schedule_command('update_settings', updates, True)
 
             # [UX 신규] 저장 시 버튼 시각적 피드백 효과 연출 
             self.btn_save.setText("✅ 저장 완료")
-            self.btn_save.setEnabled(False)
             self.btn_save.setStyleSheet("background-color: #28a745; color: white;")
-            
-            # [Fix] QTimer.singleShot의 람다 및 수신자 인자 안정화
-            QTimer.singleShot(1500, self._reset_save_button)
+            QTimer.singleShot(1500, lambda: [
+                self.btn_save.setText("💾 설정 저장"),
+                self.btn_save.setStyleSheet("QPushButton { background-color: #dc3545; color: white; font-weight: bold; border-radius: 6px; padding: 8px; font-size: 13px; } QPushButton:hover { background-color: #c82333; }")
+            ])
             
         except ValueError:
             QMessageBox.warning(self, "입력 오류", "숫자 형식으로 정확히 입력해주세요.")
-        except Exception as e:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "치명적 오류", f"설정 저장 중 오류가 발생했습니다: {e}")
-            print(f"❌ apply_settings 치명적 오류: {e}")
 
-    def _reset_save_button(self):
-        """저장 완료 피드백 후 버튼 상태 복구"""
-        try:
-            self.btn_save.setText("💾 설정 저장")
-            self.btn_save.setEnabled(True)
-            self.btn_save.setStyleSheet("""
-                QPushButton { 
-                    background-color: #dc3545; color: white; font-weight: bold;
-                    border-radius: 6px; padding: 8px; font-size: 13px;
-                }
-                QPushButton:hover { background-color: #c82333; }
-            """)
-        except: pass
-
-    # [v6.4.8] 종목 탐색 버튼 핸들러
-    def _open_kipo_filter_dialog(self):
-        """KipoStock 필터 다이얼로그 열기 (장 시간 무관)"""
-        dlg = KipoFilterListDialog(parent=self)
-        dlg.exec()
-
-
-# --- 스레드 워커 클래스 (클래스 레벨로 분리하여 안정성 확보) ---
-class KipoWorker(QThread):
-    done_signal = pyqtSignal(list)
-    def __init__(self, parent=None):
-        super().__init__(parent)
-    def run(self):
-        try:
-            from closing_bet_engine import get_kipo_filter_stocks
-            stocks = get_kipo_filter_stocks(token=None)
-            self.done_signal.emit(stocks)
-        except:
-            self.done_signal.emit([])
-
-class AIWorker(QThread):
-    done_signal = pyqtSignal(list)
-    def __init__(self, kipo_stocks, parent=None):
-        super().__init__(parent)
-        self.kipo_stocks = kipo_stocks
-    def run(self):
-        try:
-            from closing_bet_engine import get_ai_closing_recommendations
-            ai_stocks = get_ai_closing_recommendations(kipo_stocks=self.kipo_stocks)
-            self.done_signal.emit(ai_stocks)
-        except:
-            self.done_signal.emit([])
-
-class BuyWorker(QThread):
-    done_signal = pyqtSignal(list)
-    def __init__(self, stocks_to_buy, parent=None):
-        super().__init__(parent)
-        self.stocks_to_buy = stocks_to_buy
-    def run(self):
-        msgs = []
-        try:
-            from closing_bet_engine import buy_stock_qty1
-            for s in self.stocks_to_buy:
-                ok, msg = buy_stock_qty1(s['code'], seq_name="종베직접매수")
-                msgs.append(msg)
-        except Exception as e:
-            msgs.append(f"❌ 매수 루프 치명적 오류: {e}")
-        self.done_signal.emit(msgs)
-
-# =============================================================================
-# ✅ [신규 v6.4.8] KipoStock 필터 종목 리스트 다이얼로그
-# =============================================================================
-class KipoFilterListDialog(QDialog):
-    """KipoStock 관점 필터 조건으로 탐색된 종목 리스트 + AI 추천 버튼"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("📋 KipoStock 필터 종목 탐색")
-        self.setMinimumSize(480, 520)
-        self.resize(520, 580)
-        self._apply_style()
-
-        self._kipo_stocks = []
-        self._ai_stocks   = []
-        self._kipo_worker = None
-        self._ai_worker   = None
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-        # ... (이하 레이아웃 생략, 상위에서 이미 확인됨)
-
-        # --- 상단: 조건 요약 ---
-        from get_setting import get_setting as _gs
-        peak  = _gs('kipostock_peak_rt',    15.0)
-        nmin  = _gs('kipostock_now_rt_min',  5.0)
-        nmax  = _gs('kipostock_now_rt_max', 12.0)
-        p_t   = _gs('kipostock_perspective_time', '15:10')
-        lbl_cond = QLabel(
-            f"🎯 고가달성 ≥ {peak}%  |  📊 현재수익 {nmin}% ~ {nmax}%  |  ⏰ 분석시간: {p_t}"
-        )
-        lbl_cond.setStyleSheet("color: #f1c40f; font-size: 11px; font-weight: bold;")
-        lbl_cond.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_cond)
-
-        # --- 상태 라벨 ---
-        self.lbl_status = QLabel("⏳ 종목 탐색 중...")
-        self.lbl_status.setStyleSheet("color: #aaaaaa; font-size: 11px;")
-        self.lbl_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.lbl_status)
-
-        # --- 종목 리스트 (체크박스) ---
-        lbl_list = QLabel("📌 KipoStock 필터 통과 종목")
-        lbl_list.setStyleSheet("color: #f1c40f; font-weight: bold;")
-        layout.addWidget(lbl_list)
-
-        self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(
-            "QListWidget { background:#2a2a2a; color:#ffffff; border:1px solid #555; border-radius:6px; }"
-            " QListWidget::item { padding: 6px; border-bottom: 1px solid #3a3a3a; }"
-            " QListWidget::item:selected { background:#3d5a80; }"
-        )
-        self.list_widget.setMinimumHeight(180)
-        layout.addWidget(self.list_widget)
-
-        # --- 하단 버튼 ---
-        btn_row1 = QHBoxLayout()
-        self.btn_ai = QPushButton("🤖 AI 종가 추천 받기")
-        self.btn_ai.setStyleSheet(
-            "QPushButton { background:#9b59b6; color:white; font-weight:bold;"
-            " border-radius:6px; padding:8px; font-size:13px; }"
-            " QPushButton:hover { background:#8e44ad; }"
-            " QPushButton:disabled { background:#555; color:#888; }"
-        )
-        self.btn_ai.clicked.connect(self._run_ai_recommend)
-        btn_row1.addWidget(self.btn_ai)
-        layout.addLayout(btn_row1)
-
-        btn_row2 = QHBoxLayout()
-        self.btn_open_order = QPushButton("💸 선택 → 종가 베팅 창 열기")
-        self.btn_open_order.setStyleSheet(
-            "QPushButton { background:#e67e22; color:white; font-weight:bold;"
-            " border-radius:6px; padding:8px; font-size:13px; }"
-            " QPushButton:hover { background:#ca6f1e; }"
-            " QPushButton:disabled { background:#555; color:#888; }"
-        )
-        self.btn_open_order.setEnabled(False)
-        self.btn_open_order.clicked.connect(self._open_closing_bet_dialog)
-        btn_cancel = QPushButton("닫기")
-        btn_cancel.setObjectName("btn_cancel_kf")
-        btn_cancel.setStyleSheet(
-            "QPushButton { background:#6c757d; color:white; border-radius:6px; padding:8px; font-size:13px; }"
-        )
-        btn_cancel.clicked.connect(self.reject)
-        btn_row2.addWidget(btn_cancel)
-        btn_row2.addWidget(self.btn_open_order)
-        layout.addLayout(btn_row2)
-
-        # 열자마자 비동기 탐색 시작
-        QTimer.singleShot(200, self._run_kipo_filter)
-
-    def _apply_style(self):
-        """부모 창의 테마를 안전하게 감지하여 적용"""
-        try:
-            # Main Window(KipoWindow) 혹은 부모를 통해 ui_theme 획득
-            p = self.parent()
-            theme = 'dark'
-            while p:
-                if hasattr(p, 'ui_theme'):
-                    theme = p.ui_theme
-                    break
-                p = p.parent()
-            
-            is_light = (theme == 'light')
-            bg  = '#f8f9fa' if is_light else '#1e1e1e'
-            fg  = '#333333' if is_light else '#ffffff'
-            self.setStyleSheet(
-                f"QDialog {{ background:{bg}; color:{fg}; }}"
-                f" QLabel {{ color:{fg}; font-weight:bold; }}"
-            )
-        except Exception:
-            self.setStyleSheet("QDialog { background:#1e1e1e; color:#ffffff; }")
-
-    # ---- 탐색 로직 (정규화된 QThread 패턴) ----
-    def _run_kipo_filter(self):
-        if self._kipo_worker and self._kipo_worker.isRunning():
-            return
-            
-        self.lbl_status.setText("⏳ KipoStock 필터 종목 탐색 중...")
-        self.btn_ai.setEnabled(False)
-        self.btn_open_order.setEnabled(False)
-
-        self._kipo_worker = KipoWorker(self)
-        self._kipo_worker.done_signal.connect(self._on_kipo_done)
-        self._kipo_worker.start()
-
-    def _on_kipo_done(self, stocks):
-        from PyQt6 import sip
-        if sip.isdeleted(self): return
-        
-        self._kipo_stocks = stocks
-        self.list_widget.clear()
-
-        if not stocks:
-            self.lbl_status.setText("ℹ️ 조건을 만족하는 종목 없음 (또는 데이터 부족)")
-        else:
-            self.lbl_status.setText(f"✅ {len(stocks)}종목 탐색 완료")
-            for s in stocks:
-                item = QListWidgetItem()
-                widget = _CheckableStockRow(s)
-                item.setSizeHint(widget.sizeHint())
-                self.list_widget.addItem(item)
-                self.list_widget.setItemWidget(item, widget)
-
-        self.btn_ai.setEnabled(True)
-        self.btn_open_order.setEnabled(True)
-
-    def _run_ai_recommend(self):
-        if self._ai_worker and self._ai_worker.isRunning():
-            return
-            
-        self.btn_ai.setEnabled(False)
-        self.btn_ai.setText("⏳ AI 분석 중...")
-
-        self._ai_worker = AIWorker(list(self._kipo_stocks), self)
-        self._ai_worker.done_signal.connect(self._on_ai_done)
-        self._ai_worker.start()
-
-    def _on_ai_done(self, ai_stocks):
-        from PyQt6 import sip
-        if sip.isdeleted(self): return
-        
-        self._ai_stocks = ai_stocks
-        self.btn_ai.setText("🤖 AI 종가 추천 받기")
-        self.btn_ai.setEnabled(True)
-
-        # AI 결과 리스트에 추가 표시
-        if ai_stocks:
-            # 구분선
-            sep = QListWidgetItem("── 🤖 AI 추천 종목 ──")
-            sep.setFlags(Qt.ItemFlag.NoItemFlags)
-            sep.setForeground(Qt.GlobalColor.yellow)
-            self.list_widget.addItem(sep)
-
-            for s in ai_stocks:
-                item = QListWidgetItem()
-                widget = _CheckableStockRow(s, show_reason=True)
-                item.setSizeHint(widget.sizeHint())
-                self.list_widget.addItem(item)
-                self.list_widget.setItemWidget(item, widget)
-            self.lbl_status.setText(
-                f"✅ KipoFilter {len(self._kipo_stocks)}종목 + AI 추천 {len(ai_stocks)}종목"
-            )
-        else:
-            self.lbl_status.setText("⚠️ AI 추천 결과 없음 (데이터 부족 또는 API 오류)")
-
-    def _open_closing_bet_dialog(self):
-        """체크된 종목을 모아 종가 베팅 통합 주문 창 열기"""
-        selected = []
-        for i in range(self.list_widget.count()):
-            item = self.list_widget.item(i)
-            widget = self.list_widget.itemWidget(item)
-            if widget and isinstance(widget, _CheckableStockRow) and widget.is_checked():
-                selected.append(widget.stock_data)
-
-        if not selected:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "선택 없음", "매수할 종목을 체크해주세요!")
-            return
-
-        dlg = ClosingBetOrderDialog(selected, parent=self)
-        dlg.exec()
-
-
-# --- 체크박스 행 위젯 (내부 헬퍼) ---
-class _CheckableStockRow(QWidget):
-    def __init__(self, stock_data, show_reason=False, parent=None):
-        super().__init__(parent)
-        self.stock_data = stock_data
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(8)
-
-        self._chk = QCheckBox()
-        self._chk.setChecked(True)  # 기본 체크
-        layout.addWidget(self._chk)
-
-        source_icon = "🤖" if stock_data.get('source') == 'AI' else "🎯"
-        name   = stock_data.get('name',      '')
-        code   = stock_data.get('code',      '')
-        cur_rt = stock_data.get('cur_rt',   0.0)
-        high_rt= stock_data.get('high_rt',  0.0)
-        price  = stock_data.get('cur_price', 0)
-        reason = stock_data.get('reason',    '')
-
-        rt_color = "#ff4757" if cur_rt > 0 else "#3742fa"
-        main_text = f"{source_icon} <b>{name}</b> ({code}) "
-        
-        # 수익률 표시 보완
-        if cur_rt != 0 or price != 0:
-            main_text += f"<span style='color:{rt_color}'>+{cur_rt:.1f}%</span>"
-            
-        if high_rt and stock_data.get('source') != 'AI':
-            main_text += f" | 고가 {high_rt:.1f}%"
-        
-        if price:
-            main_text += f" | {price:,}원"
-
-        lbl_main = QLabel(main_text)
-        lbl_main.setStyleSheet("color: #ffffff; font-size: 12px;")
-        lbl_main.setTextFormat(Qt.TextFormat.RichText)
-
-        col_layout = QVBoxLayout()
-        col_layout.setSpacing(2)
-        col_layout.addWidget(lbl_main)
-
-        if show_reason and reason:
-            lbl_reason = QLabel(f"  └ {reason}")
-            lbl_reason.setStyleSheet("color: #aaaaaa; font-size: 10px;")
-            lbl_reason.setWordWrap(True)
-            col_layout.addWidget(lbl_reason)
-
-        layout.addLayout(col_layout)
-        layout.addStretch()
-
-    def is_checked(self):
-        return self._chk.isChecked()
-
-
-# =============================================================================
-# ✅ [신규 v6.4.8] 종가 베팅 통합 주문 다이얼로그
-# =============================================================================
-class ClosingBetOrderDialog(QDialog):
-    """KipoFilter + AI 추천 종목 체크 → 1주씩 매수"""
-
-    def __init__(self, stocks, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("🎯 종가 베팅 주문 창")
-        self.setMinimumSize(560, 480)
-        self.resize(580, 520)
-        self._stocks = stocks
-        self._row_checks = []  # (QCheckBox, stock_dict)
-        self._apply_style()
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(10)
-
-        # 제목
-        lbl_title = QLabel("🎯 종가 베팅 종목 선택 및 매수 (1주씩)")
-        lbl_title.setStyleSheet("color: #f1c40f; font-size: 14px; font-weight: bold;")
-        lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(lbl_title)
-
-        # 테이블
-        self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["선택", "종목명", "현재가", "수익률", "출처"])
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self.table.setColumnWidth(0, 46)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
-        self.table.setStyleSheet(
-            "QTableWidget { background:#1a1a1a; gridline-color:#333; color:#ddd;"
-            " border:1px solid #444; border-radius:8px; font-size:12px; }"
-            " QHeaderView::section { background:#2c3e50; color:#f1c40f; font-weight:bold;"
-            " border:1px solid #34495e; padding:4px; }"
-            " QTableWidget::item { padding:4px; }"
-            " QTableWidget::item:alternate { background:#222; }"
-        )
-        layout.addWidget(self.table)
-
-        self._fill_table()
-
-        # 상태 라벨
-        self.lbl_result = QLabel("")
-        self.lbl_result.setStyleSheet("color: #2ecc71; font-size: 12px; font-weight: bold;")
-        self.lbl_result.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_result.setWordWrap(True)
-        layout.addWidget(self.lbl_result)
-
-        # 버튼
-        btn_row = QHBoxLayout()
-        btn_cancel = QPushButton("닫기")
-        btn_cancel.setStyleSheet(
-            "QPushButton { background:#6c757d; color:white; border-radius:6px; padding:8px; font-size:13px; }"
-        )
-        btn_cancel.clicked.connect(self.reject)
-
-        self.btn_buy = QPushButton("💸 선택 종목 1주씩 매수")
-        self.btn_buy.setStyleSheet(
-            "QPushButton { background:#e74c3c; color:white; font-weight:bold;"
-            " border-radius:6px; padding:10px; font-size:14px; }"
-            " QPushButton:hover { background:#c0392b; }"
-            " QPushButton:disabled { background:#555; color:#888; }"
-        )
-        self.btn_buy.clicked.connect(self._execute_buy)
-        btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(self.btn_buy)
-        layout.addLayout(btn_row)
-
-    def _apply_style(self):
-        self.setStyleSheet(
-            "QDialog { background:#1e1e1e; color:#ffffff; }"
-            " QLabel { color:#ffffff; }"
-        )
-
-    def _fill_table(self):
-        self.table.setRowCount(len(self._stocks))
-        self._row_checks.clear()
-        for row, s in enumerate(self._stocks):
-            # 체크박스
-            chk = QCheckBox()
-            chk.setChecked(True)
-            chk_widget = QWidget()
-            chk_layout = QHBoxLayout(chk_widget)
-            chk_layout.addWidget(chk)
-            chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chk_layout.setContentsMargins(0, 0, 0, 0)
-            self.table.setCellWidget(row, 0, chk_widget)
-            self._row_checks.append((chk, s))
-
-            # 종목명 (코드)
-            self.table.setItem(row, 1, QTableWidgetItem(
-                f"{s.get('name','')} ({s.get('code','')})")
-            )
-
-            # 현재가
-            price = s.get('cur_price', 0)
-            self.table.setItem(row, 2, QTableWidgetItem(f"{price:,}원" if price else "-"))
-
-            # 수익률
-            cur_rt = s.get('cur_rt', 0.0)
-            rt_item = QTableWidgetItem(f"+{cur_rt:.1f}%" if cur_rt >= 0 else f"{cur_rt:.1f}%")
-            rt_item.setForeground(
-                Qt.GlobalColor.red if cur_rt > 0 else Qt.GlobalColor.blue
-            )
-            self.table.setItem(row, 3, rt_item)
-
-            # 출처
-            src = s.get('source', '')
-            icon = "🤖 AI" if src == 'AI' else "🎯 필터"
-            self.table.setItem(row, 4, QTableWidgetItem(icon))
-
-    def _execute_buy(self):
-        selected = [(chk, s) for chk, s in self._row_checks if chk.isChecked()]
-        if not selected:
-            from PyQt6.QtWidgets import QMessageBox
-            QMessageBox.information(self, "선택 없음", "매수할 종목을 하나 이상 선택해주세요!")
-            return
-
-        self.btn_buy.setEnabled(False)
-        self.btn_buy.setText("⏳ 매수 중...")
-        self.lbl_result.setText("")
-
-        self._buy_worker = BuyWorker([s for _, s in selected], self)
-        self._buy_worker.done_signal.connect(self._on_buy_done)
-        self._buy_worker.start()
-
-    def _on_buy_done(self, msgs):
-        from PyQt6 import sip
-        if sip.isdeleted(self): return
-        
-        self.btn_buy.setEnabled(True)
-        self.btn_buy.setText("💸 선택 종목 1주씩 매수")
-        self.lbl_result.setText("\n".join(msgs))
-
-        # 메인 창 로그에도 출력
-        try:
-            main_win = self.window()
-            if hasattr(main_win, 'log_text'):
-                for m in msgs:
-                    # [v6.5.1] f-string syntax error 해결: \ 제거
-                    print(f"🎯 [종베] {m}")
-        except Exception:
             pass
 
-
-# =============================================================================
-# ✅ [신규 v6.7.5] 전체 매매 일지 조회 다이얼로그
-# =============================================================================
-class HistoryDialog(QDialog):
-    """SQLite DB에 저장된 모든 매매 내역을 표형태로 보여주는 창"""
-
-    def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("📜 KipoStock 전체 매매 일지")
-        self.setMinimumSize(900, 600)
-        self.resize(1000, 700)
-        self._apply_style()
-
-        layout = QVBoxLayout(self)
-        
-        # --- 상단 타이틀 및 필터 ---
-        header = QHBoxLayout()
-        lbl_title = QLabel("📝 전체 매매 내역 (최근 1,000건)")
-        lbl_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #f1c40f;")
-        header.addWidget(lbl_title)
-        header.addStretch()
-        
-        self.btn_refresh = QPushButton("🔄 새로고침")
-        self.btn_refresh.setFixedWidth(100)
-        self.btn_refresh.clicked.connect(self.load_data)
-        header.addWidget(self.btn_refresh)
-        layout.addLayout(header)
-
-        # --- 테이블 ---
-        self.table = QTableWidget()
-        headers = ["ID", "날짜", "시간", "구분", "종목명", "코드", "수량", "단가", "금액", "수익률(%)", "수익금(원)", "세금", "전략", "시퀀스"]
-        self.table.setColumnCount(len(headers))
-        self.table.setHorizontalHeaderLabels(headers)
-        
-        # 테이블 스타일 및 설정
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.verticalHeader().setVisible(False)
-        self.table.setAlternatingRowColors(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        
-        layout.addWidget(self.table)
-        
-        # 데이터 로드
-        self.load_data()
-
-    def _apply_style(self):
-        theme = 'dark'
-        try:
-            p = self.parent()
-            while p:
-                if hasattr(p, 'ui_theme'):
-                    theme = p.ui_theme
-                    break
-                p = p.parent()
-        except: pass
-        
-        is_light = (theme == 'light')
-        bg = '#f8f9fa' if is_light else '#1e1e1e'
-        fg = '#333333' if is_light else '#ffffff'
-        table_bg = '#ffffff' if is_light else '#1a1a1a'
-        grid = '#dee2e6' if is_light else '#333333'
-        
-        self.setStyleSheet(f"""
-            QDialog {{ background: {bg}; color: {fg}; }}
-            QTableWidget {{ 
-                background: {table_bg}; 
-                gridline-color: {grid}; 
-                color: {fg}; 
-                border: 1px solid {grid};
-                border-radius: 8px;
-            }}
-            QHeaderView::section {{ 
-                background: {'#e9ecef' if is_light else '#2c3e50'}; 
-                color: {'#333' if is_light else '#f1c40f'}; 
-                font-weight: bold;
-                border: 1px solid {grid};
-                padding: 4px;
-            }}
-            QPushButton {{ 
-                background: #3498db; color: white; border-radius: 4px; padding: 6px; font-weight: bold;
-            }}
-            QPushButton:hover {{ background: #2980b9; }}
-        """)
-
-    def load_data(self):
-        self.btn_refresh.setEnabled(False)
-        self.btn_refresh.setText("⏳ 로딩 중...")
-        
-        try:
-            trades = kipo_db.get_all_trades(limit=1000)
-            self.table.setRowCount(len(trades))
-            
-            for row, t in enumerate(trades):
-                # ID
-                self.table.setItem(row, 0, QTableWidgetItem(str(t.get('id', ''))))
-                # 날짜
-                self.table.setItem(row, 1, QTableWidgetItem(t.get('trade_date', '')))
-                # 시간
-                self.table.setItem(row, 2, QTableWidgetItem(t.get('trade_time', '')))
-                # 구분 (매수/매도 색상 적용)
-                type_item = QTableWidgetItem(t.get('type', ''))
-                if t.get('type') == 'BUY':
-                    type_item.setForeground(QColor('#e74c3c'))
-                else:
-                    type_item.setForeground(QColor('#2ecc71'))
-                self.table.setItem(row, 3, type_item)
-                
-                # 종목명, 코드
-                self.table.setItem(row, 4, QTableWidgetItem(t.get('name', '')))
-                self.table.setItem(row, 5, QTableWidgetItem(t.get('code', '')))
-                
-                # 수량, 단가, 금액
-                qty = t.get('qty', 0)
-                price = t.get('price', 0.0)
-                amount = t.get('amount', 0.0)
-                self.table.setItem(row, 6, QTableWidgetItem(f"{int(qty):,}"))
-                self.table.setItem(row, 7, QTableWidgetItem(f"{price:,.0f}"))
-                self.table.setItem(row, 8, QTableWidgetItem(f"{amount:,.0f}"))
-                
-                # 수익률, 수익금 (매도일 때만)
-                if t.get('type') == 'SELL':
-                    pl_rt = t.get('pl_rt', 0.0)
-                    pnl_amt = t.get('pnl_amt', 0.0)
-                    
-                    rt_item = QTableWidgetItem(f"{pl_rt:+.2f}%")
-                    rt_item.setForeground(QColor('#ff4757') if pl_rt > 0 else QColor('#3742fa'))
-                    self.table.setItem(row, 9, rt_item)
-                    
-                    pnl_item = QTableWidgetItem(f"{pnl_amt:+,.0f}")
-                    pnl_item.setForeground(QColor('#ff4757') if pnl_amt > 0 else QColor('#3742fa'))
-                    self.table.setItem(row, 10, pnl_item)
-                else:
-                    self.table.setItem(row, 9, QTableWidgetItem("-"))
-                    self.table.setItem(row, 10, QTableWidgetItem("-"))
-                
-                # 세금, 전략, 시퀀스
-                self.table.setItem(row, 11, QTableWidgetItem(f"{t.get('tax', 0.0):,.0f}"))
-                self.table.setItem(row, 12, QTableWidgetItem(t.get('strat_mode', '')))
-                self.table.setItem(row, 13, QTableWidgetItem(str(t.get('seq', ''))))
-                
-                # 모든 아이템 중앙 정렬
-                for col in range(self.table.columnCount()):
-                    item = self.table.item(row, col)
-                    if item: item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-            self.table.resizeColumnsToContents()
-            self.table.horizontalHeader().setStretchLastSection(True)
-            
-        except Exception as e:
-            print(f"⚠️ [HistoryDialog] 데이터 로드 오류: {e}")
-        finally:
-            self.btn_refresh.setEnabled(True)
-            self.btn_refresh.setText("🔄 새로고침")
-
-# [v6.0.4] 차트 로직 최적화 (매도 시에만 기록) 등을 위한 ProfitGraphWidget 등은 별도
 # ---------------------------------------------------------------------------------------------------------
 # ✅ 실시간 수익 그래프 위젯 (신규 v4.7)
 # ---------------------------------------------------------------------------------------------------------
@@ -1839,15 +1022,13 @@ class ProfitGraphWidget(FigureCanvas):
 class PortfolioTableWidget(QTableWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setColumnCount(8)
-        self.setHorizontalHeaderLabels(["매수 전략", "종목명", "매입 경과시간", "매입가", "현재가", "보유량", "평가손익", "수익률"])
+        self.setColumnCount(7)
+        self.setHorizontalHeaderLabels(["종목명", "매입 경과시간", "매입가", "현재가", "수익률", "보유량", "평가손익"])
         self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.verticalHeader().setVisible(False)
-        self.verticalHeader().setDefaultSectionSize(24) # [신규] 행 높이 축소 (기본값보다 슬림하게)
-        self.horizontalHeader().setFixedHeight(28) # [신규] 헤더 높이 축소
         self.setAlternatingRowColors(True)
         self.setStyleSheet("""
             QTableWidget {
@@ -1859,11 +1040,11 @@ class PortfolioTableWidget(QTableWidget):
                 font-family: 'Malgun Gothic';
                 font-size: 11px;
             }
-            QTableWidget::item { padding: 1px 4px; } /* [수정] 위아래 패딩 축소 */
+            QTableWidget::item { padding: 4px; }
             QHeaderView::section {
                 background-color: #2c3e50;
                 color: #f1c40f;
-                padding: 2px; /* [수정] 헤더 패딩 축소 */
+                padding: 6px;
                 border: 1px solid #34495e;
                 font-weight: bold;
                 font-size: 12px;
@@ -1881,27 +1062,13 @@ class PortfolioTableWidget(QTableWidget):
         now = datetime.datetime.now()
         
         for row, (code, data) in enumerate(holdings.items()):
-            # 0. 매수 전략
-            strat_nm = "--"
-            if mapping and code in mapping:
-                s_key = mapping[code].get('strat', 'none')
-                strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율', 'HTS': 'HTS'}
-                strat_nm = strat_map.get(s_key, '--')
-            
-            item_strat = QTableWidgetItem(strat_nm)
-            item_strat.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            strat_colors = {'1주': '#ff4444', '금액': '#00c851', '비율': '#33b5e5', 'HTS': '#8a2be2'}
-            if strat_nm in strat_colors:
-                item_strat.setForeground(QColor(strat_colors[strat_nm]))
-            self.setItem(row, 0, item_strat)
-
-            # 1. 종목명
+            # 0. 종목명
             name = data.get('name', code)
             item_name = QTableWidgetItem(name)
             item_name.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 1, item_name)
+            self.setItem(row, 0, item_name)
             
-            # 2. 매입 경과시간
+            # 1. 매입 경과시간 (mapping 에서 'time' 가져와서 계산)
             elapsed_str = "-"
             if mapping and code in mapping:
                 t_str = mapping[code].get('time')
@@ -1909,53 +1076,54 @@ class PortfolioTableWidget(QTableWidget):
                     try:
                         buy_t = datetime.datetime.strptime(f"{now.strftime('%Y%m%d')} {t_str}", "%Y%m%d %H:%M:%S")
                         diff = (now - buy_t).total_seconds()
-                        if diff < 0: diff = (now + datetime.timedelta(days=1) - buy_t).total_seconds()
+                        if diff < 0: diff = (now + timedelta(days=1) - buy_t).total_seconds()
                         
-                        hrs = int(diff // 3600)
-                        mns = int((diff % 3600) // 60)
-                        scs = int(diff % 60)
+                        hours = int(diff // 3600)
+                        mins = int((diff % 3600) // 60)
+                        secs = int(diff % 60)
                         
-                        if hrs > 0: elapsed_str = f"{hrs}시간 {mns}분"
-                        else: elapsed_str = f"{mns}분 {scs}초"
+                        if hours > 0: elapsed_str = f"{hours}시 {mins}분"
+                        elif mins > 0: elapsed_str = f"{mins}분 {secs}초"
+                        else: elapsed_str = f"{secs}초"
                     except: pass
-            
-            item_time = QTableWidgetItem(elapsed_str)
-            item_time.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.setItem(row, 2, item_time)
+            item_elapsed = QTableWidgetItem(elapsed_str)
+            item_elapsed.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            item_elapsed.setForeground(QColor("#95a5a6"))
+            self.setItem(row, 1, item_elapsed)
 
-            # 3. 매입가
-            buy_price = int(float(data.get('buy_price', 0)))
-            item_buy = QTableWidgetItem(f"{buy_price:,}")
+            # 2. 매입가
+            buy_price = data.get('buy_price', 0)
+            item_buy = QTableWidgetItem(f"{int(buy_price):,}")
             item_buy.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.setItem(row, 3, item_buy)
+            self.setItem(row, 2, item_buy)
 
-            # 4. 현재가
-            cur_price = int(float(data.get('cur_price', 0)))
-            item_now = QTableWidgetItem(f"{cur_price:,}")
-            item_now.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.setItem(row, 4, item_now)
+            # 3. 현재가
+            cur_price = data.get('cur_price', 0)
+            item_cur = QTableWidgetItem(f"{int(cur_price):,}")
+            item_cur.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.setItem(row, 3, item_cur)
+
+            # 4. 수익률
+            pl_rt = float(data.get('pl_rt', 0.0))
+            item_rt = QTableWidgetItem(f"{pl_rt:+.2f}%")
+            item_rt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            if pl_rt > 0: item_rt.setForeground(QColor("#ff4757"))
+            elif pl_rt < 0: item_rt.setForeground(QColor("#3742fa"))
+            self.setItem(row, 4, item_rt)
 
             # 5. 보유량
-            qty = int(float(data.get('qty', 0)))
-            item_qty = QTableWidgetItem(f"{qty:,}주")
+            qty = data.get('qty', 0)
+            item_qty = QTableWidgetItem(f"{int(qty):,}주")
             item_qty.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             self.setItem(row, 5, item_qty)
 
             # 6. 평가손익
-            pnl = int(float(data.get('pnl', 0)))
-            pnl_color = "#ff4444" if pnl > 0 else ("#33b5e5" if pnl < 0 else "#bbb")
-            item_pnl = QTableWidgetItem(f"{pnl:+,}")
+            pnl = data.get('pnl', 0)
+            item_pnl = QTableWidgetItem(f"{int(pnl):+,}")
             item_pnl.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            item_pnl.setForeground(QColor(pnl_color))
+            if pnl > 0: item_pnl.setForeground(QColor("#ff4757"))
+            elif pnl < 0: item_pnl.setForeground(QColor("#3742fa"))
             self.setItem(row, 6, item_pnl)
-
-            # 7. 수익률
-            pl_rt = float(data.get('pl_rt', 0))
-            rt_color = "#ff4444" if pl_rt > 0 else ("#33b5e5" if pl_rt < 0 else "#bbb")
-            item_rt = QTableWidgetItem(f"{pl_rt:+.2f}%")
-            item_rt.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            item_rt.setForeground(QColor(rt_color))
-            self.setItem(row, 7, item_rt)
 
 # ---------------------------------------------------------------------------------------------------------
 # ✅ 더블 클릭 지원 그룹 박스 (불타기 모드 온/오프 토글용)
@@ -1974,10 +1142,9 @@ class DoubleClickGroupBox(QGroupBox):
 # ✅ v5.0.1 AI 뉴스 전용 팝업 창 (News Sniper Viewer)
 # ---------------------------------------------------------------------------------------------------------
 class NewsViewerDialog(QDialog):
-    def __init__(self, parent=None, html_content="", stk_nm=""):
+    def __init__(self, parent=None, html_content=""):
         super().__init__(parent, Qt.WindowType.Window)
-        title = f"📰 AI 뉴스 스나이퍼 브리핑 ({stk_nm})" if stk_nm else "📰 AI 뉴스 스나이퍼 브리핑"
-        self.setWindowTitle(title)
+        self.setWindowTitle("📰 AI 뉴스 스나이퍼 브리핑")
         self.resize(600, 500)
         
         layout = QVBoxLayout(self)
@@ -2212,25 +1379,18 @@ class KipoWindow(QMainWindow):
         self.alert_close_timer.setSingleShot(True)
         self.alert_close_timer.timeout.connect(self._close_active_alert)
         
-        self.seq_blink_timer = QTimer(self) # [Fix] 누락된 타이머 초기화 추가
-        self.seq_blink_timer.setInterval(1000)
         self.seq_blink_timer.timeout.connect(self.blink_seq_button)
         
-        # [NEW v6.1.12] 실시간 잔고 현황 테이블 갱신 타이머 (1초 주기 - v6.2.6 단축)
+        # [NEW v6.1.12] 실시간 잔고 현황 테이블 갱신 타이머 (2초 주기)
         self.portfolio_timer = QTimer(self)
-        self.portfolio_timer.setInterval(1000)
+        self.portfolio_timer.setInterval(2000)
         self.portfolio_timer.timeout.connect(self.update_portfolio_table)
         self.portfolio_timer.start()
 
         self.bultagi_dialog = None # [신규] 모달리스 인스턴스 유지 변수
-        self.advanced_visible = False # [Fix v6.2.5] AttributeError: 'KipoWindow' object has no attribute 'advanced_visible' 긴급 복구
-        self.setWindowTitle("KipoStock AI V1")
-        
-        # [v6.5.4] Heartbeat 타이머 (앱 생존 확인용)
-        self.heartbeat_timer = QTimer(self)
-        self.heartbeat_timer.setInterval(10000) # 10초
-        self.heartbeat_timer.timeout.connect(self._update_heartbeat)
-        self.heartbeat_timer.start()
+        self.advanced_visible = False # [V5.7.1] 고급 설정 영역 표시 여부
+
+        self.setWindowTitle("KipoStock v6.1.12 (Diamond)")
         
         # 파일 경로 설정
         if getattr(sys, 'frozen', False):
@@ -2272,19 +1432,6 @@ class KipoWindow(QMainWindow):
         self.resize(1000, 700)
         
         # UI 및 Worker 시작 (이제 타이머들이 모두 준비됨)
-        # [Fix v6.6.0] 불타기 상시 활성화 강제 (사용자 요청)
-        try:
-            settings = load_json_safe(self.settings_file)
-            if settings.get('bultagi_enabled') is not True:
-                settings['bultagi_enabled'] = True
-                with open(self.settings_file, 'w', encoding='utf-8') as f:
-                    json.dump(settings, f, ensure_ascii=False, indent=2)
-                self.append_log("🚀 불타기(Fire-up) 모드 항시 가동 프로토콜 가동! (기본값 ON 강제)")
-            
-            # [v6.6.1] UI 초기화 후 체크박스 강제 동기화 (설정값이 True라도 UI가 꺼져있을 수 있음)
-            QTimer.singleShot(500, lambda: hasattr(self, 'bultagi_group') and self.bultagi_group.setChecked(True))
-        except: pass
-
         self.setup_ui()
         self.setup_worker()
         
@@ -2298,15 +1445,6 @@ class KipoWindow(QMainWindow):
                 self.profit_graph.update_chart()
         
         QTimer.singleShot(1500, _initial_refresh)
-
-    def _update_heartbeat(self):
-        """10초마다 살아있음을 파일에 기록"""
-        try:
-            h_path = os.path.join(self.data_dir, "heartbeat.txt")
-            with open(h_path, "w", encoding="utf-8") as f:
-                f.write(f"ALIVE: {datetime.datetime.now()}\n")
-                f.flush()
-        except: pass
         
 
 
@@ -2322,79 +1460,41 @@ class KipoWindow(QMainWindow):
     
     # [신규] 불타기 상세 다이얼로그 호출 (Modeless)
     def open_bultagi_dialog(self):
-        try:
-            # 다이얼로그 객체 생성 (없다면)
-            if self.bultagi_dialog is None:
-                self.bultagi_dialog = BultagiSettingsDialog(self)
-            
-            # 객체 유효성 확인 및 로드 (RuntimeError: wrapped C/C++ object... 방지)
-            try:
-                self.bultagi_dialog.load_settings()
-            except:
-                self.bultagi_dialog = BultagiSettingsDialog(self)
-                self.bultagi_dialog.load_settings()
-
-            self.bultagi_dialog.show()
-            self.bultagi_dialog.raise_()
-            self.bultagi_dialog.activateWindow()
-        except Exception as e:
-            self.append_log(f"❌ 상세 설정창 열기 실패: {e}")
-            print(f"❌ open_bultagi_dialog error: {e}")
-
-    # [신규 v6.7.5] 전체 매매 일지 다이얼로그 호출
-    def open_history_dialog(self):
-        dlg = HistoryDialog(self)
-        dlg.exec()
+        if self.bultagi_dialog is None:
+            self.bultagi_dialog = BultagiSettingsDialog(self)
+        self.bultagi_dialog.load_settings() # 창 열 때 최신 상태 갱신
+        self.bultagi_dialog.show()
+        self.bultagi_dialog.raise_()
+        self.bultagi_dialog.activateWindow()
 
     def on_bultagi_toggled(self, checked):
         if hasattr(self, 'worker') and self.worker:
             self.worker.schedule_command('update_settings', {'bultagi_enabled': checked}, True)
-        # [v6.8.5] [불타기] 태그 명시하여 전용 로그창으로 라우팅 보장
-        self.append_log(f"[불타기] 감시 모드가 {'[활성화]' if checked else '[비활성화]'} 되었습니다.")
-        # [v6.8.3] UI 체크 박스가 제거된 경우(isChecked() 미사용)에도 스타일만 안전하게 갱신
-        if hasattr(self, 'bultagi_group'):
-            try:
-                self.bultagi_group.blockSignals(True)
-                if self.bultagi_group.isCheckable():
-                    self.bultagi_group.setChecked(checked)
-                self.bultagi_group.blockSignals(False)
-            except: pass
-            self.update_bultagi_group_style(checked)
+        self.append_log(f"🔥 불타기 감시 모드가 {'[활성화]' if checked else '[비활성화]'} 되었습니다.")
+        self.update_bultagi_group_style(checked)
 
     # [신규] 더블 클릭 시 상태 반전 및 저장 처리
     def toggle_bultagi_enabled(self):
         try:
-            try:
-                with open(self.settings_file, 'r', encoding='utf-8') as f:
-                    root = json.load(f)
-            except Exception:
-                root = {}
-                
-            target = root
-            if hasattr(self, 'current_profile_idx') and self.current_profile_idx is not None and 'profiles' in root:
-                if str(self.current_profile_idx) not in root['profiles']:
-                    root['profiles'][str(self.current_profile_idx)] = {}
-                target = root['profiles'][str(self.current_profile_idx)]
-                
-            # [Fix v6.5.9] target에 키가 없는 경우에도 기본값 True에서 반전 적용
-            current_state = target.get('bultagi_enabled', True)
-            new_state = not current_state
-            target['bultagi_enabled'] = new_state
+            with open(self.settings_file, 'r', encoding='utf-8') as f:
+                root = json.load(f)
+        except Exception:
+            root = {}
             
-            # [Fix v6.5.8/9] 루트 설정도 함께 동기화하여 엔진(chk_n_sell)이 즉시 알 수 있게 함
-            root['bultagi_enabled'] = new_state
+        target = root
+        if self.current_profile_idx is not None and 'profiles' in root:
+            if str(self.current_profile_idx) not in root['profiles']:
+                root['profiles'][str(self.current_profile_idx)] = {}
+            target = root['profiles'][str(self.current_profile_idx)]
             
-            with open(self.settings_file, 'w', encoding='utf-8') as f:
-                json.dump(root, f, ensure_ascii=False, indent=2)
+        current_state = target.get('bultagi_enabled', True)
+        new_state = not current_state
+        target['bultagi_enabled'] = new_state
+        
+        with open(self.settings_file, 'w', encoding='utf-8') as f:
+            json.dump(root, f, ensure_ascii=False, indent=2)
             
-            # [v6.8.8] 캐시 무효화 후 UI 전면 동기화
-            from get_setting import clear_settings_cache
-            clear_settings_cache()                
-            self.on_bultagi_toggled(new_state)
-            self.update_bultagi_status_label(new_state) # [v6.8.7] 토글 시 새 상태를 직접 전달하여 캐시 지연 방지
-        except Exception as e:
-            print(f"⚠️ toggle_bultagi_enabled error: {e}")
-            self.append_log(f"⚠️ 불타기 상태 전환 중 오류 발생: {e}")
+        self.on_bultagi_toggled(new_state)
 
     def update_bultagi_group_style(self, checked):
         # [신규] 켜졌을 때만 테두리 붉게, 꺼지면 일반 그룹박스 스타일로 원복
@@ -2404,21 +1504,15 @@ class KipoWindow(QMainWindow):
         
         self.bultagi_group.setStyleSheet(f"""
             QGroupBox::title {{
-                subcontrol-origin: border;
+                subcontrol-origin: margin;
                 subcontrol-position: top center;
-                padding: 2px 12px;
+                padding: 0 5px;
                 color: {text_color};
-                background-color: {("#ffffff" if is_light else "#1a1a1a")};
-                border: 1px solid {border_color};
-                border-radius: 6px;
-                font-weight: bold;
-                top: -12px;
             }}
             QGroupBox {{
                 border: 2px solid {border_color};
-                margin-top: 20px;
+                margin-top: 10px;
                 border-radius: 12px;
-                padding-top: 5px;
             }}
         """)
     def get_theme_stylesheet(self, theme_mode):
@@ -2429,19 +1523,19 @@ class KipoWindow(QMainWindow):
                 font-weight: bold; 
                 border: 2px solid #ced4da; 
                 border-radius: 12px; 
-                margin-top: 25px; 
-                padding-top: 15px; 
+                margin-top: 15px; 
+                padding-top: 20px; 
                 background-color: #ffffff; 
             }
             QGroupBox::title {
                 color: #495057;
-                background-color: #ffffff;
+                background-color: #f8f9fa;
                 border: 1px solid #ced4da;
                 border-radius: 6px;
                 padding: 2px 8px;
                 subcontrol-origin: margin;
-                subcontrol-position: top center;
-                left: 0px;
+                subcontrol-position: top left;
+                left: 10px;
                 top: 0px;
             }
             QLabel { color: #212529; }
@@ -2504,34 +1598,22 @@ class KipoWindow(QMainWindow):
                 background-color: #ffffff; 
                 border: 2px solid #dc3545; 
                 border-radius: 12px; 
-                margin-top: 24px; 
-                padding-top: 10px; 
+                margin-top: 10px; 
+                padding-top: 8px; 
             }
-            QGroupBox#settings_group::title { 
-                font-size: 30px; 
-                font-weight: bold; 
-                color: #dc3545; 
-                background-color: #ffffff; 
-                border: 1px solid #dc3545; 
-                border-radius: 6px; 
-                subcontrol-origin: border; 
-                subcontrol-position: top center; 
-                left: 0px; 
-                top: -20px; 
-                padding: 2px 12px; 
-            }
+            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #dc3545; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
             
-            QGroupBox#strategy_group { background-color: #ffffff; border: 2px solid #27ae60; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#strategy_group::title { color: #27ae60; background-color: #ffffff; border: 1px solid #27ae60; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; left: 0px; top: -12px; padding: 2px 12px; font-weight: bold; }
+            QGroupBox#strategy_group { background-color: #ffffff; border: 2px solid #27ae60; border-radius: 12px; margin-top: 10px; padding-top: 15px; }
+            QGroupBox#strategy_group::title { color: #27ae60; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
             
-            QGroupBox#profile_group { background-color: #f8f9fa; border: 2px solid #2980b9; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; background-color: #f8f9fa; border: 1px solid #3498db; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; left: 0px; top: -12px; padding: 2px 12px; }
+            QGroupBox#profile_group { background-color: #f8f9fa; border: 2px solid #2980b9; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
             
-            QGroupBox#rt_group { background-color: #f8f9fa; border: 2px solid #e67e22; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; background-color: #f8f9fa; border: 1px solid #e67e22; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; left: 0px; top: -12px; padding: 2px 12px; }
+            QGroupBox#rt_group { background-color: #f8f9fa; border: 2px solid #e67e22; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
 
-            QGroupBox#bultagi_group { background-color: #ffffff; border: 2px solid #f1c40f; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#bultagi_group::title { color: #f1c40f; background-color: #ffffff; border: 1px solid #f1c40f; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; left: 0px; top: -12px; padding: 2px 12px; font-weight: bold; }
+            QGroupBox#bultagi_group { background-color: #ffffff; border: 2px solid #f1c40f; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#bultagi_group::title { color: #f1c40f; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
 
             QPushButton#btn_top { background-color: #f8f9fa; border-radius: 5px; font-size: 18px; border: 1px solid #ddd; color: #aaa; text-align: center; padding: 0px; }
             QPushButton#btn_top:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
@@ -2556,8 +1638,8 @@ class KipoWindow(QMainWindow):
         else:
             return """
             QMainWindow { background-color: #121212; }
-            QGroupBox { font-weight: bold; border: 2px solid #3d3d3d; border-radius: 12px; margin-top: 25px; padding-top: 15px; background-color: #1e1e1e; }
-            QGroupBox::title { color: #f1c40f; background-color: #1e1e1e; border: 1px solid #f1c40f; border-radius: 6px; padding: 2px 8px; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; }
+            QGroupBox { font-weight: bold; border: 2px solid #3d3d3d; border-radius: 12px; margin-top: 15px; padding-top: 20px; background-color: #1e1e1e; }
+            QGroupBox::title { color: #f1c40f; background-color: #2c2c2c; border: 1px solid #f1c40f; border-radius: 6px; padding: 2px 8px; subcontrol-origin: margin; subcontrol-position: top left; left: 10px; top: 0px; }
             QLabel { color: #e0e0e0; }
             QCheckBox { color: #aaa; font-weight: bold; }
             QCheckBox::indicator { width: 16px; height: 16px; border: 2px solid #555; border-radius: 4px; background: #2a2a2a; }
@@ -2570,32 +1652,20 @@ class KipoWindow(QMainWindow):
             QTextEdit { background-color: #000000; color: #00ff00; font-family: 'Consolas', 'Courier New'; font-size: 13px; border: 2px solid #333; border-radius: 10px; padding: 10px; }
             QToolTip { background-color: #2c3e50; color: #f8f9fa; border: 1px solid #f1c40f; padding: 5px; border-radius: 5px; font-family: 'Malgun Gothic'; }
             
-            QGroupBox#settings_group { background-color: #1a1a1a; border: 2px solid #dc3545; border-radius: 12px; margin-top: 24px; padding-top: 10px; }
-            QGroupBox#settings_group::title { 
-                font-size: 30px; 
-                font-weight: bold; 
-                color: #dc3545; 
-                background-color: #1a1a1a; 
-                border: 1px solid #dc3545; 
-                border-radius: 6px; 
-                subcontrol-origin: border; 
-                subcontrol-position: top center; 
-                top: -20px; 
-                left: 0px; 
-                padding: 2px 12px; 
-            }
+            QGroupBox#settings_group { background-color: #1a1a1a; border: 2px solid #dc3545; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#settings_group::title { font-size: 15px; font-weight: bold; color: #dc3545; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
             
-            QGroupBox#strategy_group { background-color: #1a1a1a; border: 2px solid #27ae60; border-radius: 12px; margin-top: 16px; padding-top: 8px; font-weight: bold; }
-            QGroupBox#strategy_group::title { color: #2ecc71; background-color: #1a1a1a; border: 1px solid #2ecc71; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; top: -12px; left: 0px; padding: 2px 12px; }
+            QGroupBox#strategy_group { background-color: #1a1a1a; border: 2px solid #27ae60; border-radius: 12px; margin-top: 10px; padding-top: 15px; font-weight: bold; }
+            QGroupBox#strategy_group::title { color: #2ecc71; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
             
-            QGroupBox#profile_group { background-color: #1a1a1a; border: 2px solid #2980b9; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; background-color: #1a1a1a; border: 1px solid #3498db; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; top: -12px; left: 0px; padding: 2px 12px; }
+            QGroupBox#profile_group { background-color: #1a1a1a; border: 2px solid #2980b9; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#profile_group::title { color: #3498db; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
             
-            QGroupBox#rt_group { background-color: #1a1a1a; border: 2px solid #e67e22; border-radius: 12px; margin-top: 16px; padding-top: 8px; font-weight: bold; }
-            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; background-color: #1a1a1a; border: 1px solid #e67e22; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; top: -12px; left: 0px; padding: 2px 12px; }
+            QGroupBox#rt_group { background-color: #1a1a1a; border: 2px solid #e67e22; border-radius: 12px; margin-top: 10px; padding-top: 8px; font-weight: bold; }
+            QGroupBox#rt_group::title { color: #e67e22; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; top: 0px; left: 0px; padding: 0 8px; }
 
-            QGroupBox#bultagi_group { background-color: #1a1a1a; border: 2px solid #f1c40f; border-radius: 12px; margin-top: 16px; padding-top: 8px; }
-            QGroupBox#bultagi_group::title { color: #f1c40f; background-color: #1a1a1a; border: 1px solid #f1c40f; border-radius: 6px; subcontrol-origin: border; subcontrol-position: top center; left: 0px; top: -12px; padding: 2px 12px; font-weight: bold; }
+            QGroupBox#bultagi_group { background-color: #1a1a1a; border: 2px solid #f1c40f; border-radius: 12px; margin-top: 10px; padding-top: 8px; }
+            QGroupBox#bultagi_group::title { color: #f1c40f; font-size: 13px; font-weight: bold; subcontrol-origin: margin; subcontrol-position: top center; left: 0px; top: 0px; padding: 0 8px; }
 
             QPushButton#btn_top { background-color: #1a1a1a; border-radius: 5px; font-size: 18px; border: 1px solid #444; color: #888; text-align: center; padding: 0px; }
             QPushButton#btn_top:checked { background-color: #17a2b8; color: white; border: 1px solid #138496; }
@@ -2644,7 +1714,7 @@ class KipoWindow(QMainWindow):
         
         # 하단 컨트롤 버튼 스타일 갱신 (현재 상태 유지)
         current_status = "READY"
-        status_text = self.lbl_status.text() if hasattr(self, 'lbl_status') else ""
+        status_text = self.lbl_status.text()
         if "RUNNING" in status_text: current_status = "RUNNING"
         elif "WAITING" in status_text: current_status = "WAITING"
         self.update_status_ui(current_status)
@@ -2660,24 +1730,29 @@ class KipoWindow(QMainWindow):
         if hasattr(self, 'profit_graph'):
             self.profit_graph.update_theme(self.ui_theme)
 
-    def update_bultagi_status_label(self, checked=None):
-        """[v6.8.7] 불타기 ON/OFF 상태를 즉시 반영 (인자가 있으면 해당 값 사용, 없으면 설정 로드)"""
-        try:
-            if not hasattr(self, 'lbl_log'): return
-            
-            if checked is not None:
-                is_on = checked
-            else:
-                # [v6.8.3] 위젯의 isChecked() 대신 실제 설정값을 우선 참조 (캐시 1초 지연 가능성 있음)
-                from get_setting import get_setting
-                is_on = get_setting('bultagi_enabled', True)
-                
-            status_text = "ON" if is_on else "OFF"
-            self.lbl_log.setText(f"📊 Analysis & Logs (불타기: {status_text})")
-            self.lbl_log.setStyleSheet(f"color: {'#f1c40f' if is_on else '#7f8c8d'}; font-weight: bold;")
-        except Exception as e:
-            print(f"⚠️ update_bultagi_status_label error: {e}")
+    def append_log(self, text):
+        """로그 메시지를 QTextEdit에 추가하고 스크롤을 맨 아래로 내립니다."""
+        current_time = datetime.datetime.now().strftime("[%H:%M:%S]")
+        log_message = f"{current_time} {text}"
+        self.log_display.append(log_message)
+        self.log_display.verticalScrollBar().setValue(self.log_display.verticalScrollBar().maximum())
 
+        # [v4.7] 실시간 그래프 갱신 트리거 (v4.7.2: '체결' 키워드 추가, v5.5.0: 'HTS' 키워드 추가)
+        if hasattr(self, 'profit_graph') and ("완료" in text or "체결" in text or "HTS" in text):
+            self.profit_graph.update_chart()
+
+        # [v4.7.3] 최근 매수 타이머 리셋 트리거
+        if "매수체결" in text or "불타기" in text or "추가매수" in text:
+            self.last_buy_time = datetime.datetime.now()
+            self.last_buy_condition = None # 매수 조건 초기화
+            # 텍스트에서 조건식 번호 추출 (예: "[0] 매수체결")
+            match = re.search(r'\[(\d+)\]', text)
+            if match:
+                self.last_buy_condition = int(match.group(1))
+            
+            if hasattr(self, 'lbl_last_buy_timer'):
+                self.lbl_last_buy_timer.setText("경과: 00:00")
+                self.lbl_last_buy_timer.setStyleSheet("color: #2ecc71; font-weight: bold;") # 리셋 시 초록색 강조
 
     from PyQt6.QtCore import pyqtSlot
     
@@ -2761,13 +1836,13 @@ class KipoWindow(QMainWindow):
         self.setCentralWidget(central_widget)
         # Root Layout: Vertical (Header + Body)
         root_layout = QVBoxLayout(central_widget)
-        root_layout.setContentsMargins(8, 2, 8, 8) # [v6.9.0] 상단 여백 대폭 축소 (10 -> 2)
-        root_layout.setSpacing(6) # [v6.9.0] 간격 조절 (10 -> 6)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(10)
 
         # === 0. Global Header (Nested Layout for V2.1) ===
         header_widget = QWidget()
         header_layout = QHBoxLayout(header_widget)
-        header_layout.setContentsMargins(0, 0, 0, 2) # [v6.9.0] 하단 여백 축소 (10 -> 2)
+        header_layout.setContentsMargins(0, 0, 0, 10)
         
         # Left Spacer
         header_layout.addSpacing(40)
@@ -2777,11 +1852,11 @@ class KipoWindow(QMainWindow):
         center_container = QWidget()
         center_vbox = QVBoxLayout(center_container)
         center_vbox.setContentsMargins(0, 0, 0, 0)
-        center_vbox.setSpacing(2) # [v6.9.2] 타이틀 하단 간격 축소 (5 -> 2)
+        center_vbox.setSpacing(5)
         
-        self.lbl_main_title = QLabel("KipoStock AI")
+        self.lbl_main_title = QLabel("KipoSTOCK")
         self.lbl_main_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_main_title.setFont(QFont("Arial Black", 24, QFont.Weight.Bold)) # [v6.9.2] 크기 축소 (28 -> 24)
+        self.lbl_main_title.setFont(QFont("Arial Black", 28, QFont.Weight.Bold))
         self.lbl_main_title.setStyleSheet("color: #f1c40f; letter-spacing: 2px;") # 골드 타이틀
         center_vbox.addWidget(self.lbl_main_title)
         
@@ -2829,7 +1904,7 @@ class KipoWindow(QMainWindow):
 
         # 상태 표시창 (중앙)
         self.lbl_status = QLabel("● READY")
-        self.lbl_status.setFont(QFont("Arial", 18, QFont.Weight.Bold)) # [v6.9.2] 공간 확보를 위한 크기 축소 (22 -> 18)
+        self.lbl_status.setFont(QFont("Arial", 22, QFont.Weight.Bold)) # 크기 2배 확대 (11 -> 22)
         self.lbl_status.setStyleSheet("color: #6c757d;")
         
         # 현재 시간 (오른쪽) - 아이콘 없이 더 심플하고 고급스럽게
@@ -2837,7 +1912,7 @@ class KipoWindow(QMainWindow):
         clock_layout.setSpacing(10)
         
         self.lbl_clock = QLabel(datetime.datetime.now().strftime("%H:%M:%S"))
-        self.lbl_clock.setFont(QFont("Arial", 18, QFont.Weight.Bold, True)) # [v6.9.2] 크기 축소 (22 -> 18)
+        self.lbl_clock.setFont(QFont("Arial", 22, QFont.Weight.Bold, True))
         self.lbl_clock.setStyleSheet("color: #007bff;")
         
         clock_layout.addWidget(self.lbl_clock)
@@ -2881,25 +1956,6 @@ class KipoWindow(QMainWindow):
         
         header_layout.addWidget(self.btn_top)
         
-        # [신규 v6.7.5] History Button (📋)
-        self.btn_history = QPushButton("📋")
-        self.btn_history.setFixedSize(40, 40)
-        self.btn_history.setToolTip(self._style_tooltip("📜 [매매 일지]\n지금까지의 모든 매매 내역을 확인합니다."))
-        self.btn_history.setStyleSheet("""
-            QPushButton { 
-                background-color: transparent; 
-                font-size: 24px; 
-                border: none; 
-                padding: 0px; 
-            }
-            QPushButton:hover { 
-                background-color: rgba(128, 128, 128, 0.2); 
-                border-radius: 20px; 
-            }
-        """)
-        self.btn_history.clicked.connect(self.open_history_dialog)
-        header_layout.addWidget(self.btn_history)
-        
         root_layout.addWidget(header_widget)
 
         # === Body Layout (Left + Right) ===
@@ -2913,14 +1969,13 @@ class KipoWindow(QMainWindow):
         left_panel.setFixedWidth(240) # [수정] 너비 축소 (280 -> 240)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(2) # [v6.9.0] 그룹 간 간격 최소화 (기존 명시적 설정 없음 - 기본값 10 예상)
         
         # 1. Settings Group
         self.settings_group = QGroupBox("⚙️ Settings")
         self.settings_group.setObjectName("settings_group")
         
         settings_layout = QVBoxLayout()
-        settings_layout.setSpacing(4) # [v6.9.2] 요소 간 간격 극한 축소 (10 -> 4)
+        settings_layout.setSpacing(6) # 요소 간 간격 축소
 
         # Condition Select Header & Advanced Toggle Button
         cond_row_layout = QHBoxLayout()
@@ -2980,7 +2035,8 @@ class KipoWindow(QMainWindow):
             btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
             btn.customContextMenuRequested.connect(lambda pos, idx=i: self.on_cond_right_clicked(idx))
             self.cond_buttons.append(btn)
-                        # [Lite] 배분: 상단(짝수: 0, 2, 4, 6, 8) / 하단(홀수: 1, 3, 5, 7, 9)
+            
+            # [Lite] 배분: 상단(짝수: 0, 2, 4, 6, 8) / 하단(홀수: 1, 3, 5, 7, 9)
             if i % 2 == 0:
                 row = 0
                 col = i // 2
@@ -3010,130 +2066,247 @@ class KipoWindow(QMainWindow):
         max_stocks_row.addWidget(self.input_max)
         advanced_vbox.addLayout(max_stocks_row)
 
+
         # 2) Time Settings (Horizontal)
         time_row = QHBoxLayout()
         time_row.setSpacing(5)
+        
         time_row.addWidget(QLabel("<b>🕒 시간</b>"))
-        self.input_start_time = QLineEdit(); self.input_start_time.setFixedWidth(50); self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.input_start_time.setStyleSheet("font-weight: bold; color: #f1c40f; background-color: #1a1a1a; border: 1px solid #555; border-radius: 4px;")
+        self.input_start_time = QLineEdit()
+        self.input_start_time.setObjectName("input_start_time")
+        self.input_start_time.setFixedWidth(50)
+        self.input_start_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         time_row.addWidget(self.input_start_time)
+        
         time_row.addWidget(QLabel("~"))
-        self.input_end_time = QLineEdit(); self.input_end_time.setFixedWidth(50); self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.input_end_time.setStyleSheet("font-weight: bold; color: #f1c40f; background-color: #1a1a1a; border: 1px solid #555; border-radius: 4px;")
+        
+        self.input_end_time = QLineEdit()
+        self.input_end_time.setObjectName("input_end_time")
+        self.input_end_time.setFixedWidth(50)
+        self.input_end_time.setAlignment(Qt.AlignmentFlag.AlignCenter)
         time_row.addWidget(self.input_end_time)
         
-        self.btn_alarm_stop = QPushButton("🔔")
-        self.btn_alarm_stop.setFixedSize(32, 32)
+        # [V5.7.25] 🔔 알람 해제 버튼 (심볼 폰트 보강)
+        self.btn_alarm_stop = QPushButton("\U0001F514") # Bell 아이콘 (🔔)
+        self.btn_alarm_stop.setFixedSize(34, 34)
         self.btn_alarm_stop.setFont(QFont("Segoe UI Emoji", 14))
+        self.btn_alarm_stop.clicked.connect(self.stop_alarm)
+        self.btn_alarm_stop.setEnabled(False)
+        self.btn_alarm_stop.setToolTip(self._style_tooltip("🔔 [알람 끄기]\n알람이 울릴 때 누르면 조용해집니다!"))
         self.btn_alarm_stop.setStyleSheet("""
-            QPushButton { 
-                background-color: #f1c40f; 
-                color: #1a1a1a; 
-                border: 1px solid #d4ac0d; 
-                border-radius: 4px; 
-                padding: 0;
+            QPushButton {
+                background-color: #f8f9fa; border: 1px solid #ddd; border-radius: 6px; color: #aaa; padding: 0px;
             }
-            QPushButton:hover { background-color: #f39c12; }
-            QPushButton:disabled { background-color: #333; color: #777; border: 1px solid #555; }
+            QPushButton:enabled {
+                background-color: #ffc107; color: #000; border: 1px solid #e2a000;
+            }
         """)
         time_row.addWidget(self.btn_alarm_stop)
+        
         advanced_vbox.addLayout(time_row)
-        self.advanced_widget.setVisible(False) 
+        
+        # Add advanced_widget to settings_layout
+        self.advanced_widget.setVisible(False) # Default hidden
         settings_layout.addWidget(self.advanced_widget)
 
-        # 💎 Buying Strategy Group
+        # 💎 Buying Strategy Group (Revised for Color Matching)
         self.strategy_group = QGroupBox("💎 매수 전략 (Buying Strategy)")
         self.strategy_group.setObjectName("strategy_group")
+        
         strat_vbox = QVBoxLayout()
-        strat_vbox.setContentsMargins(5, 5, 5, 5); strat_vbox.setSpacing(4)
+        strat_vbox.setContentsMargins(5, 0, 5, 2) # 상단 여백 0으로 밀착
+        strat_vbox.setSpacing(2) # 줄 간격 콤팩트하게 최소화
 
+        # Helper function to create TP/SL inputs
         def create_tpsl_inputs(color):
-            tp = QLineEdit("12.0"); tp.setFixedWidth(45); tp.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            tp.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; color: #dc3545;")
-            sl = QLineEdit("-1.2"); sl.setFixedWidth(45); sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            sl.setStyleSheet(f"border: 1px solid {color}; border-radius: 4px; font-weight: bold; color: #007bff;")
+            tp = QLineEdit("12.0")
+            tp.setFixedWidth(45) # [수정] 너비 확장 (35 -> 45)
+            tp.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
+            tp.setStyleSheet(f"QLineEdit {{ border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #dc3545; padding: 1px; }}")
+            tp.setToolTip(self._style_tooltip("📈 [익절 (%)]\n목표 수익률 달성 시 기분 좋게 매도!"))
+            
+            sl = QLineEdit("-1.2")
+            sl.setFixedWidth(45) # [수정] 너비 확장 (35 -> 45)
+            sl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            # [수정] 폰트 크기 확대 (12px -> 15px) 및 패딩 조정
+            sl.setStyleSheet(f"QLineEdit {{ border: 1px solid {color}; border-radius: 4px; font-weight: bold; font-size: 15px; color: #007bff; padding: 1px; }}")
+            sl.setToolTip(self._style_tooltip("📉 [손절 (%)]\n위험 감지! 손실 제한 도달 시 자동 매도!"))
             return tp, sl
 
+        # Strategy UI Header (TP/SL labels)
         header_layout = QHBoxLayout()
-        header_layout.addStretch()
-        lbl_tp_hdr = QLabel("익절(%)"); lbl_sl_hdr = QLabel("손절(%)")
-        lbl_tp_hdr.setFixedWidth(45); lbl_sl_hdr.setFixedWidth(45); lbl_tp_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter); lbl_sl_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl_tp_hdr.setStyleSheet("color: #eee; font-size: 11px; font-weight: bold;"); lbl_sl_hdr.setStyleSheet("color: #eee; font-size: 11px; font-weight: bold;")
-        header_layout.addWidget(lbl_tp_hdr); header_layout.addWidget(lbl_sl_hdr)
+        header_layout.setContentsMargins(5, 0, 0, 0)
+        
+        lbl_tp_hdr = QLabel("익절(%)")
+        lbl_sl_hdr = QLabel("손절(%)")
+        lbl_tp_hdr.setFixedWidth(45); lbl_sl_hdr.setFixedWidth(45)
+        lbl_tp_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_sl_hdr.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lbl_tp_hdr.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        lbl_sl_hdr.setStyleSheet("color: #aaa; font-size: 11px; font-weight: bold;")
+        
+        # [구조체 변경] 하단 입력창(qty_row 등)의 간격과 100% 동일한 텐션 로직 적용
+        # 버튼칸(val, type), 빈 텐션(Stretch), 익절 박스, 손절 박스 순서
+        header_layout.addStretch() # 입력창들의 addStretch()와 위아래 라인을 맞춤
+        header_layout.addWidget(lbl_tp_hdr)
+        # 하단 입력창 레이아웃은 AddWidget 사이에 추가 Spacing이 없으므로 여기도 제거 또는 최소 패턴 일치
+        header_layout.addWidget(lbl_sl_hdr)
+
         strat_vbox.addLayout(header_layout)
 
-        def add_strat_row(label, color, obj_name, val_w=50):
-            vbox = QVBoxLayout(); vbox.setSpacing(2)
-            lbl = QLabel(label); lbl.setStyleSheet(f"color: {color}; font-weight: bold; font-size: 13px;")
-            row = QHBoxLayout()
-            val = QLineEdit(); val.setObjectName(f"input_{obj_name}_val"); val.setFixedWidth(val_w)
-            val.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            # [v6.6.6] 입력 필드 색상 복구 (고대비 강조)
-            val.setStyleSheet(f"""
-                QLineEdit {{ 
-                    background-color: #1a1a1a; 
-                    color: white; 
-                    border: 1px solid {color}; 
-                    border-radius: 4px; 
-                    font-weight: bold; 
-                    font-size: 14px;
-                    padding: 1px;
-                }}
-            """)
-            btn = QPushButton("시"); btn.setCheckable(True); btn.setFixedSize(26, 26)
-            btn.clicked.connect(lambda: self.update_price_type_style(obj_name))
-            tp, sl = create_tpsl_inputs(color)
-            row.addWidget(val); row.addWidget(btn); row.addStretch(); row.addWidget(tp); row.addWidget(sl)
-            vbox.addWidget(lbl); vbox.addLayout(row) # [v6.6.5] 레이블 상단 고정
-            strat_vbox.addLayout(vbox)
-            return val, btn, tp, sl
-
-        # Qty, Amount, Percent
-        self.input_qty_val, self.btn_qty_type, self.input_qty_tp, self.input_qty_sl = add_strat_row("🔴 1주 매수", "#dc3545", "qty")
-        self.input_amt_val, self.btn_amt_type, self.input_amt_tp, self.input_amt_sl = add_strat_row("🟢 금액 매수", "#28a745", "amount", 90)
-        self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
-        self.input_pct_val, self.btn_pct_type, self.input_pct_tp, self.input_pct_sl = add_strat_row("🔵 비율 매수", "#007bff", "percent")
+        # 1. Qty Mode (Red)
+        qty_vbox = QVBoxLayout()
+        qty_vbox.setSpacing(2)
+        lbl_qty = QLabel("🔴 1주 매수")
+        lbl_qty.setStyleSheet("color: #dc3545; font-weight: bold; font-size: 13px;")
         
-        # HTS - [v6.6.6] 불필요한 입력창 숨김 및 버튼 스타일 강화
-        self.input_hts_dummy, self.btn_hts_mode, self.input_hts_tp, self.input_hts_sl = add_strat_row("🖐 직접/HTS 관리", "#fd7e14", "hts", 60)
-        self.input_hts_dummy.hide() 
-        self.btn_hts_mode.setCheckable(True); self.btn_hts_mode.setText("HTS")
-        self.btn_hts_mode.setFixedSize(60, 26) # [v6.9.1] 다른 입력박스(50-60px)와 높이(26px)에 맞춰 크기 정밀 조정
-        self.btn_hts_mode.setStyleSheet("""
-            QPushButton { font-weight: bold; color: #fd7e14; background-color: #1a1a1a; border: 1px solid #fd7e14; border-radius: 4px; padding: 2px; }
-            QPushButton:checked { background-color: #fd7e14; color: white; }
-        """)
+        qty_row = QHBoxLayout()
+        self.input_qty_val = QLineEdit("1")
+        self.input_qty_val.setObjectName("input_qty_val")
+        self.input_qty_val.setReadOnly(True)
+        self.input_qty_val.setFixedWidth(50) # [수정] 슬림화 (60 -> 50)
+        self.input_qty_val.setToolTip(self._style_tooltip("🔴 [1주 매수]\n조건 만족 시 1주 주문"))
+        
+        self.btn_qty_type = QPushButton("시")
+        self.btn_qty_type.setCheckable(True)
+        self.btn_qty_type.setFixedSize(26, 26) # 더 컴팩트한 원형 (28->26)
+        self.btn_qty_type.clicked.connect(lambda: self.update_price_type_style('qty'))
+        
+        self.input_qty_tp, self.input_qty_sl = create_tpsl_inputs("#dc3545")
+        self.input_qty_tp.setFixedWidth(45); self.input_qty_sl.setFixedWidth(45)
+        
+        qty_row.addWidget(self.input_qty_val)
+        qty_row.addWidget(self.btn_qty_type)
+        qty_row.addStretch()
+        qty_row.addWidget(self.input_qty_tp)
+        qty_row.addWidget(self.input_qty_sl)
+        
+        qty_vbox.addWidget(lbl_qty)
+        qty_vbox.addLayout(qty_row)
+        strat_vbox.addLayout(qty_vbox)
 
-        strat_vbox.addStretch(1)
+        # 2. Amount Mode (Green)
+        amt_vbox = QVBoxLayout()
+        amt_vbox.setSpacing(2)
+        lbl_amt = QLabel("🟢 금액 매수")
+        lbl_amt.setStyleSheet("color: #28a745; font-weight: bold; font-size: 13px;")
+        
+        amt_row = QHBoxLayout()
+        self.input_amt_val = QLineEdit("100,000")
+        self.input_amt_val.setObjectName("input_amt_val")
+        self.input_amt_val.setFixedWidth(90)
+        self.input_amt_val.setToolTip(self._style_tooltip("🟢 [금액 매수]\n설정된 든든한 금액만큼 주문해요 (예: 100만)"))
+        self.input_amt_val.textEdited.connect(lambda: self.format_comma(self.input_amt_val))
+        
+        self.btn_amt_type = QPushButton("시")
+        self.btn_amt_type.setCheckable(True)
+        self.btn_amt_type.setFixedSize(26, 26) # 더 컴팩트한 원형
+        self.btn_amt_type.clicked.connect(lambda: self.update_price_type_style('amount'))
+        
+        self.input_amt_tp, self.input_amt_sl = create_tpsl_inputs("#28a745")
+        self.input_amt_tp.setFixedWidth(45); self.input_amt_sl.setFixedWidth(45)
+        
+        amt_row.addWidget(self.input_amt_val)
+        amt_row.addWidget(self.btn_amt_type)
+        amt_row.addStretch()
+        amt_row.addWidget(self.input_amt_tp)
+        amt_row.addWidget(self.input_amt_sl)
+        
+        amt_vbox.addWidget(lbl_amt)
+        amt_vbox.addLayout(amt_row)
+        strat_vbox.addLayout(amt_vbox)
+
+        # 3. Percent Mode (Blue)
+        pct_vbox = QVBoxLayout()
+        pct_vbox.setSpacing(2)
+        lbl_pct = QLabel("🔵 비율 매수")
+        lbl_pct.setStyleSheet("color: #007bff; font-weight: bold; font-size: 13px;")
+        
+        pct_row = QHBoxLayout()
+        self.input_pct_val = QLineEdit("10")
+        self.input_pct_val.setObjectName("input_pct_val")
+        self.input_pct_val.setFixedWidth(50) # [수정] 슬림화 (60 -> 50)
+        self.input_pct_val.setToolTip(self._style_tooltip("🔵 [비율 매수]\n내 예수금 대비 % 비율로 유연하게 주문!"))
+        
+        self.btn_pct_type = QPushButton("시")
+        self.btn_pct_type.setCheckable(True)
+        self.btn_pct_type.setFixedSize(26, 26) # 더 컴팩트한 원형
+        self.btn_pct_type.clicked.connect(lambda: self.update_price_type_style('percent'))
+        
+        self.input_pct_tp, self.input_pct_sl = create_tpsl_inputs("#007bff")
+        self.input_pct_tp.setFixedWidth(45); self.input_pct_sl.setFixedWidth(45)
+        
+        pct_row.addWidget(self.input_pct_val)
+        pct_row.addWidget(self.btn_pct_type)
+        pct_row.addStretch()
+        pct_row.addWidget(self.input_pct_tp)
+        pct_row.addWidget(self.input_pct_sl)
+        
+        pct_vbox.addWidget(lbl_pct)
+        pct_vbox.addLayout(pct_row)
+        strat_vbox.addLayout(pct_vbox)
+
+        # 4. HTS/Direct Mode (Orange)
+        hts_vbox = QVBoxLayout()
+        hts_vbox.setSpacing(2)
+        lbl_hts = QLabel("🖐 직접/HTS 관리")
+        lbl_hts.setStyleSheet("color: #fd7e14; font-weight: bold; font-size: 13px;")
+        
+        hts_row = QHBoxLayout()
+        self.input_hts_val = QLineEdit("HTS")
+        self.input_hts_val.setObjectName("input_hts_val")
+        self.input_hts_val.setReadOnly(True)
+        self.input_hts_val.setFixedWidth(60)
+        self.input_hts_val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.input_hts_val.setToolTip(self._style_tooltip("🖐 [직접/HTS 감시]\nHTS 등 밖에서 산 종목들도 똑똑하게 감시!"))
+        
+        self.input_hts_tp, self.input_hts_sl = create_tpsl_inputs("#fd7e14")
+        self.input_hts_tp.setFixedWidth(45); self.input_hts_sl.setFixedWidth(45)
+        
+        hts_row.addWidget(self.input_hts_val)
+        hts_row.addStretch()
+        hts_row.addWidget(self.input_hts_tp)
+        hts_row.addWidget(self.input_hts_sl)
+        
+        hts_vbox.addWidget(lbl_hts)
+        hts_vbox.addLayout(hts_row)
+        strat_vbox.addLayout(hts_vbox)
+
         self.strategy_group.setLayout(strat_vbox)
         settings_layout.addWidget(self.strategy_group)
-        settings_layout.addSpacing(2) # [v6.7.11] 박스 간 간격 극한 최적화 (5 -> 2)
 
         # 🔥 불타기(Fire-up) 설정 그룹
         self.bultagi_group = DoubleClickGroupBox("🔥 불타기(Fire-up) 설정")
         self.bultagi_group.setObjectName("bultagi_group")
-        # [v6.7.9] 체크박스 제거 (스타일 충돌 방지 및 더블 클릭 위주 레이아웃)
         self.bultagi_group.doubleClicked.connect(self.toggle_bultagi_enabled)
-        self.bultagi_group.doubleClicked.connect(self.update_bultagi_status_label)
-        
+        self.bultagi_group.setToolTip(self._style_tooltip("💡 [더블 클릭] 시 현재 프로필의 불타기 기능 활성/비활성화 전환"))
+
         bultagi_layout = QVBoxLayout()
-        bultagi_layout.setContentsMargins(10, 15, 10, 10) # 타이틀 정합성을 위한 여백 조정
-        bultagi_layout.setSpacing(5)
+        bultagi_layout.setContentsMargins(10, 20, 10, 15)
         
+        # [신규] 독립 팝업 호출 버튼
         self.btn_bultagi_open = QPushButton("⚙️ 상세 설정 열기")
-        self.btn_bultagi_open.setFixedHeight(45)
         self.btn_bultagi_open.setFont(QFont("Arial", 11, QFont.Weight.Bold))
-        self.btn_bultagi_open.setStyleSheet("background-color: #dc3545; color: white; border: 2px solid #C82333; border-radius: 8px;")
+        self.btn_bultagi_open.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_bultagi_open.setFixedHeight(45)
         self.btn_bultagi_open.clicked.connect(self.open_bultagi_dialog)
-        bultagi_layout.addWidget(self.btn_bultagi_open)
         
+        self.btn_bultagi_open.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545; color: white;
+                border: 2px solid #C82333; border-radius: 8px;
+            }
+            QPushButton:hover { background-color: #c82333; }
+        """)
+        
+        bultagi_layout.addWidget(self.btn_bultagi_open)
         self.bultagi_group.setLayout(bultagi_layout)
         settings_layout.addWidget(self.bultagi_group)
-        settings_layout.addStretch(5) # [v6.6.5] 두 박스를 상단으로 강력 밀착
 
-        # [v6.6.3] 좌측 박스 간 공백 최소화를 위해 stretch 제거 (여백 타이트하게 조정)
+        settings_layout.addStretch()
         self.settings_group.setLayout(settings_layout)
-        self.settings_group.setContentsMargins(8, 12, 8, 8) # [v6.7.8] 여백 최적화
+        self.settings_group.setContentsMargins(5, 5, 5, 5) # 여백 축소
         # [V5.7.26] 수직 크기를 내부 콘텐츠에 맞게 고정 (창 확대 시 늘어남 방지)
         self.settings_group.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         left_layout.addWidget(self.settings_group)
@@ -3312,8 +2485,7 @@ class KipoWindow(QMainWindow):
         rt_layout.addWidget(self.rt_list)
         
         self.rt_group.setLayout(rt_layout)
-        # [v6.6.4] 실시간 조건식 영역이 남는 공간을 모두 차지하도록 stretch 1 부여 (확장성 극대화)
-        left_layout.addWidget(self.rt_group, stretch=1)
+        left_layout.addWidget(self.rt_group)
 
         # [V5.7.26] 초기 상태는 숨김 (Progressive Disclosure)
         self.strategy_group.setVisible(False)
@@ -3330,10 +2502,10 @@ class KipoWindow(QMainWindow):
         
         # 1. 상단 타이틀 및 명령창
         log_header = QHBoxLayout()
-        self.lbl_log = QLabel("📊 Analysis & Logs") # [v6.6.2] 인스턴스 변수로 전환
-        self.lbl_log.setFont(QFont("Arial", 12, QFont.Weight.Bold))
-        self.lbl_log.setStyleSheet("color: #f1c40f;")
-        log_header.addWidget(self.lbl_log)
+        lbl_log = QLabel("📊 Analysis & Logs") 
+        lbl_log.setFont(QFont("Arial", 12, QFont.Weight.Bold))
+        lbl_log.setStyleSheet("color: #f1c40f;")
+        log_header.addWidget(lbl_log)
 
         # [신규 v4.7.3] 최근 매수 후 경과 시간 타이머 레이블
         self.lbl_last_buy_timer = QLabel("구매 대기")
@@ -3444,15 +2616,7 @@ class KipoWindow(QMainWindow):
         self.portfolio_table = PortfolioTableWidget()
         self.log_splitter.addWidget(self.portfolio_table)
         
-        # [NEW v6.7.1] 불타기(Fire-up) 전용 로그 화면
-        self.bultagi_log_display = ZoomableTextEdit()
-        self.bultagi_log_display.setObjectName("bultagi_log_display")
-        self.bultagi_log_display.setReadOnly(True)
-        self.bultagi_log_display.setFont(QFont("Consolas", 11))
-        self.bultagi_log_display.document().setMaximumBlockCount(500)
-        self.log_splitter.addWidget(self.bultagi_log_display)
-        
-        # [기존] 메인 로그 화면
+        # [기존] 로그 화면
         self.log_display = ZoomableTextEdit()
         self.log_display.setObjectName("log_display")
         self.log_display.setReadOnly(True)
@@ -3461,12 +2625,10 @@ class KipoWindow(QMainWindow):
         self.log_display.document().setMaximumBlockCount(2000)
         self.log_splitter.addWidget(self.log_display)
         
-        # [수정 v6.7.1] 4개 위젯(그래프, 잔고, 불타기로그, 메인로그) 분할 비율 조정
-        self.log_splitter.setStretchFactor(0, 2) # 그래프
-        self.log_splitter.setStretchFactor(1, 3) # 실시간 잔고
-        self.log_splitter.setStretchFactor(2, 2) # 불타기 로그
-        self.log_splitter.setStretchFactor(3, 5) # 메인 로그
-        self.log_splitter.setSizes([150, 180, 120, 350])
+        # 초기 비율 설정 (그래프 3: 로그 7)
+        self.log_splitter.setStretchFactor(0, 3)
+        self.log_splitter.setStretchFactor(1, 7)
+        self.log_splitter.setSizes([200, 400])
         
         right_layout.addWidget(self.log_splitter)
 
@@ -3489,16 +2651,7 @@ class KipoWindow(QMainWindow):
         self.worker.signals.news_signal.connect(self.show_news_viewer) # [신규 v5.0.1] 뉴스 팝업 연결
         self.worker.signals.ai_voice_signal.connect(self.speak_text) # [NEW V5.6.3] 제미나이 음성 출력 연동
         self.worker.signals.report_signal.connect(self.append_report) # [v5.7.16] REPORT 전용 HTML 안전 연동
-        self.worker.signals.perspective_signal.connect(self.show_perspective_viewer) # [v6.1.17] KipoStock 관점 연동
-        self.worker.signals.open_config_signal.connect(self.open_bultagi_dialog) # [v6.1.21] 설정창 연동
-        self.worker.signals.open_ai_settings_signal.connect(self.open_ai_voice_settings) # [v6.1.21] AI 설정 연동
         self.worker.start()
-
-    def show_perspective_viewer(self, perspective_list=None):
-        """[수정 v6.4.8] KipoStock 관점 탐색 및 AI 추천 통합 다이얼로그 팝업"""
-        self.append_log("🎯 [종가분석] 지정된 시간이 되어 종가 베팅 탐색 창을 엽니다.")
-        dlg = KipoFilterListDialog(parent=self)
-        dlg.exec()
 
     # ================== AI 음성 비서 기능 (V5.6.3) ==================
     def start_voice_recognition(self):
@@ -3954,16 +3107,8 @@ class KipoWindow(QMainWindow):
             clean_html = html_msg.replace('\n', '<br>')
             # 뉴스 정보와 AI 분석 사이에 구분선 강조
             clean_html = clean_html.replace('💡 <b>Gemini 2.5 分析:</b>', '<br><hr style="border: 1px dashed #555;"><br>💡 <b>Gemini 2.5 分析:</b>')
-
-            # [v6.2.7] 종목명 추출 (HTML 태그 제거 후 [ ... ] 패턴에서 파싱)
-            import re as _re
-            stk_nm = ""
-            plain_msg = _re.sub(r'<[^>]+>', '', html_msg)
-            m = _re.search(r'\[(.+?)\]', plain_msg)
-            if m:
-                stk_nm = m.group(1).strip()
-
-            dialog = NewsViewerDialog(self, clean_html, stk_nm=stk_nm)
+            
+            dialog = NewsViewerDialog(self, clean_html)
             # 모달리스로 띄워 매매 중에도 참고할 수 있도록 함
             dialog.show()
             dialog.raise_()
@@ -3975,32 +3120,26 @@ class KipoWindow(QMainWindow):
         if not text: return
         
         # [v5.7.16] DEBUG_HTML_LOG는 이제 report_signal로 직접 수신하므로 append_report로 위임
+        # (구 버전 호환 안전망 유지)
         if text.startswith("DEBUG_HTML_LOG:"):
             self.append_report(text[len("DEBUG_HTML_LOG:"):].strip())
             return
         
-        # [v6.7.1 Hotfix] 불타기 로그 라우팅 (전용 창으로 분리)
-        # [v6.8.6] 매칭 키워드 보강 (필터 통과 로그 포함)
-        bultagi_keywords = ["[불타기", "[시스템락]", "[불타기차단]", "[불타기성공]", "[불타기실패]", "[불타기진입]", "[불타기필터]", "[불타기대기]"]
-        target_display = self.log_display
-        if any(kw in text for kw in bultagi_keywords):
-            if hasattr(self, 'bultagi_log_display'):
-                target_display = self.bultagi_log_display
-        
+        # [기존 로직] 일반 텍스트나 간이 HTML 처리
         # [v4.7] 실시간 그래프 갱신 트리거 (매수/매도 완료 시)
         if ("완료" in text or "체결" in text) and hasattr(self, 'profit_graph'):
             self.profit_graph.update_chart()
 
         # [v4.7.3] 최근 매수 타이머 리셋 트리거 및 종목명 추출
-        # [v6.6.6] 타이머 리셋 조건 강화: '불타기' 단독 매칭 대신 명확한 매수 로그 패턴 사용
-        actual_buy_keywords = ["매수체결", "추가매수", "HTS매수", "직접매매", "불타기진입"]
-        if any(kw in text for kw in actual_buy_keywords):
+        if "매수체결" in text or "불타기" in text or "추가매수" in text or "HTS매수" in text:
             self.last_buy_time = datetime.datetime.now()
             if hasattr(self, 'lbl_last_buy_timer'):
                 # 종목명 추출 (예: [매수체결] 삼성전자 (7,350원...))
+                # ]와 ( 사이의 텍스트가 종목명
                 stock_match = re.search(r'\]\s*(.*?)\s*\(', text)
                 if stock_match:
                     raw_name = stock_match.group(1).strip()
+                    # HTML 태그 제거 (예: <b>삼성전자</b> -> 삼성전자)
                     self.last_buy_stock_name = re.sub(r'<.*?>', '', raw_name)
                 elif "불타기" in text:
                     self.last_buy_stock_name = "불타기"
@@ -4086,7 +3225,7 @@ class KipoWindow(QMainWindow):
             </tr>
         </table>
         """
-        self.bultagi_log_display.append(full_html) if target_display == self.bultagi_log_display else self.log_display.append(full_html)
+        self.log_display.append(full_html)
         
     def append_report(self, raw_html):
         """[v5.7.16] REPORT 전용 HTML 안전 렌더링 슬롯.
@@ -4095,7 +3234,7 @@ class KipoWindow(QMainWindow):
         if not raw_html: return
         try:
             html = raw_html.replace('\n', '<br>')
-            # self.log_display.clear() # [v6.3.3] 자기의 요청으로 기존 로그를 유지하면서 리포트를 추가함! ❤️
+            self.log_display.clear()
             self.log_display.append(html)
             self.log_display.append("\n===========================\n")
             QApplication.processEvents()
@@ -4161,17 +3300,8 @@ class KipoWindow(QMainWindow):
             self.append_log(f"❌ 로그 저장 실패: {e}")
 
     def on_cond_clicked(self, idx):
-        """조건식 버튼 클릭 시 전략 모드(Qty -> Amt -> Pct -> Off) 순환 전환"""
-        # [신규 v6.1.12 Hotfix] 자동 매매 또는 시퀀스 작동 중에는 전략 변경을 차단 (우클릭 마킹은 허용)
-        current_status = self.lbl_status.text()
-        is_seq_auto = self.btn_auto_seq.isChecked()
-        if "RUNNING" in current_status or is_seq_auto:
-            self.append_log(f"⚠️ 매매/시퀀스 작동 중에는 전략을 변경할 수 없습니다. (우클릭 마킹은 가능)")
-            return
-
         self.cond_states[idx] = (self.cond_states[idx] + 1) % 4
         self.update_button_style(idx)
-        self.animate_button_click(self.cond_buttons[idx]) # [v6.7.0 Bug Fix] 스타일 업데이트 후 애니메이션 호출
         self.refresh_condition_list_ui()
         self.save_settings(show_limit_warning=False, restart_if_running=False, quiet=True)
         if self.lbl_status.text() == "● RUNNING":
@@ -4437,14 +3567,6 @@ class KipoWindow(QMainWindow):
                     target = {} 
                 self.append_log(f"📂 프로필 {profile_idx}번 설정을 불러왔습니다.")
 
-            # [v6.8.8] 로드 시 상시 활성화(v6.6.4)를 제거하고 실제 설정값을 따름
-            # target['bultagi_enabled'] = True
-            # settings['bultagi_enabled'] = True
-            # try:
-            #     with open(self.settings_file, 'w', encoding='utf-8') as f:
-            #         json.dump(settings, f, ensure_ascii=False, indent=2)
-            # except: pass
-
             self.input_max.setText(str(target.get('max_stocks', '20')))
             
             # Condition Button Set
@@ -4621,42 +3743,14 @@ class KipoWindow(QMainWindow):
                 MarketHour.set_market_hours(sh, sm, eh, em)
             except: pass
             
-            # [Fix v6.2.9] 프로필 불러오기 후, 해당 프로필의 불타기 설정을 루트(settings.json 최상위)로 강제 동기화
-            # 이를 통해 매매 엔진(chk_n_sell)이 항상 현재 선택된 프로필의 불타기 상세 설정을 참조하게 함
-            bultagi_keys = [
-                'bultagi_enabled', 'bultagi_wait_sec', 'bultagi_mode', 
-                'bultagi_price_type', 'bultagi_val', 'bultagi_tp', 'bultagi_sl',
-                'bultagi_power_enabled', 'bultagi_power_val', 'bultagi_slope_enabled',
-                'bultagi_preservation_enabled', 'bultagi_preservation_trigger', 'bultagi_preservation_limit',
-                'bultagi_tp_enabled', 'bultagi_sl_enabled'
-            ]
-            
-            sync_data = {}
-            for k in bultagi_keys:
-                if k in target:
-                    sync_data[k] = target[k]
-            
-            if sync_data:
-                # 1. 워커 엔진 메모리 즉시 갱신
-                if hasattr(self, 'worker') and self.worker:
-                    self.worker.schedule_command('update_settings', sync_data, True)
-                
-                # 2. settings.json 파일 물리적 동기화 (chk_n_sell.py의 load_json_safe 참조용)
-                try:
-                    with open(self.settings_file, 'r', encoding='utf-8') as f:
-                        full_settings = json.load(f)
-                    full_settings.update(sync_data)
-                    with open(self.settings_file, 'w', encoding='utf-8') as f:
-                        json.dump(full_settings, f, indent=4, ensure_ascii=False)
-                except: pass
-            
-            # [v6.3.0] UI 하이라이트 상태 즉시 갱신
-            # [v6.8.8] 레이블과 그룹박스 스타일링을 통합 동기화
-            is_bultagi_enabled = sync_data.get('bultagi_enabled', target.get('bultagi_enabled', True))
+            # [신규] 프로필 불러오기 후, 팝업창(Bultagi)이 열려있다면 즉시 동기화 및 그룹박스 렌더링 처리
+            is_bultagi_enabled = target.get('bultagi_enabled', True)
             self.update_bultagi_group_style(is_bultagi_enabled)
-            self.update_bultagi_status_label(is_bultagi_enabled)
-
-            # [신규] 프로필 불러오기 후, 팝업창(Bultagi)이 열려있다면 UI 동기화
+            
+            # [Fix v6.1.11] 설정 로드 시 worker에 즉시 동기화 (설정 불일치 버그 척결)
+            if hasattr(self, 'worker') and self.worker:
+                self.worker.schedule_command('update_settings', {'bultagi_enabled': is_bultagi_enabled}, True)
+            
             if hasattr(self, 'bultagi_dialog') and self.bultagi_dialog and self.bultagi_dialog.isVisible():
                 self.bultagi_dialog.load_settings()
             
@@ -4772,30 +3866,11 @@ class KipoWindow(QMainWindow):
                 
                 if 'profiles' not in settings: settings['profiles'] = {}
                 
-                # [v6.3.0] 불타기 설정을 무조건 현재 루트(또는 UI) 설정에서 가져와 프로필에 저장
-                # 기존에 old_profile에 있을 때만 저장하던 버그 수정
-                bultagi_keys = [
-                    'bultagi_enabled', 'bultagi_wait_sec', 'bultagi_mode', 
-                    'bultagi_price_type', 'bultagi_val', 'bultagi_tp', 'bultagi_sl',
-                    'bultagi_power_enabled', 'bultagi_power_val', 'bultagi_slope_enabled',
-                    'bultagi_preservation_enabled', 'bultagi_preservation_trigger', 'bultagi_preservation_limit',
-                    'bultagi_tp_enabled', 'bultagi_sl_enabled'
-                ]
-                
-                # 루트 설정 로드 (최신 불타기 설정을 얻기 위함)
-                root_settings = {}
-                try:
-                    with open(self.settings_file, 'r', encoding='utf-8') as f:
-                        root_settings = json.load(f)
-                except: pass
-
-                for k in bultagi_keys:
-                    # 루트 설정에 있으면 그걸 쓰고, 없으면 기본값(또는 현재 UI값) 주입
-                    if k in root_settings:
-                        current_data[k] = root_settings[k]
-                    elif k == 'bultagi_enabled':
-                        current_data[k] = self.bultagi_group.isChecked() # [v6.6.4] 람다 대신 직접 참조
-                
+                # [v4.6] 기존 프로필의 불타기 설정 유지
+                old_profile = settings['profiles'].get(str(profile_idx), {})
+                for k in ['bultagi_enabled', 'bultagi_wait_sec', 'bultagi_mode', 'bultagi_price_type', 'bultagi_val', 'bultagi_tp', 'bultagi_sl']:
+                    if k in old_profile: current_data[k] = old_profile[k]
+                    
                 settings['profiles'][str(profile_idx)] = current_data
                 
                 with open(self.settings_file, 'w', encoding='utf-8') as f:
@@ -4839,7 +3914,7 @@ class KipoWindow(QMainWindow):
                     'end_time': et,
                     'trade_timer_val': self.input_timer.text().strip(), # [신규] 루트 타이머 값 저장
                     # [v4.6] 루트 설정값 전송 시 기존 불타기 세팅 누락을 막기 위해 현재 파일에서 가져와 재주입
-                    'bultagi_enabled': self.bultagi_group.isChecked(), # [v6.6.4] 람다 제거 및 직관적 상태 반영
+                    'bultagi_enabled': getattr(self.bultagi_group, 'isChecked', lambda: True)(),
                     'bultagi_wait_sec': get_setting('bultagi_wait_sec', 30),
                     'bultagi_mode': get_setting('bultagi_mode', 'multiplier'),
                     'bultagi_price_type': get_setting('bultagi_price_type', 'market'),
@@ -4921,9 +3996,6 @@ class KipoWindow(QMainWindow):
                 # [수정] 이미 실행 중일 수도 있으므로 force=True로 재시작 강제 (원격에서 온 경우 이미 READY 체크됨)
                 # [중요] 오토 시퀀스에 의한 자동 시작이므로 manual=False로 시간 체크를 강제함!
                 QTimer.singleShot(1000, lambda: self.on_start_clicked(force=True, manual=False))
-            
-            # [v6.6.2] 프로필 전환 시 불타기 상태 레이블 갱신 (load_settings_to_ui에서 이미 갱신됨)
-            # self.update_bultagi_status_label()
 
     # [미씽 메서드 복구] 저장 모드 종료
     def stop_save_mode(self):
@@ -4999,7 +4071,7 @@ class KipoWindow(QMainWindow):
         """[v6.1.12] ACCOUNT_CACHE의 보유 종목 데이터를 실시간 테이블에 렌더링"""
         try:
             from check_n_buy import ACCOUNT_CACHE
-            holdings = ACCOUNT_CACHE.get('realtime_holdings', {})
+            holdings = ACCOUNT_CACHE.get('holdings', {})
             
             # 매입 시간 계산을 위한 mapping 데이터 획득
             mapping = {}
@@ -5260,6 +4332,7 @@ class KipoWindow(QMainWindow):
         self.input_amt_val.setEnabled(not effective_lock)
         self.input_pct_val.setEnabled(not effective_lock)
         
+        for btn in self.cond_buttons: btn.setEnabled(not effective_lock)
         for btn in self.profile_buttons: btn.setEnabled(not effective_lock)
         self.btn_save.setEnabled(not effective_lock)
         
@@ -5298,16 +4371,6 @@ class KipoWindow(QMainWindow):
                 self.log_and_tel(f"🔔 [장 시작 예약] 설정된 시작 시간({self.input_start_time.text()}) 정각입니다. 시퀀스를 자동으로 시작합니다!")
                 self.on_start_clicked(force=True)
                 return
-
-        # [신규 v6.1.15] 오후 자동 시장 분석 및 종가 배팅 추천 트리거 (v6.1.19 매개변수화)
-        from get_setting import get_setting
-        perspective_time = get_setting('kipostock_perspective_time', '15:10')
-        target_time_str = perspective_time + ":00"
-
-        if current_time_str == target_time_str:
-            self.log_and_tel(f"⏰ [{perspective_time}] 오늘의 시장을 총정리하고 내일의 '종가 베팅' 종목을 분석합니다... (잠시만 기다려줘)")
-            self.worker.schedule_command('close_bet')
-            # 중복 실행 방지를 위해 미세 딜레이나 플래그가 필요할 수 있으나, 1초 단위 호출이므로 "15:10:00"은 한 번만 걸림
 
         """종료 시간 도달 시 시퀀스 로직 처리"""
         # 1. 시퀀스 자동 모드인지 확인
@@ -5573,90 +4636,70 @@ class KipoWindow(QMainWindow):
         except: pass
 
 if __name__ == '__main__':
-    import faulthandler
-    import os
-    import sys
-    import datetime
-    import traceback
-    
-    # [v6.5.4] 정밀 추적 시스템
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    if getattr(sys, 'frozen', False):
-        base_path = os.path.dirname(sys.executable)
-    
-    log_data_dir = os.path.join(base_path, 'LogData')
-    if not os.path.exists(log_data_dir): os.makedirs(log_data_dir, exist_ok=True)
-    
-    fault_path = os.path.join(log_data_dir, "crash_fault.txt")
-    report_path = os.path.join(log_data_dir, "crash_report.txt")
-    
-    def log_step(msg):
-        try:
-            with open(report_path, "a", encoding="utf-8") as f:
-                f.write(f"[{datetime.datetime.now()}] [STEP] {msg}\n")
-                f.flush()
-        except: pass
-
-    # faulthandler 설정 (Binary Unbuffered)
-    f_fault = open(fault_path, "ab", buffering=0)
-    faulthandler.enable(file=f_fault)
-    # [v6.5.4] 5분 이상 응답 없으면 트레이스백 덤프
-    faulthandler.dump_traceback_later(300, repeat=True, file=f_fault)
-
     try:
-        log_step("--- START v6.5.5 ---")
-        
-        # [추가] Windows 작업표시줄 아이콘 고동
+        # [추가] Windows 작업표시줄 아이콘 고정 및 표시를 위한 ID 설정
         if sys.platform == 'win32':
             import ctypes
             myappid = 'kipo.buy.auto.4.2'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
-            log_step("OS ID Set")
 
-        from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtGui import QIcon, QFont
-        from PyQt6.QtCore import QSharedMemory
-        from PyQt6.QtWidgets import QMessageBox
-
-        app = QApplication(sys.argv)
-        log_step("QApp Created")
+        # [v4.8.7] 파이썬 기반 무결점 한글 출력
+        print("-" * 50)
+        print("🚀 KipoStock v4.8 메인 엔진을 가동할게, 자기야! ❤️")
+        print("-" * 50)
+        print("🛸 엔진 시동 중... 잠시만 기다려줘! ❤️")
         
-        icon_path = os.path.join(base_path, 'kipo_yellow.ico')
+        app = QApplication(sys.argv)
+        
+        # [신규] 앱 전체 기본 아이콘 설정 (작업 표시줄 아이콘 표시용)
+        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'kipo_yellow.ico')
+        if getattr(sys, 'frozen', False):
+             icon_path = os.path.join(os.path.dirname(sys.executable), 'kipo_yellow.ico')
         if os.path.exists(icon_path):
             app.setWindowIcon(QIcon(icon_path))
-            log_step("Icon Loaded")
         
+        # [신규] 중복 실행 방지 로직 (QSharedMemory)
         shared_memory = QSharedMemory("KipoStock_Singleton_Lock")
         if not shared_memory.create(1):
-            log_step("Instance Conflict")
-            # 만약 이미 존재한다면, 사용자에게 강제 실행 여부를 묻거나 경고
-            QMessageBox.warning(None, "실행 오류", "프로그램이 이미 실행 중이거나 비정상 종료되었습니다.\n작업 관리자에서 기존 프로세스를 종료해주세요.")
+            QMessageBox.warning(None, "실행 오류 (중복 실행 방지)", "KipoStock 프로그램이 이미 실행 중입니다!\n작업 표시줄이나 백그라운드를 확인해주세요.")
             sys.exit(0)
         
-        app.setFont(QFont("Malgun Gothic", 9))
-        log_step("Font Set")
+        # Font Setup
+        font = QFont("Malgun Gothic", 9)
+        app.setFont(font)
         
         window = KipoWindow()
-        log_step("Window Instance Created")
         window.show()
-        log_step("Window Shown")
         
         retCode = app.exec()
-        log_step(f"EXIT with code {retCode}")
         sys.exit(retCode)
         
     except BaseException as e:
-        if isinstance(e, SystemExit) and e.code == 0:
-            sys.exit(0)
-            
-        with open(report_path, "a", encoding="utf-8") as f:
-            f.write(f"\n[{datetime.datetime.now()}] !!! CRITICAL CRASH !!!\n")
-            f.write(traceback.format_exc())
-            f.write("-" * 50 + "\n")
-            f.flush()
+        # [수정] SystemExit(0)은 정상 종료이므로 크래시 로그에서 제외
+        if isinstance(e, SystemExit):
+            sys.exit(e.code)
+
+        # [수정] 크래시 리포트도 LogData 폴더로 이동 시도
+        crash_dir = os.path.dirname(os.path.abspath(__file__))
+        if getattr(sys, 'frozen', False):
+            crash_dir = os.path.dirname(sys.executable)
         
-        try:
-            import ctypes
-            ctypes.windll.user32.MessageBoxW(0, f"Critical Error: {e}\nSee LogData/crash_report.txt", "Error", 0x10)
-        except: pass
-        sys.exit(1)
+        data_dir = os.path.join(crash_dir, 'LogData')
+        if not os.path.exists(data_dir): os.makedirs(data_dir, exist_ok=True)
+        
+        crash_path = os.path.join(data_dir, "crash_report.txt")
+        with open(crash_path, "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now()}] CRASH/EXIT LOGGED:\n")
+            f.write(traceback.format_exc())
+            f.write(f"Error Type: {type(e)}\n")
+            f.write("-" * 50 + "\n")
+        
+        if not isinstance(e, SystemExit):
+            # [수정] GUI 앱이므로 콘솔 입력(input) 제거 + 메시지 박스 시도
+            # Qt 앱이 살아있다면 메시지박스를 띄우지만, 죽었을 수도 있으므로 안전하게 패스 혹은 windows api 사용
+            try:
+                import ctypes
+                ctypes.windll.user32.MessageBoxW(0, f"Critical Error: {e}\nSee crash_report.txt", "Error", 0x10)
+            except:
+                pass
+30

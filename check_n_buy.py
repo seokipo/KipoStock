@@ -35,11 +35,12 @@ def _log_worker():
             if task_type == 'save_mapping':
                 _process_save_mapping(data)
             elif task_type == 'save_buy_time':
-                save_buy_time(data['code']) # 기존 함수 재사용
+                save_buy_time(data['code'], overwrite=data.get('overwrite', False)) # [v6.2.8] overwrite 전달
                 
             _LOG_QUEUE.task_done()
         except Exception as e:
-            print(f"⚠️ [비동기로거] 처리 실패: {e}")
+            # print(f"⚠️ [비동기로거] 처리 실패: {e}")
+            pass
 
 # 데몬 스레드로 시작 (메인 프로그램 종료 시 자동 종료)
 _WORKER_THREAD = threading.Thread(target=_log_worker, daemon=True)
@@ -59,12 +60,7 @@ def _process_save_mapping(data):
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
         
-        data_dir = os.path.join(base_path, 'LogData')
-        if not os.path.exists(data_dir):
-            try: os.makedirs(data_dir, exist_ok=True)
-            except: pass
-        
-        mapping_file = os.path.join(data_dir, 'stock_conditions.json')
+        mapping_file = os.path.join(base_path, 'stock_conditions.json')
         mapping = load_json_safe(mapping_file)
         
         st_data = get_setting('strategy_tp_sl', {})
@@ -79,8 +75,9 @@ def _process_save_mapping(data):
             'time': datetime.now().strftime("%H:%M:%S")
         }
         save_json_safe(mapping_file, mapping)
-    except Exception as ex:
-        print(f"⚠️ [비동기] 조건식 매핑 저장 실패: {ex}")
+    except Exception:
+        # print(f"⚠️ [비동기] 조건식 매핑 저장 실패: {ex}")
+        pass
 
 def say_text(text):
     """Windows SAPI.SpVoice를 사용하여 음성 출력 (PowerShell 경유, 창 숨김)"""
@@ -91,17 +88,50 @@ def say_text(text):
                          stdout=subprocess.DEVNULL, 
                          stderr=subprocess.DEVNULL, 
                          creationflags=0x08000000)
-    except Exception as e:
-        print(f"⚠️ 음성 출력 오류: {e}")
+    except Exception:
+        # print(f"⚠️ 음성 출력 오류: {e}")
+        pass
 
 # 전역 변수로 계좌 정보를 메모리에 들고 있음
 ACCOUNT_CACHE = {
     'balance': 0,
     'acnt_no': '', # [신규] 계좌번호 저장 필드
-    'holdings': {}, # [수정] set() -> dict {code: qty} (수량 변화 감지용)
+    'holdings': {}, # [수정] set() -> dict {code: qty} (하위 호환 및 수량 감지용)
+    'realtime_holdings': {}, # [신규] GUI 렌더링을 위한 상세 데이터 {code: dict}
     'names': {},
     'last_update': 0
 }
+
+# [v6.7.3] 실시간 탐색 종목 이력 (AI 종가 추천용)
+DAILY_DETECTED_STOCKS = set()
+
+def save_detected_stock(code):
+    """오늘 실시간으로 검출된 종목 코드를 메모리와 파일에 저장"""
+    try:
+        code = code.replace('A', '')
+        if code in DAILY_DETECTED_STOCKS: return
+        
+        DAILY_DETECTED_STOCKS.add(code)
+        
+        # 파일 저장
+        if getattr(sys, 'frozen', False):
+            base = os.path.dirname(sys.executable)
+        else:
+            base = os.path.dirname(os.path.abspath(__file__))
+            
+        fpath = os.path.join(base, 'daily_detected_stocks.json')
+        
+        data = []
+        if os.path.exists(fpath):
+            with open(fpath, 'r', encoding='utf-8') as f:
+                try: data = json.load(f)
+                except: data = []
+        
+        if code not in data:
+            data.append(code)
+            with open(fpath, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+    except: pass
 
 RECENT_ORDER_CACHE = {}
 PROCESSING_FLAGS = set() # [신규] 중복 처리 동시 진입 방지 락
@@ -124,6 +154,7 @@ def update_account_cache(token):
         # [수정] 수량까지 포함하여 비교 (DICT 형태)
         old_holdings = ACCOUNT_CACHE['holdings'].copy()
         new_holdings = {}
+        realtime_holdings = {} # [신규]
         names = {}
         
         my_stocks_data = get_my_stocks(token=token)
@@ -140,11 +171,30 @@ def update_account_cache(token):
         for stock in my_stocks:
             code = stock['stk_cd'].replace('A', '')
             name = stock['stk_nm']
-            try: qty = int(stock.get('rmnd_qty', 0)) # 잔여 수량
+            try: qty = int(stock.get('hldg_qty', stock.get('rmnd_qty', 0))) # [v6.1.12 수정] 필드명 유연성 확보
             except: qty = 0
             
             new_holdings[code] = qty
             names[code] = name
+
+            # [v6.1.12 수정] 실제 API 필드명에 맞춰 정밀 매핑 (0패딩 문자열 대응)
+            try:
+                def _parse(k, default=0.0):
+                    val = stock.get(k, default)
+                    return float(str(val).replace(',', '')) if val else default
+
+                realtime_holdings[code] = {
+                    'name': name,
+                    'buy_price': _parse('avg_prc'),
+                    'cur_price': _parse('cur_prc'),
+                    'pl_rt': _parse('pl_rt'),
+                    'qty': int(_parse('rmnd_qty')),
+                    'pnl': int(_parse('pl_amt'))
+                }
+            except Exception as e:
+                print(f"⚠️ [realtime_holdings] 가공 중 예외: {e}")
+        
+        ACCOUNT_CACHE['realtime_holdings'] = realtime_holdings # 전역 캐시 업데이트
         
         # [신규] HTS/외부 매매 감지 로직 (최초 실행 시엔 skip)
         if ACCOUNT_CACHE['last_update'] > 0:
@@ -160,15 +210,14 @@ def update_account_cache(token):
                     # HTS 주문은 last_order_time이 없거나 오래되었으므로 통과됨.
                     last_order_time = RECENT_ORDER_CACHE.get(code, 0)
                     
-                    # [수정] 봇 주문 직후(2초)가 아니면 무조건 HTS/외부 매수로 간주하고 로그 출력
-                    if time.time() - last_order_time > 2.0:
+                    # [수정] 봇 주문 직후(10초)가 아니면 무조건 HTS/외부 매수로 간주
+                    if time.time() - last_order_time > 10.0:
                         print(f"<font color='#ffc107'>🕵️ <b>[HTS매수/폴링]</b> {s_name} ({diff}주 추가 감지) [직접매매]</font>")
                         tel_send(f"🕵️ [HTS외부감지] {s_name} {diff}주 추가됨", msg_type='log')
                         
                         # [HTS 수동매매는 중복 감지 방지 캐시를 업데이트하지 않음]
                         # RECENT_ORDER_CACHE[code] = time.time() 
                         
-                        # [신규] HTS 매수 정보 저장
                         try:
                             # [개선] HTS 매수 시 가격이 0이면 현재가를 가져와서 기록 (수익률 정밀도 향상)
                             hts_price = 0
@@ -176,10 +225,30 @@ def update_account_cache(token):
                                 _, hts_price = get_current_price(code, token=token)
                             except: pass
                             
+                            from trade_logger import session_logger # [v5.5.1 fix]
                             update_stock_condition(code, name='직접매매', strat='HTS')
                             session_logger.record_buy(code, s_name, diff, hts_price, strat_mode='HTS')
                         except Exception as e:
                             print(f"⚠️ [HTS저장] 메타데이터 저장 실패: {e}")
+
+                # [v6.2.8] 매핑 누락 자동 복구 로직
+                # stock_conditions.json(mapping)에 없지만 보유 중인 종목을 daily_buy_times.json 기반으로 구제
+                try:
+                    import sys
+                    base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+                    mapping_file = os.path.join(base_path, 'stock_conditions.json')
+                    buy_times_file = os.path.join(base_path, 'daily_buy_times.json')
+                    
+                    # 매 루프마다 파일을 읽는 것은 비효율적이므로 ACCOUNT_CACHE에 매핑 상태 체크
+                    if code not in load_json_safe(mapping_file):
+                        bt_data = load_json_safe(buy_times_file)
+                        if code in bt_data:
+                            b_entry = bt_data[code]
+                            b_time = b_entry.get('time') if isinstance(b_entry, dict) else b_entry
+                            if b_time and b_time != "99:99:99":
+                                print(f"🛠️ [매핑복구] {names.get(code, code)} ({code}): 매핑 누수 감지 -> {b_time} 기반 자동 복구")
+                                update_stock_condition(code, name=names.get(code, '복구종목'), strat='HTS', time_val=b_time)
+                except: pass
             
             # 2. 종목 삭제 / 수량 감소 (매도)
             for code, old_qty in old_holdings.items():
@@ -189,10 +258,17 @@ def update_account_cache(token):
                     s_name = names.get(code, ACCOUNT_CACHE['names'].get(code, code))
                     
                     last_order_time = RECENT_ORDER_CACHE.get(code, 0)
-                    # [수정] 봇 매도 직후가 아니면 HTS 매도로 로그 출력
-                    if time.time() - last_order_time > 2.0:
+                    # [수정] 봇 매도 직후(10초)가 아니면 HTS 매도로 로그 출력
+                    if time.time() - last_order_time > 10.0:
                         print(f"<font color='#ffc107'>🕵️ <b>[HTS매도/폴링]</b> {s_name} ({diff}주 판매 감지) [직접매매]</font>")
                         tel_send(f"🕵️ [HTS외부매도] {s_name} {diff}주 판매됨", msg_type='log')
+                        # [v5.5] 수동 매도시에도 차트 P&L 강제 동기화 트리거
+                        try:
+                            from trade_logger import session_logger
+                            session_logger.sync_required = True
+                        except Exception as e:
+                            print(f"⚠️ HTS 매도 동기화 요청 실패: {e}")
+                            
                         # [HTS 수동매도는 시간 제한 없이 모두 로깅되도록 캐시 업데이트 제거]
                         # RECENT_ORDER_CACHE[code] = time.time()
         
@@ -281,38 +357,35 @@ def save_json_safe(path, data, retries=5):
                 except: pass
     return False
 
-# [신규] 매수 시간 로컬 저장 함수 (Safe Version)
-def save_buy_time(code, time_val=None):
+# [v6.2.8 수정] 매수 시간 로컬 저장 함수 (overwrite 옵션 추가)
+def save_buy_time(code, time_val=None, overwrite=False):
     try:
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
             
-        data_dir = os.path.join(base_path, 'LogData')
-        if not os.path.exists(data_dir):
-            try: os.makedirs(data_dir, exist_ok=True)
-            except: pass
-            
-        json_path = os.path.join(data_dir, 'daily_buy_times.json')
-        
-        # [수정] 안전한 읽기/쓰기
+        json_path = os.path.join(base_path, 'daily_buy_times.json')
         data = load_json_safe(json_path)
             
-        # 날짜 확인 및 초기화
         today_str = datetime.now().strftime("%Y%m%d")
         if data.get('last_update_date') != today_str:
             data = {'last_update_date': today_str}
             
         code = code.replace('A', '')
+        old_data = data.get(code, {})
+        if isinstance(old_data, str): old_data = {"time": old_data} # 하위 호환
         
-        # [수정] 외부에서 준 시간이 있으면 그걸 우선, 없으면 현재 시간
         target_time = time_val if time_val else datetime.now().strftime("%H:%M:%S")
         
-        # 이미 정확한(HTS복원 등) 시간이 있다면 덮어쓰지 않음 (단, 99:99:99면 덮어씀)
-        old_time = data.get(code)
-        if not old_time or old_time == "99:99:99" or time_val:
-            data[code] = target_time
+        # [v6.2.8 / v6.4.6] overwrite가 True거나, 기존 시간이 없으면 덮어씀
+        if overwrite or not old_data.get('time') or old_data.get('time') == "99:99:99" or time_val:
+            new_entry = {
+                "time": target_time,
+                "done": data.get(code, {}).get('done', False) if isinstance(data.get(code), dict) else False
+            }
+            # bultagi_done이 명시적으로 인자로 오지 않으므로, overwrite 시 상태 유지가 중요
+            data[code] = new_entry
             save_json_safe(json_path, data)
             
     except Exception as e:
@@ -327,7 +400,7 @@ def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
     if is_error: log_line += " ❌"
     print(log_line)
 
-def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
+def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None):
     stk_cd = stk_cd.replace('A', '') 
     
     # [Debug] 매수 진입로깅
@@ -355,7 +428,15 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
         # A. 보유 종목 확인 (캐시 기반)
         if stk_cd in ACCOUNT_CACHE['holdings']:
             s_name = get_stock_name_safe(stk_cd, token)
-            # pretty_log("💼", "이미보유", s_name, stk_cd) # [요청] 로그 삭제 (패스)
+            # [신규 v6.9.5] 보유 중인데 VI 해제 신호가 왔다면 "VI 탈출 불타기"로 전환
+            if seq == 'SYSTEM_VI':
+                print(f"🔥 <font color='#f1c40f'><b>[Turbo VI]</b> {s_name} 보유 중 확인! 즉시 추가 매수(불타기) 시도...</font>")
+                turbo_type = cached_setting('bultagi_turbo_vi_type', 'current')
+                add_buy(stk_cd, token=token, seq_name='VI해제탈출', qty=1, source='VI_TURBO', price_type=turbo_type)
+                return
+
+            # [v6.4.5] 사용자 요청: 이미 보유 중인 종목은 매수 안 함 (투명성을 위한 디버그 로그)
+            print(f"ℹ️ <font color='#888888'>[디버그] {s_name} 종목은 이미 보유 중이므로 매수 시퀀스를 건너뜁니다.</font>")
             return
 
         # [수정] A-2. 보유 종목 확인 (캐시 기반으로 충분, API 중복 호출 제거하여 속도 극대화)
@@ -393,26 +474,35 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
         
         # [신규] 조건식별 개별 매수 전략 적용 (V3.8.1)
         try:
-            strat_map = cached_setting('condition_strategies', {})
-            # seq가 없거나 맵에 없으면 기본 qty 모드
-            mode = strat_map.get(str(seq), 'qty')
-            
-            if mode == 'qty':
-                val_str = cached_setting('qty_val', '1')
-            elif mode == 'amount':
-                val_str = cached_setting('amt_val', '100,000')
-            elif mode == 'percent':
-                val_str = cached_setting('pct_val', '10')
-            else:
+            # [신규 v6.9.5] Turbo VI 특별 예우
+            if seq == 'SYSTEM_VI':
                 mode = 'qty'
-                val_str = '1'
+                val_str = '1' # 무조건 1주
+                print(f"🚀 <font color='#00e5ff'><b>[Turbo Pass]</b> {stk_cd}: VI 해제 즉시 진입 모드 (1주)</font>")
+            else:
+                strat_map = cached_setting('condition_strategies', {})
+                # seq가 없거나 맵에 없으면 기본 qty 모드
+                mode = strat_map.get(str(seq), 'qty')
+                
+                if mode == 'qty':
+                    val_str = cached_setting('qty_val', '1')
+                elif mode == 'amount':
+                    val_str = cached_setting('amt_val', '100,000')
+                elif mode == 'percent':
+                    val_str = cached_setting('pct_val', '10')
+                else:
+                    mode = 'qty'
+                    val_str = '1'
         except:
             mode = 'qty'
             val_str = '1'
             
         # [V2.0] 매수 방식 결정 (시장가 vs 현재가)
-        price_types = cached_setting('strategy_price_types', {})
-        p_type = price_types.get(mode, 'market')
+        if seq == 'SYSTEM_VI':
+             p_type = cached_setting('bultagi_turbo_vi_type', 'current')
+        else:
+             price_types = cached_setting('strategy_price_types', {})
+             p_type = price_types.get(mode, 'market')
         
         trde_tp = '3' # 기본: 시장가
         ord_uv = '0'  # 시장가는 가격 0
@@ -497,9 +587,31 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None):
                     'seq': seq # [신규] 시퀀스 정보 전달
                 }
                 _LOG_QUEUE.put(('save_mapping', task_data))
+            
+            # [신규 v6.0.5] 마킹된 조건식인 경우 매수 성공 시 뉴스 스나이퍼 즉시 출동
+            marked_conditions = get_setting('marked_conditions', [])
+            # [수정] seq(검출된 번호)가 마킹된 리스트에 있는지 정확히 체크 (문자열/숫자 호환성 고려)
+            if str(seq) in map(str, marked_conditions):
+                from news_sniper import run_news_sniper
+                
+                def news_trigger_task(nm, cb):
+                    try:
+                        # [주의] news_sniper 내부에서 중복 팝업 방지 로직이 동작함
+                        result = run_news_sniper(nm)
+                        if result and cb:
+                            cb(result)
+                    except Exception as e:
+                        print(f"⚠️ [뉴스트리거] 실패: {e}")
 
-            # [수정] 비동기 처리: 매수 시간 저장
-            _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd}))
+                # 비동기로 뉴스 검색 및 분석 수행 (워커 스레드 활용)
+                threading.Thread(target=news_trigger_task, args=(s_name, on_news_cb), daemon=True).start()
+            else:
+                # [디버그] 마킹되지 않은 경우 조용히 넘어감
+                # print(f"ℹ️ [뉴스패스] {s_name} (조건 {seq}번 마킹 안됨)")
+                pass
+
+            # [v6.2.8] 비동기 처리: 매수 시간 저장 (재매수 대응 overwrite=True)
+            _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd, 'overwrite': True}))
 
             # [신규] 전략별 색상 결정
             color_map = {'qty': '#dc3545', 'amount': '#28a745', 'percent': '#007bff'}
@@ -557,33 +669,35 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
 
     # 0. 메모리 락
     if stk_cd in PROCESSING_FLAGS:
-        return
+        return False
     PROCESSING_FLAGS.add(stk_cd)
 
     try:
         current_time = time.time()
         last_entry = RECENT_ORDER_CACHE.get(stk_cd, 0)
         
-        # [수정] 추가 매수 쿨타임 동기화 (5초)
-        if current_time - last_entry < 5:
-            return
+        # [Fix] 불타기(BULTAGI) 진입 시에는 check_n_sell 에서 이미 대기 시간을 체크했으므로 
+        # add_buy 자체의 5초 쿨타임을 무조건 무시(프리패스) 해야 함.
+        # [신규 v6.9.5] VI_TURBO 진입 시에도 쿨타임 무시
+        # 중복 주문 방지 캐시 업데이트도 BULTAGI인 경우에만 제한 시간 우회
+        if source not in ['BULTAGI', 'VI_TURBO'] and (current_time - last_entry < 5):
+            return False
 
         RECENT_ORDER_CACHE[stk_cd] = current_time
         token = token if token else get_token()
 
         # 잔고 부족 시 스킵
         if ACCOUNT_CACHE['balance'] < 1000:
-            return
+            return False
 
         # [필수] 추가 매수(불타기)이므로 보유 중인 종목인 경우에만 진행 (0->1은 chk_n_buy가 담당)
         current_holdings = ACCOUNT_CACHE['holdings'].get(stk_cd, 0)
         if current_holdings <= 0:
             # [Fix] 캐시 지연 방어: chk_n_sell에서 호출되었다면 보유 중일 확률이 매우 높으므로 로그만 남기고 일단 진행
-            # 만약 진짜 없으면 API에서 증거금 부족이나 수량 부족으로 튕길 것임
             if source == 'BULTAGI':
-                print(f"ℹ️ [BULTAGI] 캐시상 보유 수량 0주이나 '정찰병' 확인되어 진행합니다. (캐시지연 방어)")
+                print(f"ℹ️ [BULTAGI] 캐시상 보유 수량 0주이나 '정찰병' 확인되어 불타기 매수 시도. (캐시지연 방어)")
             else:
-                return
+                return False
 
         # [수정] 주문 방식 처리 (시장가/현재가)
         trde_tp = '3' # 기본: 시장가
@@ -614,48 +728,44 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             # 세션 매수 기록 (strat_mode='ACCEL'로 구분)
             session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode='ACCEL')
             
-            # 매수 시간 및 정보 저장 (비동기)
-            _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd}))
+            # [v6.2.8] 매수 시간 및 정보 저장 (재매수 대응 overwrite=True)
+            _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd, 'overwrite': True}))
             
             # 알림 및 로그
             if source == 'BULTAGI':
-                log_msg = f"<font color='#f39c12'>🔥<b>[불타기]</b> {s_name} ({final_price:,}원/{qty}주)</font>"
+                log_msg = f"<font color='#f39c12'>🔥<b>[불타기 성공]</b> {s_name} ({final_price:,}원/{qty}주)</font>"
                 tel_msg = f"🔥 [불타기 완료] {s_name} {qty}주 추가 체결!"
                 voice_msg = f"{s_name} 불타기"
             else:
-                log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
-                tel_msg = f"🔥 [추가매수] {s_name} {qty}주 추가 체결! (수급폭발)"
+                log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수 성공]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
+                tel_msg = f"🔥 [추가매수 완료] {s_name} {qty}주 추가 체결! (수급폭발)"
                 voice_msg = f"{s_name} 추가매수"
             
             print(log_msg)
             tel_send(tel_msg, msg_type='log')
             say_text(voice_msg) # 음성 알림
+            
+        return is_success
 
     except Exception as e:
         print(f"⚠️ [add_buy] 추가 매수 오류: {e}")
+        return False
     finally:
         PROCESSING_FLAGS.discard(stk_cd)
 
 # [신규] 조건식 매핑 업데이트 (HTS 매매 등 외부 요인)
-def update_stock_condition(code, name='직접매매', strat='qty', time_val=None, seq=None):
+def update_stock_condition(code, name='직접매매', strat='qty', time_val=None, seq=None, bultagi_done=None):
     try:
-        
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
         else:
             base_path = os.path.dirname(os.path.abspath(__file__))
             
-        data_dir = os.path.join(base_path, 'LogData')
-        if not os.path.exists(data_dir):
-            try: os.makedirs(data_dir, exist_ok=True)
-            except: pass
-        
-        mapping_file = os.path.join(data_dir, 'stock_conditions.json')
+        mapping_file = os.path.join(base_path, 'stock_conditions.json')
         mapping = load_json_safe(mapping_file)
         
-        # [중요] 기존 설정값 유지하면서 업데이트 (특히 SL/TP)
-        # HTS 매수의 경우 기본 SL/TP(-1.5/12.0)를 따르되, 사용자가 수동으로 고친 게 있으면 그걸 따라야 함
-        # 여기서는 'HTS' 전략일 경우 기본 설정값을 강제로 주입하여 sell 로직에서 0으로 인식되지 않게 함
+        # [V6.0.6] 기존 데이터 완전 보존형 업데이트 (peak_pl_rt 등 유실 방지)
+        existing_info = mapping.get(code, {})
         
         # 기본 설정 로드
         default_tp = get_setting('take_profit_rate', 10.0)
@@ -665,24 +775,71 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
         st_data = get_setting('strategy_tp_sl', {})
         specific_setting = st_data.get(strat, {})
         
-        # [수정] strat이 'HTS'이거나 매핑 없을 때 기본값 사용
         spec_tp = float(specific_setting.get('tp', default_tp))
         spec_sl = float(specific_setting.get('sl', default_sl))
 
-        # [안전장치] 만약 값이 0이면 강제로 기본값 적용
         if spec_tp == 0: spec_tp = 12.0
         if spec_sl == 0: spec_sl = -1.5
         
-        mapping[code] = {
+        # 새 데이터 구성 (기존 데이터 위에 덮어쓰기)
+        new_info = existing_info.copy()
+        
+        # [Fix v6.1.12 / v6.4.5] HTS(직접매매) 또는 신규 진입 시 과거 기록 초기화
+        # 단, 이미 불타기가 완료된 경우(bultagi_done)는 HTS 감지 시에도 상태 유지 (중복 불타기 방지)
+        if strat == 'HTS' or not existing_info:
+            if not existing_info.get('bultagi_done'):
+                new_info['bultagi_done'] = False
+            new_info['peak_pl_rt'] = 0.0
+            # [신규] 매수 시간도 현재 시간으로 갱신 (경과 시간 계산용)
+            if not time_val:
+                time_val = datetime.now().strftime("%H:%M:%S")
+
+        new_info.update({
             'name': name,
             'strat': strat,
-            'seq': seq, # [신규] 시퀀스 정보 저장
+            'seq': seq if seq is not None else existing_info.get('seq'),
             'tp': spec_tp, 
             'sl': spec_sl,
-            'time': time_val if time_val else datetime.now().strftime("%H:%M:%S")
-        }
+            'time': time_val if time_val else (existing_info.get('time') or datetime.now().strftime("%H:%M:%S"))
+        })
         
+        # 불타기 완료 명시적 설정
+        if bultagi_done is not None:
+            new_info['bultagi_done'] = bultagi_done
+            # [신규 v6.4.6] 백업 파일에도 완료 상태 동기화 (재매수 절대 차단)
+            try:
+                buy_times_file = os.path.join(base_path, 'daily_buy_times.json')
+                bt_data = load_json_safe(buy_times_file)
+                if code in bt_data:
+                    if isinstance(bt_data[code], str): bt_data[code] = {"time": bt_data[code]}
+                    bt_data[code]['done'] = bultagi_done
+                    save_json_safe(buy_times_file, bt_data)
+            except: pass
+            
+        mapping[code] = new_info
         save_json_safe(mapping_file, mapping)
         
     except Exception as e:
         print(f"⚠️ 매핑 업데이트 실패: {e}")
+
+# [신규] 특정 종목의 최고 수익률(Peak)만 원자적으로 업데이트 (데이터 유실 방지)
+def update_stock_peak_rt(code, peak_rt):
+    try:
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        mapping_file = os.path.join(base_path, 'stock_conditions.json')
+        
+        # 1. 파일에서 최신 데이터 읽기
+        mapping = load_json_safe(mapping_file)
+        
+        # 2. 값 수정 (종목이 있을 때만)
+        if code in mapping:
+            mapping[code]['peak_pl_rt'] = peak_rt
+            # 3. 다시 저장
+            save_json_safe(mapping_file, mapping)
+            
+    except Exception as e:
+        print(f"⚠️ Peak RT 업데이트 실패: {e}")

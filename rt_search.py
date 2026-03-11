@@ -171,6 +171,12 @@ class RealTimeSearch:
                         if stock_list:
                             # [최적화] 노이즈 방지를 위해 로그는 한 줄로 간결성 유지
                             print(f"📡 [검색검출] {seq}번({self.condition_map.get(seq, '이름모름')}): {len(stock_list)}종목")
+                            # [v6.7.3] 당일 탐색 이력 저장 (AI 종베 추천용)
+                            try:
+                                from check_n_buy import save_detected_stock
+                                for jm in stock_list:
+                                    save_detected_stock(jm)
+                            except: pass
 
                         # 위에서 정규화된 data 사용
                         for item in data:
@@ -199,26 +205,7 @@ class RealTimeSearch:
                                     from check_n_buy import chk_n_buy
                                     # print(f"🛒 [즉각매수] {jmcode} ({seq_name})")
                                     # RTSEARCH는 비동기 루프이므로 run_in_executor로 동기 함수 호출
-                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name)
-                                    
-                                    # [신규 v5.1] 마킹된 조건식인 경우 뉴스 스나이퍼 즉시 출동
-                                    marked_conditions = get_setting('marked_conditions', [])
-                                    if str(seq) in map(str, marked_conditions):
-                                        from check_n_buy import get_stock_name_safe
-                                        from news_sniper import run_news_sniper
-                                        
-                                        def news_trigger_task(code, token, callback):
-                                            try:
-                                                name = get_stock_name_safe(code, token)
-                                                # [주의] news_sniper 내부에서 중복 팝업 방지 로직이 동작함
-                                                result = run_news_sniper(name)
-                                                if callback:
-                                                    callback(result)
-                                            except Exception as e:
-                                                print(f"⚠️ [뉴스트리거] 실패: {e}")
-
-                                        # 비동기로 뉴스 검색 및 분석 수행
-                                        loop.run_in_executor(None, news_trigger_task, jmcode, self.token, self.on_news_result)
+                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, seq, trade_price, seq_name, self.on_news_result)
                                 else:
                                     pass # print(f"⏳ [대외시간] {jmcode} 매수 건너뜀 (설정 시간 외)")
                 
@@ -349,7 +336,7 @@ class RealTimeSearch:
                                 # [신규] 매매 가능 시간인지 최종 확인 (3중 방어)
                                 if not MarketHour.is_waiting_period():
                                     from check_n_buy import chk_n_buy
-                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name)
+                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name, self.on_news_result)
                                 else:
                                     # REAL 신호는 너무 잦으므로 로그 생략
                                     pass
@@ -378,6 +365,34 @@ class RealTimeSearch:
 
                 elif trnm == 'PING':
                     await self.send_message(response)
+
+                # --- 7. [신규 v6.9.5] 시스템 공지 메시지 (VI 발동/해제 등) 처리 ---
+                elif trnm == 'SYSTEM':
+                    from get_setting import get_setting
+                    msg = response.get('message', '')
+                    if '[장중 거래정지 지정/제개]' in msg:
+                        # 설정 확인
+                        if get_setting('bultagi_turbo_vi', False):
+                            import re
+                            # 예: [장중 거래정지 지정/제개]009680_NX |04
+                            match = re.search(r'(\d{6})', msg)
+                            if match:
+                                jmcode = match.group(1)
+                                if '제개' in msg:
+                                    print(f"🔔 <font color='#f1c40f'><b>[Turbo VI]</b> {jmcode} 거래 재개 감지! 즉시 1주 매수 시도...</font>")
+                                    from market_hour import MarketHour
+                                    if not MarketHour.is_waiting_period():
+                                        from check_n_buy import chk_n_buy
+                                        loop = asyncio.get_event_loop()
+                                        # 전용 플래그 'SYSTEM_VI' 전달
+                                        loop.run_in_executor(None, chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제감시', self.on_news_result)
+                                else:
+                                    print(f"ℹ️ [시스템알림] {jmcode} 거래 정지/VI 발동")
+                        else:
+                            # 설정 꺼져있으면 로그만
+                             print(f"🔍 [SYSTEM] {msg}")
+                    else:
+                         print(f"🔍 [SYSTEM] {msg}")
 
                 else:
                     # [Lite V1.2] 신호 탐지 모드: PING, REG 외 모든 신호 로그 출력

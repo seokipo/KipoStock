@@ -1,7 +1,7 @@
 {
-    "process_name": "KipoStock v4.5 DIAMOND",
+    "process_name": "KipoStock v5.7.25",
     "bultagi_enabled": true,
-    "bultagi_wait_sec": 30,
+    "bultagi_wait_sec": 10,
     "bultagi_mode": "multiplier",
     "bultagi_val": "10",
     "auto_start": false,

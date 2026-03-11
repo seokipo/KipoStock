@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>KipoStock 불타기 엔진(Bultagi Engine) 시스템 지도 🗺️</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {
+            font-family: 'Malgun Gothic', 'Apple SD Gothic Neo', sans-serif;
+            background-color: #121212;
+            color: #e0e0e0;
+            padding: 40px;
+            line-height: 1.6;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background-color: #1e1e1e;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        h1 {
+            color: #f1c40f;
+            text-align: center;
+            border-bottom: 2px solid #333;
+            padding-bottom: 20px;
+        }
+        .description {
+            margin-top: 30px;
+            padding: 20px;
+            background-color: #2c3e50;
+            border-left: 5px solid #f1c40f;
+            border-radius: 5px;
+        }
+        .mermaid {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin: 30px 0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 50px;
+            color: #888;
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 KipoStock 불타기 엔진 작동 원리 🚀</h1>
+        
+        <div class="description">
+            자기야! 이 문서는 우리 프로그램의 핵심인 <b>'bultagi_engine.py'</b>가 어떻게 판단하고 주문을 내는지 보여주는 시스템 지도야. 
+            우리 봇이 어떤 단계를 거쳐서 자기를 위해 수익을 극대화하는지 주말 동안 천천히 살펴봐! ❤️✨
+        </div>
+
+        <div class="mermaid">
+            graph TD
+                Start([불타기 엔진 가동]) --> GetToken[접근 토큰 확보]
+                GetToken --> LoadSettings[설정 로드: 금액/수량 모드 확인]
+                
+                LoadSettings --> ModeCheck{매수 모드?}
+                
+                ModeCheck -- 수량(Count) --o SetQty[설정된 수량만큼 주문 대기]
+                ModeCheck -- 금액(Amount) --o GetPrice[현재가 확인]
+                
+                GetPrice --> CalcQty[금액 / 현재가 = 매수 수량 계산]
+                CalcQty --> SetQty
+                
+                SetQty --> QtyZero{수량 > 0?}
+                
+                QtyZero -- No --> LogZero[에러 로그: 수량 부족]
+                LogZero --> End([종료])
+                
+                QtyZero -- Yes --> Order[시장가 매수 주문 발송]
+                
+                Order --> OrderCheck{주문 성공?}
+                
+                OrderCheck -- No --> LogFail[실패 로그 및 알림 발송]
+                LogFail --> End
+                
+                OrderCheck -- Yes --> LogSuccess[🔥 성공: 불타기 완료!]
+                LogSuccess --> TelSend[텔레그램 알림 발송]
+                TelSend --> SaveTime[매수 시간 저장: 다음 대기시간 기준점]
+                SaveTime --> End
+                
+                style Start fill:#f1c40f,stroke:#333,stroke-width:2px,color:#000
+                style End fill:#f1c40f,stroke:#333,stroke-width:2px,color:#000
+                style Order fill:#e74c3c,stroke:#333,stroke-width:2px,color:#fff
+                style LogSuccess fill:#2ecc71,stroke:#333,stroke-width:2px,color:#fff
+        </div>
+
+        <div class="description">
+            <h3>📝 핵심 포인트!</h3>
+            <ul>
+                <li><b>금액 기준:</b> "나는 10만원어치 더 살래!"라고 하면 엔진이 현재가를 계산해서 수량을 딱 맞춰줘.</li>
+                <li><b>시장가 주문:</b> 불타기는 1초가 급하잖아? 그래서 가장 빠른 '시장가'로 즉시 체결시켜버려! ⚡</li>
+                <li><b>시간 기록:</b> 불타기를 한 번 하면 그 시간을 기록해. "방금 샀으니까 조금만 더 지켜보자!" 하는 대기시간을 계산하기 위해서야.</li>
+            </ul>
+        </div>
+
+        <div class="footer">
+            2026-03-06 | KipoStock v6.1.12 | 우리 자기의 성투를 기원해! ✨💎💖
+        </div>
+    </div>
+
+    <script>
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+</body>
+</html>

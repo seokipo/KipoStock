@@ -7,31 +7,149 @@ import math
 from datetime import datetime
 import re
 from rt_search import RealTimeSearch
-from tel_send import tel_send as real_tel_send
+from tel_send import tel_send as real_tel_send, tel_send_photo as real_tel_send_photo
 from trade_logger import session_logger  # [이동] 전역으로 이동
 # 기본 tel_send는 GUI에서 패치될 수 있으므로 별도 정의 (GUI 로그용)
 def tel_send(msg, *args, **kwargs):
+    """
+    GUI 로그창에 HTML로 출력하고, 텔레그램으로도 전송합니다.
+    [v5.7.2] real_tel_send를 한 번만 호출하도록 구조를 단순화했습니다.
+    """
+    if msg:
+        # GUI 로그창(StreamRedirector)이 잡을 수 있도록 접두사와 함께 출력
+        print(f"DEBUG_HTML_LOG: {msg}") 
+    
+    # 실제 텔레그램 전송 (HTML 태그 스트리핑 등은 real_tel_send 내부에서 처리)
     real_tel_send(msg, *args, **kwargs)
 
 def log_and_tel(msg, *args, **kwargs):
-    """GUI 로그와 텔레그램 모두에 전송 (중요 이벤트용)"""
-    tel_send(msg) # GUI 로그 (패치됨)
-    real_tel_send(msg, *args, **kwargs) # 진짜 텔레그램
+    """
+    GUI 로그와 텔레그램 모두에 전송 (중요 이벤트용)
+    [v5.7.2] tel_send가 이미 두 곳 모두 처리하므로 중복 호출을 제거했습니다.
+    """
+    tel_send(msg, *args, **kwargs)
 from check_n_sell import chk_n_sell
 from acc_val import fn_kt00004
 from market_hour import MarketHour
 from get_seq import get_condition_list
 from check_bal import fn_kt00001 as get_balance
 from acc_val import fn_kt00004 as get_my_stocks
-from check_n_buy import ACCOUNT_CACHE, load_json_safe
+from check_n_buy import ACCOUNT_CACHE, load_json_safe, update_stock_condition
 from acc_realized import fn_kt00006 as get_realized_pnl
 from acc_diary import fn_ka10170 as get_trade_diary, fn_ka10077 as get_realized_detail, fn_ka10076 as get_exec_list
 from login import fn_au10001
 import pandas as pd
 
+def _generate_pnl_chart_png(pnl_history: list, output_dir: str) -> str:
+    """
+    [v5.7.13] Qt-Free 수익 차트 PNG 생성기.
+    matplotlib의 Agg 백엔드(화면 표시 없이 파일 저장 전용)를 사용해
+    교착상태(Deadlock) 없이 안전하게 차트를 렌더링합니다.
+    실패 시 빈 문자열 반환.
+    """
+    try:
+        import matplotlib
+        matplotlib.use('Agg') # Qt 전혀 건드리지 않는 안전한 백엔드
+        import matplotlib.pyplot as plt
+        import matplotlib.dates as mdates
+        from datetime import datetime as dt
+        
+        # 데이터 유효성 검사
+        if not pnl_history or len(pnl_history) < 2:
+            return ""
+        
+        # 데이터 추출 및 정제
+        times, pnls = [], []
+        for item in pnl_history:
+            if isinstance(item, dict) and 'time' in item and 'pnl' in item:
+                try:
+                    t = dt.strptime(item['time'], "%H:%M:%S")
+                    times.append(t)
+                    pnls.append(int(item['pnl']))
+                except: pass
+        
+        if len(times) < 2:
+            return ""
+        
+        # 차트 스타일 설정 (KipoStock 다크 테마)
+        fig, ax = plt.subplots(figsize=(10, 3.5), facecolor='#1a1a2e')
+        ax.set_facecolor('#16213e')
+        
+        # 수익/손실 구간 색상 분리
+        final_pnl = pnls[-1]
+        line_color = '#ff4444' if final_pnl >= 0 else '#33b5e5'
+        
+        ax.plot(times, pnls, color=line_color, linewidth=2.0, zorder=3)
+        ax.fill_between(times, pnls, 0,
+                        where=[p >= 0 for p in pnls], color='#ff444433', zorder=2)
+        ax.fill_between(times, pnls, 0,
+                        where=[p < 0 for p in pnls], color='#33b5e533', zorder=2)
+        
+        # 기준선 (0원)
+        ax.axhline(y=0, color='#555555', linewidth=1.0, linestyle='--', zorder=1)
+        
+        # 최종값 레이블
+        pnl_txt = f"{final_pnl:+,}원"
+        txt_color = '#ff6666' if final_pnl >= 0 else '#66aaff'
+        ax.annotate(pnl_txt, xy=(times[-1], pnls[-1]),
+                    xytext=(5, 5), textcoords='offset points',
+                    fontsize=11, color=txt_color, fontweight='bold',
+                    fontproperties=_get_korean_font())
+        
+        # X축 시간 포맷
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
+        ax.xaxis.set_major_locator(mdates.MinuteLocator(byminute=[0, 30]))
+        plt.xticks(color='#aaaaaa', fontsize=9)
+        plt.yticks(color='#aaaaaa', fontsize=9)
+        
+        # Y축 포맷 (원 단위)
+        ax.yaxis.set_major_formatter(
+            matplotlib.ticker.FuncFormatter(lambda x, p: f'{int(x):+,}')
+        )
+        
+        ax.set_title(f'[실시간 누적 수익 현황]  ({times[0].strftime("%H:%M")} ~ {times[-1].strftime("%H:%M")})',
+                     color='#f1c40f', fontsize=12, pad=8,
+                     fontproperties=_get_korean_font())
+        
+        for spine in ax.spines.values():
+            spine.set_edgecolor('#333355')
+        
+        ax.grid(True, alpha=0.15, color='#aaaaaa')
+        plt.tight_layout(pad=1.0)
+        
+        # 파일 저장
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_path = os.path.join(output_dir, f'pnl_chart_{ts}.png')
+        plt.savefig(save_path, dpi=110, bbox_inches='tight',
+                    facecolor='#1a1a2e', edgecolor='none')
+        plt.close(fig)
+        plt.close('all')
+        return save_path
+        
+    except Exception as e:
+        print(f"⚠️ [차트생성 실패] {e}")
+        try:
+            plt.close('all')
+        except: pass
+        return ""
+
+def _get_korean_font():
+    """한글 폰트를 안전하게 로드합니다."""
+    try:
+        import matplotlib.font_manager as fm
+        for font_name in ['Malgun Gothic', 'NanumGothic', 'AppleGothic']:
+            try:
+                return fm.FontProperties(family=font_name)
+            except: pass
+    except: pass
+    return None
+
 class ChatCommand:
     def __init__(self):
         self.rt_search = RealTimeSearch(on_connection_closed=self._on_connection_closed)
+        self.on_graph_update = None # [신규 v5.6.4] 차트 실시간 갱신 트리거 콜백
         
         # [수정] 경로 설정 로직 변경
         if getattr(sys, 'frozen', False):
@@ -44,6 +162,7 @@ class ChatCommand:
         self.settings_file = os.path.join(self.script_dir, 'settings.json')
         self.stock_conditions_file = os.path.join(self.script_dir, 'stock_conditions.json')
         self.config_file = os.path.join(self.script_dir, 'config.py')
+        self.daily_buy_times_file = os.path.join(self.script_dir, 'daily_buy_times.json')
         self.data_dir = os.path.join(self.script_dir, 'LogData')
         if not os.path.exists(self.data_dir):
             try: os.makedirs(self.data_dir)
@@ -61,6 +180,8 @@ class ChatCommand:
         self.on_condition_loaded = None # [신규] 목록 로드 완료 콜백
         self.on_start = None # [신규] 엔진 시작 성공 콜백
         self.on_stop = None # [신규] 엔진 정지 콜백
+        self.on_open_config = None # [신규 v6.1.21] 불타기 설정창 오픈 콜백
+        self.on_open_ai_settings = None # [신규 v6.1.21] AI 음성 설정창 오픈 콜백
         
         # [신규] 재연결 관련 제어 변수 (v3.0 지수 백오프용)
         self.reconnect_attempts = 0
@@ -70,6 +191,7 @@ class ChatCommand:
         self.on_start_request = None
         self.on_stop_request = None
         self.on_news_result = None  # [신규] 뉴스 분석 결과 GUI 전달용 콜백
+        self.on_ai_voice_response = None # [신규 v5.4.0] 제미나이 AI 비서의 음성 답변 데이터 전달용 콜백
         
         # [신규] rt_search의 콜백을 wrapper로 연결
         self.rt_search.on_condition_loaded = self._on_condition_loaded_wrapper
@@ -125,7 +247,7 @@ class ChatCommand:
                         continue 
             except Exception as e:
                 print(f"⚠️ 계좌 동기화 루프 예외: {e}")
-            await asyncio.sleep(2.0)
+            await asyncio.sleep(1.0)
 
     async def _check_n_sell_loop(self):
         """매도 체크 루프"""
@@ -142,6 +264,13 @@ class ChatCommand:
                     
                 success = await asyncio.get_event_loop().run_in_executor(None, chk_n_sell, self.token)
                 failure_count = 0 if success else failure_count + 1
+                
+                # [v5.5] 실시간 차트 API 동기화 감지 (매도 발생 시 1회)
+                from trade_logger import session_logger
+                if getattr(session_logger, 'sync_required', False):
+                    session_logger.sync_required = False
+                    # UI 멈춤 방지를 위해 백그라운드 태스크로 분리하여 API 실시간 동기화 호출
+                    asyncio.create_task(self.today(sync_only=True))
                 
                 if failure_count >= 20:
                     print("⚠️ 매도 루프 연속 실패로 재시작 시도")
@@ -287,6 +416,7 @@ class ChatCommand:
         print(f"⚠️ [재연결] 소켓 끊김 감시... {delay}초 후 재시도합니다. (시도 횟수: {self.reconnect_attempts})")
         await asyncio.sleep(delay)
         
+
         success = await self.start()
         if success:
             self.reconnect_attempts = 0 # 성공 시 횟수 초기화
@@ -294,136 +424,145 @@ class ChatCommand:
     async def report(self, seq=None):
         """종합 누적 리포트: 당일 전체 매매 일지 + 계좌 현황 + 퀀트 지표 + 파일 저장"""
         try:
-            print(f"📊 [REPORT] {'시퀀스 '+str(seq)+' 종료 후 ' if seq else ''}누적 리포트 생성 시퀀스 시작...")
-            log_and_tel("⏳ <b>리포 데이터를 전산 수집 중입니다. 잠시만 기다려 주세요...</b>", parse_mode='HTML', msg_type='report')
+            print(f"📊 [REPORT] {'시퀀스 '+str(seq)+' 종료 후 ' if seq else ''}누적 리포트 생성 중...")
+            log_and_tel("⏳ <b>리포트 데이터를 수집 중입니다. 잠시만 기다려 주세요...</b>", parse_mode='HTML', msg_type='report')
             
-            # 1. 당일 매매 일지 (오늘 전체 거래 내역) 출력 및 CSV 저장
-            # today()를 호출하며 return_text=True로 텍스트 데이터를, return_stats=True로 통계 데이터를 받아옵니다.
             diary_text, stats = await self.today(summary_only=False, return_text=True, return_stats=True)
             
-            # [신규] 최고 수익 시간 정보 추출
             peak_time_str = stats.get('peak_pnl_time', '약속된 시간 없음') if stats else '약속된 시간 없음'
             peak_pnl_val = stats.get('peak_pnl', 0) if stats else 0
             
-            # 2. 계좌 정보 및 세션 수익 수집
             if not self.token: self.get_token()
             loop = asyncio.get_event_loop()
             
-            # 예수금 조회
             balance_res = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
             if balance_res and isinstance(balance_res, dict):
                  balance_raw = balance_res.get('balance', 0)
             else:
-                 balance_raw = balance_res # 기존 호환성 (V1.5 등)
-
+                 balance_raw = balance_res
             balance_str = f"{int(balance_raw):,}원" if balance_raw else "조회 실패"
             
-            # 보유 종목 조회
             account_data_raw = await loop.run_in_executor(None, fn_kt00004, False, 'N', '', self.token)
             if isinstance(account_data_raw, dict):
                 account_data = account_data_raw.get('stocks', [])
             else:
                 account_data = account_data_raw
             
-            # [수정] 퀀트 분석 지표 수집: 자의 요청에 따라 항상 '당일 전체 누적(stats)' 데이터 사용
-            # 시퀀스별 필터링을 제거하고 오늘 아침부터 지금까지의 성과를 보여줌
-            q_metrics = stats
-            
-            # 3. 종합 요약 메시지 구성 (GUI 표시용)
-            # [신규] title_prefix는 q_metrics 이전에 정의되어야 함
+
+            # 3. 종합 요약 메시지 구성 (GUI 및 텔레그램용)
             title_prefix = f"시퀀스 {seq} 종료 후 " if seq else ""
-            
-            # [신규] total_pnl, avg_pnl_rt, pnl_color는 q_metrics 이전에 계산되어야 함
             total_pnl = stats.get('total_pnl', 0) if stats else 0
             avg_pnl_rt = stats.get('total_rt', stats.get('avg_pnl_rt', 0)) if stats else 0
             pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
+            peak_time_str = stats.get('peak_pnl_time', '약속된 시간 없음') if stats else '약속된 시간 없음'
+            peak_pnl_val = stats.get('peak_pnl', 0) if stats else 0
 
-            msg = f"🚀 <b>[{title_prefix if title_prefix else '오늘 전체 '}매매 종합 리포트]</b>\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            msg += f"📅 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            msg += f"💰 <b>당일 총손익 :</b> <font color='{pnl_color}'><b>{total_pnl:+,}원 ({avg_pnl_rt:+.2f}%)</b></font>\n"
-            msg += f"👑 <b>최고 수익 시간 :</b> <font color='#f1c40f'><b>{peak_time_str} ({peak_pnl_val:+,}원)</b></font>\n"
-            msg += "────────────────────────────────────────\n"
+            # [v5.7.13] Qt-Free Agg 백엔드로 수익 차트 PNG 생성 (교착상태 완전 해결)
+            try:
+                from trade_logger import session_logger
+                png_path = await loop.run_in_executor(
+                    None, _generate_pnl_chart_png,
+                    list(session_logger.pnl_history), self.data_dir
+                )
+                img_html = f'<img src="file:///{png_path.replace(chr(92), "/")}" width="600"><br>' if png_path else ""
+                if png_path:
+                    print(f"✅ [차트] 수익 차트 생성 완료: {os.path.basename(png_path)}")
+                else:
+                    img_html = ""
+                    print("ℹ️ [차트] 거래 데이터 부족으로 차트 생략")
+            except Exception as chart_err:
+                img_html = ""
+                png_path = ""
+                print(f"⚠️ [차트 생성 에러] {chart_err}")
+
+            # GUI용 메시지 (구조 경량화)
+            msg_gui = ""
+            msg_gui += f"🚀 <b>[{title_prefix if title_prefix else '오늘 전체 '}매매 종합 리포트]</b>\n"
+            msg_gui += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            msg_gui += f"📅 일시: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            msg_gui += f"💰 <b>당일 총손익 :</b> <font color='{pnl_color}'><b>{total_pnl:+,}원 ({avg_pnl_rt:+.2f}%)</b></font>\n"
+            msg_gui += f"👑 <b>최고 수익 시간 :</b> <font color='#f1c40f'><b>{peak_time_str} ({peak_pnl_val:+,}원)</b></font>\n"
+            msg_gui += "────────────────────────────────────────\n"
             
-            if q_metrics:
-                wr = q_metrics.get('win_rate', 0)
-                mdd = q_metrics.get('mdd', 0)
-                sr = q_metrics.get('sharpe_ratio', 0)
-                pf = q_metrics.get('profit_factor', 0)
-                pr = q_metrics.get('payoff_ratio', 0)
-                ex = q_metrics.get('expectancy', 0)
+            if stats:
+                wr = stats.get('win_rate', 0)
+                mdd = stats.get('mdd', 0)
+                pf = stats.get('profit_factor', 0)
+                pr = stats.get('payoff_ratio', 0)
+                ex = stats.get('expectancy', 0)
+                sr = stats.get('sharpe_ratio', 0)
                 
-                # 승률 색상 (70% 이상 빨간색, 40% 이하 파란색)
                 wr_color = "#ff4444" if wr >= 70 else ("#33b5e5" if wr <= 40 else "#ffffff")
                 pf_color = "#ff4444" if pf >= 2.0 else ("#33b5e5" if pf < 1.0 else "#ffffff")
                 
-                msg += f"   📊 <b>승  률 :</b> <font color='{wr_color}'><b>{wr:.1f}%</b></font>\n"
-                msg += f"   💰 <b>PF(Profit Factor) :</b> <font color='{pf_color}'><b>{pf:.2f}</b></font>\n"
-                msg += f"   ⚖️ <b>손익비(Payoff Ratio) :</b> <b>{pr:.2f}</b>\n"
-                msg += f"   🎯 <b>매매 기댓값 :</b> <font color='#ffbb33'><b>{int(ex):,}원</b></font>\n"
-                msg += f"   📉 <b>MDD(최대낙폭) :</b> <font color='#ffbb33'><b>{int(mdd):,}원</b></font>\n"
-                msg += f"   📈 <b>샤프 지수 :</b> <b>{sr:.2f}</b>\n"
-                msg += "────────────────────────────────────────\n"
+                msg_gui += f"   📊 <b>승  률 :</b> <font color='{wr_color}'><b>{wr:.1f}%</b></font>\n"
+                msg_gui += f"   💰 <b>PF(Profit Factor) :</b> <font color='{pf_color}'><b>{pf:.2f}</b></font>\n"
+                msg_gui += f"   ⚖️ <b>손익비(Payoff Ratio) :</b> <b>{pr:.2f}</b>\n"
+                msg_gui += f"   🎯 <b>매매 기댓값 :</b> <font color='#ffbb33'><b>{int(ex):,}원</b></font>\n"
+                msg_gui += f"   📉 <b>MDD(최대낙폭) :</b> <font color='#ffbb33'><b>{int(mdd):,}원</b></font>\n"
+                msg_gui += f"   📈 <b>샤프 지수 :</b> <b>{sr:.2f}</b>\n"
+                msg_gui += "────────────────────────────────────────\n"
 
-            msg += "────────────────────────────────────────\n"
-            
-            # [신규] 매수 전략별 매매현황 집계 및 표시 (v4.1.1)
-            strat_stats = q_metrics.get('strat_stats', {}) if q_metrics else {}
+            # [v5.7.3] 렌더링 부하 최소화를 위해 전략별/조건별 통계 출력 개수 대폭 제한 (최대 5개)
+            strat_stats = stats.get('strat_stats', {}) if stats else {}
             if strat_stats:
-                msg += "📂 <b>[ 매수 전략별 매매현황 (당일 누적) ]</b>\n"
-                # 수익금액 기준 내림차순 정렬
-                sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                msg_gui += "📂 <b>[ 매수 전략별 매매현황 ]</b>\n"
+                sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)[:5]
                 for s_key, s_data in sorted_strats:
                     s_pnl = s_data['pnl']
                     s_rt = (s_pnl / s_data['buy_amt'] * 100) if s_data['buy_amt'] > 0 else 0
                     s_color = "#ff4444" if s_pnl >= 0 else "#33b5e5"
-                    msg += f"   🔹 {s_data['nm']:<10}: <font color='{s_color}'><b>{s_pnl:+,}원 ({s_rt:+.2f}%)</b></font> ({s_data['count']}건)\n"
-                msg += "────────────────────────────────────────\n"
+                    msg_gui += f"   🔹 {s_data['nm']:<10}: <font color='{s_color}'><b>{s_pnl:+,}원 ({s_rt:+.2f}%)</b></font>\n"
+                if len(strat_stats) > 5: msg_gui += f"   ... (기타 {len(strat_stats)-5}개 전략 생략)\n"
+                msg_gui += "────────────────────────────────────────\n"
 
-            # [신규] 조건식별 매매현황 집계 및 표시 (v3.4)
-            cond_stats = q_metrics.get('cond_stats', {}) if q_metrics else {}
+            cond_stats = stats.get('cond_stats', {}) if stats else {}
+            if cond_stats or img_html:
+                # [v5.7.13] 실시간 수익 차트를 조건식별 누적 통계 바로 위에 출력
+                if img_html:
+                    msg_gui += f"{img_html}"
+                    msg_gui += "────────────────────────────────────────\n"
             if cond_stats:
-                msg += "📂 <b>[ 조건식별 매매현황 (당일 누적) ]</b>\n"
-                # 수익금액 기준 내림차순 정렬
-                sorted_conds = sorted(cond_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
+                msg_gui += "📂 <b>[ 조건식별 매매현황 ]</b>\n"
+                sorted_conds = sorted(cond_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)[:5]
                 for c_name, c_data in sorted_conds:
                     c_pnl = c_data['pnl']
                     c_rt = (c_pnl / c_data['buy_amt'] * 100) if c_data['buy_amt'] > 0 else 0
                     c_color = "#ff4444" if c_pnl >= 0 else "#33b5e5"
-                    msg += f"   🔹 {c_name[:10]:<10}: <font color='{c_color}'><b>{c_pnl:+,}원 ({c_rt:+.2f}%)</b></font> ({c_data['count']}건)\n"
-                msg += "────────────────────────────────────────\n"
-            
-            msg += f"📂 <b>[{title_prefix if title_prefix else '오늘 전체 '}누적 매매현황]</b>\n"
-            # [수정] 성과 지표는 항상 당일 누적(stats) 기준으로 표시
-            target_data = stats
-            
-            if target_data:
-                total_pnl = target_data.get('total_pnl', 0)
-                pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
-                
-                msg += f"   🔹 총매수 : {target_data.get('total_buy', 0):,}\n"
-                msg += f"   🔹 총매도 : {target_data.get('total_sell', 0):,}\n"
-                msg += f"   🔹 세금외 : {target_data.get('total_tax', 0):,}\n"
-                msg += f"   ✨ 손  익 : <font color='{pnl_color}'><b>{total_pnl:+,}원 ({target_data.get('total_rt', target_data.get('avg_pnl_rt', 0)):+.2f}%)</b></font>\n"
-            else:
-                msg += "   (데이터를 불러올 수 없습니다)\n"
-            
-            msg += "────────────────────────────────────────\n"
-            msg += "📈 <b>[현재 보유 종목]</b>\n"
+                    msg_gui += f"   🔹 {c_name[:8]:<8}: <font color='{c_color}'><b>{c_pnl:+,}원 ({c_rt:+.2f}%)</b></font>\n"
+                if len(cond_stats) > 5: msg_gui += f"   ... (기타 {len(cond_stats)-5}개 조건 생략)\n"
+                msg_gui += "────────────────────────────────────────\n"
+
+            msg_gui += "📈 <b>[현재 보유 종목]</b>\n"
             if account_data:
-                for s in account_data:
+                # [v5.7.3] 보유 종목도 최대 10개로 제한하여 스크롤 렌더링 부하 감소
+                for s in account_data[:10]:
                     pl_rt = float(s['pl_rt'])
-                    emoji = "📈" if pl_rt > 0 else "📉"
                     color = "#ff4444" if pl_rt > 0 else "#33b5e5"
-                    msg += f"{emoji} {s['stk_nm']}: <font color='{color}'>{pl_rt:+.2f}% ({int(s['pl_amt']):,}원)</font>\n"
+                    msg_gui += f"   🔹 {s['stk_nm'][:6]}: <font color='{color}'>{pl_rt:+.2f}%</font>\n"
+                if len(account_data) > 10: msg_gui += f"   ... (외 {len(account_data)-10}종목)\n"
             else:
-                msg += "   현재 보유 중인 종목이 없습니다.\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                msg_gui += "   보유 중인 종목 없음\n"
+            msg_gui += "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+
+            # [v5.7.15] GUI 로그창 출력을 위한 핵심 코드 복구
+            # [v5.7.12 크래시 수정] 수천 자 HTML을 print()로 GUI 로그창에 한번에 밀어 넣으면
+            # PyQt 렌더러 스레드 블로킹 → 프로그램 다운 발생 가능성이 있으나,
+            # 현재 v5.7.14의 StreamRedirector가 4000자 단위로 알아서 나눠서 쏴주므로 안전하게 출력합니다.
+            print(f"DEBUG_HTML_LOG: {msg_gui}")
+            print(f"✅ [REPORT] GUI 메시지 구성 완료 (길이: {len(msg_gui):,}자)")
             
-            if q_metrics and 'img_html' in q_metrics:
-                msg += q_metrics['img_html']
+            # 텔레그램 메시지 정규화
+            msg_tel = re.sub(r'<div.*?</div>', '', msg_gui) # 이미지 영역 제거
+            msg_tel = re.sub(r'<font.*?>', '', msg_tel).replace('</font>', '')
+            msg_tel = msg_tel.replace('<br>', '\n').replace('<br/>', '\n')
             
-            log_and_tel(msg, parse_mode='HTML', msg_type='report')
+            if png_path and os.path.exists(png_path):
+                try:
+                    real_tel_send_photo(png_path, caption=f"📊 {title_prefix if title_prefix else '오늘 전체 '}수익 차트")
+                except: pass
+            
+            real_tel_send(msg_tel, parse_mode='HTML', msg_type='report')
             
             # 4. 전체 리포트 텍스트 파일 저장 (TXT)
             try:
@@ -432,13 +571,18 @@ class ChatCommand:
                 txt_report = f"==== [ KipoStock 통합 리포트 ] {date_str} ====\n\n"
                 txt_report += "1. 당일 매매 내역 (Trade Diary)\n"
                 txt_report += "--------------------------------------------------\n"
-                # HTML 태그 제거 (정규식)
-                clean_diary = re.sub(r'<[^>]*>', '', diary_text) if diary_text else "(거래 내역 없음)\n"
+                # [v5.7.3 프리징 파훼법 핵심2] 무거운 정규식(Catastrophic Backtracking) 제거 
+                # 수천 줄 데이터를 다룰 때 <[^>]*> 패턴은 메인 스레드 락을 유발합니다. 단순 replace로 경량화.
+                clean_diary = diary_text.replace('<b>', '').replace('</b>', '').replace('\n<br>', '\n').replace('<br>', '\n') if diary_text else "(거래 내역 없음)\n"
+                clean_diary = re.sub(r'<font.*?>', '', clean_diary).replace('</font>', '')
                 txt_report += clean_diary
                 
                 txt_report += "\n\n2. 계좌 현황 및 세션 요약\n"
                 txt_report += "--------------------------------------------------\n"
-                clean_summary = re.sub(r'<[^>]*>', '', msg)
+                # [v5.7.3 Bugfix] msg_gui 기반으로 텍스트 추출 (기존의 정의되지 않은 msg 변수 오류 방지)
+                clean_summary = msg_gui.replace('<b>', '').replace('</b>', '').replace('<br>', '\n').replace('<br/>', '\n')
+                clean_summary = re.sub(r'<font.*?>', '', clean_summary).replace('</font>', '')
+                clean_summary = re.sub(r'<div.*?</div>', '', clean_summary) # 차트 이미지 html 블럭 제거
                 txt_report += clean_summary
                 
                 # 로그 디렉토리 확인 및 저장
@@ -463,11 +607,26 @@ class ChatCommand:
             log_and_tel(f"❌ <b>리포트 생성 중 오류 발생:</b> {e}", parse_mode='HTML')
             return False
 
-    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False, return_stats=False):
-        """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금 + ka10076 체결시간복원)"""
-        print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
+    def get_pnl_timeline(self):
+        """실시간 수익 그래프를 위한 누적 손익 타임라인 데이터를 반환합니다."""
         try:
-            if not self.token: 
+            from trade_logger import session_logger
+            # session_logger.pnl_history는 [{'time': 'HH:MM:SS', 'pnl': 123}, ...] 형식
+            if not hasattr(session_logger, 'pnl_history') or not session_logger.pnl_history:
+                return []
+            
+            # 리포트와 동일하게 누적 합산 로직을 보장하되, 실시간 앱 데이터를 우선함
+            return session_logger.pnl_history
+        except Exception as e:
+            print(f"⚠️ P&L 타임라인 추출 실패: {e}")
+            return []
+
+    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False, return_stats=False, sync_only=False):
+        """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금 + ka10076 체결시간복원 + V5.5 API동기화)"""
+        if not sync_only:
+            print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
+        try:
+            if not self.token:
                 self.get_token()
                 
             loop = asyncio.get_event_loop()
@@ -496,12 +655,12 @@ class ChatCommand:
                 print(f"⚠️ [TimeRestore] 체결내역 조회 실패: {ex_err}")
 
             cond_mapping = {}
-            mapping_file = os.path.join(self.data_dir, 'stock_conditions.json')
+            mapping_file = self.stock_conditions_file
             cond_mapping = load_json_safe(mapping_file)
 
             bt_data = {}
             try:
-                bt_path = os.path.join(self.data_dir, 'daily_buy_times.json')
+                bt_path = self.daily_buy_times_file
                 bt_data = load_json_safe(bt_path)
             except: pass
 
@@ -520,7 +679,8 @@ class ChatCommand:
                     strat_key = "none"
                     strat_nm = "--"
                     
-                    found_buy_time = bt_data.get(code)
+                    found_buy_time_entry = bt_data.get(code)
+                    found_buy_time = found_buy_time_entry.get('time') if isinstance(found_buy_time_entry, dict) else found_buy_time_entry
                     
                     if isinstance(mapping_val, dict):
                         cond_name = mapping_val.get('name', "직접매매")
@@ -543,6 +703,14 @@ class ChatCommand:
                                  strat_nm = "HTS"
                                  strat_key = "HTS" # [신규] 통계용 키 명시
                                  cond_name = "외부체결(복원)"
+                                 
+                                 # [v6.0.8] 외부(HTS) 체결 시간 복원 시 장부에 영구 저장 (불타기 연동 핵심)
+                                 update_stock_condition(
+                                     code, 
+                                     name=cond_name, 
+                                     strat=strat_key, 
+                                     time_val=found_buy_time
+                                 )
 
                     current_time_str = datetime.now().strftime("%H:%M:%S")
                     is_overnight = False
@@ -577,7 +745,9 @@ class ChatCommand:
                         'is_overnight': is_overnight
                     }
                     processed_data.append(row)
-                except: continue
+                except Exception as e: 
+                    print(f"⚠️ [Today] 종목({item.get('stk_nm')}) 파싱 스킵: {e}")
+                    continue
 
             if sort_mode == 'jun':
                 processed_data.sort(key=lambda x: x['strat_nm'], reverse=is_reverse)
@@ -592,6 +762,14 @@ class ChatCommand:
             total_s_amt = sum(r['sel_amt'] for r in processed_data)
             total_tax = sum(r['tax'] for r in processed_data)
             total_pnl = sum(r['pnl'] for r in processed_data)
+            
+            # [v6.6.0] API의 전체 손익(total section)과 리스트 합산 비교 및 보정
+            api_total_pnl = int(float(res_list.get('total', {}).get('tdy_sel_pl', total_pnl)))
+            if abs(api_total_pnl - total_pnl) > 10:
+                print(f"⚖️ [Report Sync] 리포트 합산({total_pnl:,})과 API 전체 손익({api_total_pnl:,}) 차이 발견 -> API 실판매 데이터로 보정합니다.")
+                # 차액만큼을 '기타 손익' 항목으로 가상 추가하거나 total_pnl을 직접 수정
+                total_pnl = api_total_pnl 
+            
             count = len(processed_data)
             
             # [신규] 당일 전략별/조건식별 매수 건수 집계
@@ -708,6 +886,55 @@ class ChatCommand:
                 'cond_stats': cond_stats, # [신규] 조건식 통계 추가
                 'strat_stats': strat_stats # [복구] 매수 전략별 통계 추가
             }
+
+            if sync_only:
+                # [v5.5] API 확정 수익으로 실시간 차트 데이터(session_logger) 동기화
+                try:
+                    from trade_logger import session_logger
+                    # [v5.6.5] 리포트용 합계 수익(total_pnl)을 동기화 값으로 사용 (계산 로직 일원화)
+                    run_pnl = total_pnl
+                    
+                    # [v5.6.3] 실시간 타임라인 오염 방지 및 스팸 로그 제거 (정밀도 개선: abs() > 1)
+                    if abs(session_logger.cumulative_pnl - run_pnl) > 1:
+                        if len(session_logger.pnl_history) <= 1:
+                            # 앱 초기 기동 시점에는 과거 흐름을 대략적으로 복원
+                            sync_history = [{'time': '09:00:00', 'pnl': 0}]
+                            temp_pnl = 0
+                            for r in time_sorted_data:
+                                temp_pnl += r['pnl']
+                                time_str = r['buy_time'].replace('[', '').replace(']', '').replace('전일 ', '').strip()
+                                if len(time_str) >= 8 and ':' in time_str:
+                                    sync_history.append({'time': time_str[-8:], 'pnl': temp_pnl})
+                                else:
+                                    sync_history.append({'time': time_str, 'pnl': temp_pnl})
+                            session_logger.pnl_history = sync_history
+                        else:
+                            # 실시간 매매 중 API와 싱크가 어긋났을 때(HTS 강제청산 등) 그 시점부터 새 기준점 추가
+                            now_time = datetime.now().strftime("%H:%M:%S")
+                            session_logger.pnl_history.append({'time': now_time, 'pnl': run_pnl})
+                            
+                        session_logger.cumulative_pnl = run_pnl
+                        session_logger.save_session()
+                        # print(f"🔄 [차트 동기화] API 확정 수익 최신화 완료 (현재: {run_pnl:,}원)") # 사용자 요청으로 스팸 방지 목적 주석 처리
+                        
+                        # [v5.6.4] 동기화 성공 시 실시간 차트 위젯 갱신 신호 발송
+                        if self.on_graph_update:
+                            self.on_graph_update()
+                except Exception as sync_e:
+                    pass
+                
+                return True
+
+            # [v5.6.5] 일반 리포트 요청 시에도 차트 데이터를 강제로 자동 동기화 (이격 정체 해결)
+            try:
+                from trade_logger import session_logger
+                if abs(session_logger.cumulative_pnl - total_pnl) > 1:
+                    now_time = datetime.now().strftime("%H:%M:%S")
+                    session_logger.pnl_history.append({'time': now_time, 'pnl': total_pnl})
+                    session_logger.cumulative_pnl = total_pnl
+                    session_logger.save_session()
+                    if self.on_graph_update: self.on_graph_update()
+            except: pass
 
             if summary_only:
                 summary_msg = "<b>📝 [ 당일 매매 요약 리포트 ]</b>\n"
@@ -837,161 +1064,77 @@ class ChatCommand:
                 real_tel_send("".join(tel_rows))
                 print("📢 텔레그램으로 상세 보고서 및 요약 통계를 전송했습니다.")
             
-            try:
-                df_data = [{
-                    '매수시간': r['buy_time'], '매수전략': r['strat_nm'], '조건식': r['cond_name'], 
-                    '종목명': r['name'], '종목코드': r['code'], '매수평균가': r['buy_avg'], 
-                    '매수수량': r['buy_qty'], '매수금액': r['buy_amt'], '매도평균가': r['sel_avg'], 
-                    '매도수량': r['sel_qty'], '매도금액': r['sel_amt'], '세금': r['tax'], 
-                    '손익금액': r['pnl'], '수익률(%)': r['pnl_rt']
-                } for r in processed_data]
-                
-                df_data.append({
-                    '매수시간': '합계', '매수전략': '-', '조건식': '-', 
-                    '종목명': '-', '종목코드': '-', '매수평균가': 0, 
-                    '매수수량': 0, '매수금액': total_b_amt, '매도평균가': 0, 
-                    '매도수량': 0, '매도금액': total_s_amt, '세금': total_tax, 
-                    '손익금액': total_pnl, '수익률(%)': avg_pnl_rt
-                })
-                
-                df = pd.DataFrame(df_data)
-                date_str = datetime.now().strftime("%Y%m%d")
-                
-                import string
-                suffix_list = list(string.ascii_lowercase) 
-                
-                final_filename = f"trade_log_{date_str}.csv"
-                csv_path = os.path.join(self.data_dir, final_filename)
-                
-                if os.path.exists(csv_path):
-                    for char in suffix_list:
-                        temp_name = f"trade_log_{date_str}_{char}.csv"
-                        if not os.path.exists(os.path.join(self.data_dir, temp_name)):
-                            final_filename = temp_name
-                            csv_path = os.path.join(self.data_dir, final_filename)
-                            break
-                
-                df.to_csv(csv_path, index=False, encoding='utf-8-sig')
-                tel_send(f"<font color='#28a745'>📂 당일 매매 일지가 로컬에 저장되었습니다: {final_filename}</font>")
-                
-                # [신규] 엑셀 파일 및 차트(그래프) 생성 로직
+                # [v5.6] 기존 Matplotlib 삭제 및 메인 위젯 캡처본(png) 활용 로직
                 try:
-                    import matplotlib
-                    matplotlib.use('Agg')
-                    import matplotlib.pyplot as plt
-                    import matplotlib.font_manager as fm
-                    import matplotlib.dates as mdates
                     from openpyxl import Workbook
                     from openpyxl.drawing.image import Image as OpenpyxlImage
                     import io
                     
-                    # 한글 폰트 설정 (Windows 기본 맑은 고딕)
-                    font_path = "C:/Windows/Fonts/malgun.ttf"
-                    font_name = fm.FontProperties(fname=font_path).get_name()
-                    plt.rc('font', family=font_name)
-                    plt.rc('axes', unicode_minus=False)
+                    df_data = [{
+                        '매수시간': r['buy_time'], '매수전략': r['strat_nm'], '조건식': r['cond_name'], 
+                        '종목명': r['name'], '종목코드': r['code'], '매수평균가': r['buy_avg'], 
+                        '매수수량': r['buy_qty'], '매수금액': r['buy_amt'], '매도평균가': r['sel_avg'], 
+                        '매도수량': r['sel_qty'], '매도금액': r['sel_amt'], '세금': r['tax'], 
+                        '손익금액': r['pnl'], '수익률(%)': r['pnl_rt']
+                    } for r in processed_data]
                     
-                    # 데이터 정제 (합계 행 제외하고, 시간순으로 정렬된 시간과 손익금액 추출)
-                    plot_data = [r for r in df_data if r['매수시간'] != '합계']
-                    img_buf = None  # 초기화하여 NameError 방지
+                    df_data.append({
+                        '매수시간': '합계', '매수전략': '-', '조건식': '-', 
+                        '종목명': '-', '종목코드': '-', '매수평균가': 0, 
+                        '매수수량': 0, '매수금액': total_b_amt, '매도평균가': 0, 
+                        '매도수량': 0, '매도금액': total_s_amt, '세금': total_tax, 
+                        '손익금액': total_pnl, '수익률(%)': avg_pnl_rt
+                    })
                     
-                    if plot_data:
-                        times = []
-                        c_pnl = []
-                        run_pnl = 0
-                        
-                        # [09:00:07] 같은 포맷에서 시간 부분 추출
-                        for r in plot_data:
-                            time_str = r['매수시간'].replace('[', '').replace(']', '').strip()
-                            if '전일' in time_str:
-                                # 전일 데이터는 오늘 08:50 정도로 매핑 (차트 앞부분 시각화)
-                                ts = datetime.strptime(f"{date_str} 08:50:00", "%Y%m%d %H:%M:%S")
-                            else:
-                                try:
-                                    ts = datetime.strptime(f"{date_str} {time_str}", "%Y%m%d %H:%M:%S")
-                                except:
-                                    ts = datetime.strptime(f"{date_str} 09:00:00", "%Y%m%d %H:%M:%S")
-                            
-                            run_pnl += r['손익금액']
-                            times.append(ts)
-                            c_pnl.append(run_pnl)
-                        
-                        # 그래프 생성 (다크 테마 적용)
-                        plt.style.use('dark_background')
-                        fig, ax = plt.subplots(figsize=(10, 5))
-                        
-                        # 배경색 설정 (KipoStock 느낌)
-                        fig.patch.set_facecolor('#0d0d0d')
-                        ax.set_facecolor('#1a1a1a')
-                        
-                        # 0원 수평선 추가
-                        ax.axhline(y=0, color='#ff4444', linestyle='--', linewidth=1.5, alpha=0.8)
-                        
-                        # 선 및 마커 그리기 (최종 수익선 전까지)
-                        ax.plot(times, c_pnl, marker='o', linestyle='-', color='#00d1b2', markersize=5, linewidth=2.5)
-                        
-                        # [수정] 차트 X축 끝점을 현재 시간(또는 15:30)으로 설정하여 빈 공간 제거
-                        now = datetime.now()
-                        market_close_fixed = datetime.strptime(f"{date_str} 15:30:00", "%Y%m%d %H:%M:%S")
-                        
-                        # 차트의 끝을 현재 시간으로 하되, 장 종료 이후라면 15:30으로 캡
-                        chart_end_time = min(now, market_close_fixed)
-                        
-                        # [신규] 마지막 수익금에서 '차트 끝 시간'까지 이어지는 가로선을 황색으로 추가
-                        if times and c_pnl:
-                            last_time = times[-1]
-                            last_pnl = c_pnl[-1]
-                            
-                            # 마지막 거래시간이 차트 끝 시간 이전인 경우에만 선 연장
-                            if last_time < chart_end_time:
-                                ax.plot([last_time, chart_end_time], [last_pnl, last_pnl], linestyle='-', color='#f1c40f', linewidth=2.5)
-                        
-                        # 라벨 및 타이틀 (글자 크기 및 색상)
-                        ax.set_title(f"[{date_str}] 시간대별 누적 수익", fontsize=16, fontweight='bold', color='white', pad=15)
-                        ax.set_ylabel("누적 손익금액 (원)", fontsize=13, color='#e0e0e0', labelpad=10)
-                        ax.set_xlabel("시간", fontsize=13, color='#e0e0e0', labelpad=10)
-                        
-                        # [신규] X축 범위 명시적 설정 (끝점을 chart_end_time으로 고정)
-                        ax.set_xlim(right=chart_end_time)
-                        
-                        # X/Y축 눈금 (글자 크기 및 색상)
-                        ax.tick_params(axis='x', colors='#cccccc', labelsize=11)
-                        ax.tick_params(axis='y', colors='#cccccc', labelsize=11)
-                        
-                        # X축 시간 포맷 맞춤
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
-                        fig.autofmt_xdate(rotation=30)
-                        
-                        # 천단위 콤마
-                        ax.get_yaxis().set_major_formatter(plt.FuncFormatter(lambda x, loc: "{:,}".format(int(x))))
-                        
-                        # 배경 그리드
-                        ax.grid(True, color='#333333', linestyle='-', linewidth=0.5, alpha=0.7)
-                        
-                        # 축 테두리(Spine) 색상 변경
-                        for spine in ax.spines.values():
-                            spine.set_color('#444444')
-                        
-                        plt.tight_layout()
-
-                        # Save plot to a buffer for Excel and a file for HTML
-                        img_buf = io.BytesIO()
-                        plt.savefig(img_buf, format='png', bbox_inches='tight', dpi=150)
+                    df = pd.DataFrame(df_data)
+                    date_str = datetime.now().strftime("%Y%m%d")
+                    
+                    import string
+                    suffix_list = list(string.ascii_lowercase) 
+                    
+                    final_filename = f"trade_log_{date_str}.csv"
+                    csv_path = os.path.join(self.data_dir, final_filename)
+                    
+                    if os.path.exists(csv_path):
+                        for char in suffix_list:
+                            temp_name = f"trade_log_{date_str}_{char}.csv"
+                            if not os.path.exists(os.path.join(self.data_dir, temp_name)):
+                                final_filename = temp_name
+                                csv_path = os.path.join(self.data_dir, final_filename)
+                                break
+                    
+                    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+                    tel_send(f"<font color='#28a745'>📂 당일 매매 일지가 로컬에 저장되었습니다: {final_filename}</font>")
+                    
+                    # [V5.6] 차트 캡처본 확보 및 HTML 표시
+                    png_filename = final_filename.replace('.csv', '.png')
+                    png_path = os.path.join(self.data_dir, png_filename)
+                    img_buf = io.BytesIO() # 엑셀 첨부 호환을 위한 더미
+                    
+                    capture_success = False
+                    if hasattr(self, 'main_window') and self.main_window:
+                        capture_success = self.main_window.capture_profit_graph(png_path)
+                    
+                    if capture_success and os.path.exists(png_path):
+                        # 캡처본을 바이트 스트림(img_buf)에도 로드하여 엑셀에서 쓸 수 있게 함
+                        with open(png_path, 'rb') as f:
+                            img_buf.write(f.read())
                         img_buf.seek(0)
-                        plt.close(fig) # Close the figure to free memory
-
-                        png_filename = final_filename.replace('.csv', '.png')
-                        png_path = os.path.join(self.data_dir, png_filename)
-                        with open(png_path, 'wb') as f:
-                            f.write(img_buf.getvalue())
                         
-                        # [신규] 통계 텍스트 하단에 HTML 이미지 태그 생성 및 저장
-                        # 절대 경로를 URL 형식으로 변환 (file:///)
                         img_url = f"file:///{png_path.replace(chr(92), '/')}" 
-                        # QTextEdit은 % 너비를 지원하지 않으므로 고정 픽셀(480px, 80% 스케일) 사용
                         img_html = f"<br><img src='{img_url}' width='480'/><br>"
+                        
+                        # [v5.6.5] GUI 전용 고속 HTML 채널Prefix 사용 (필터 우회 및 즉시 렌더링)
+                        print(f"DEBUG_HTML_LOG: {img_html}") 
+                        
                         display_rows.append(img_html)
-                        current_stats['img_html'] = img_html  # report()로 전달
+                        current_stats['img_html'] = img_html
+                        
+                        try:
+                            real_tel_send_photo(png_path)
+                            print("📢 텔레그램으로 차트 사진을 전송했습니다.")
+                        except Exception as e:
+                            print(f"⚠️ 텔레그램 차트 사진 전송 실패: {e}")
                         
                         # 엑셀 파일 저장 경로 설정 (.xlsx)
                         excel_filename = final_filename.replace('.csv', '.xlsx')
@@ -1005,7 +1148,7 @@ class ChatCommand:
                             worksheet = writer.sheets['매매일지']
                             
                             # 차트 이미지 삽입 (우측 P2 셀 쯤에 위치)
-                            if plot_data and img_buf:
+                            if capture_success and img_buf:
                                 try:
                                     img = OpenpyxlImage(img_buf)
                                     worksheet.add_image(img, 'P2')
@@ -1097,7 +1240,7 @@ class ChatCommand:
                             green_font = Font(color="00C851", bold=False)
 
                             # 차트가 없으면 P2부터 바로 텍스트 출력, 있으면 P38부터 (이미지가 꽤 크기 때문에 겹침 방지)
-                            start_row = 38 if plot_data else 2
+                            start_row = 38 if capture_success else 2
                             col_p = 16  # 'P' column is 16th
 
                             def write_cell(r, text, font=white_font, fill=bg_fill):
@@ -1216,12 +1359,11 @@ class ChatCommand:
                         print(f"✅ 엑셀 및 차트 파일 생성 완료: {excel_path}")
                 except Exception as ex_err:
                     print(f"❌ 엑셀 및 그래프 생성 오류: {ex_err}")
-                    
+                
+                except Exception as save_err: 
+                    print(f"❌ csv 저장 오류: {save_err}")
 
-            except Exception as save_err: 
-                print(f"❌ csv 저장 오류: {save_err}")
-
-            # [신규] 결과 반환 로직 확장 (report에서 텍스트와 통계를 모두 쓰기 위함)
+            # [신규] 결과 반환 로직 확장 (report 및 sync에서 사용)
             report_text = "".join(display_rows)
             if return_stats and return_text:
                 return report_text, current_stats
@@ -1230,8 +1372,8 @@ class ChatCommand:
             if return_text:
                 return report_text
             
-            return True
-            return True
+            # [추가] sync 전용 데이터 리스트 반환
+            return processed_data
 
         except Exception as e:
             print(f"❌ today 오류: {e}")
@@ -1306,7 +1448,8 @@ class ChatCommand:
   - today jun : 전략순 (매수전략)
   - today sic : 조건식순 (검색식명)
   - today son : 손익순 (손익금액)
-  - (팁: 뒤에 -를 붙이면 역순 출력, 예: today jun-)
+• AI NEWS ALL : 시장 전반 AI 브리핑
+• AI NEWS {키워드} : 종목/테마 AI 뉴스 분석
 • exp : 로그 데이터 폴더(LogData) 열기
 • voice on/off : 매수 시 음성(TTS) 켜기/끄기
 • beep on/off : 모든 비프음 소리 켜기/끄기
@@ -1388,26 +1531,50 @@ class ChatCommand:
                 log_and_tel("📂 로그 데이터 폴더(LogData)를 엽니다.")
             else:
                 log_and_tel("❌ 로그 폴더가 존재하지 않습니다.")
-        elif cmd.startswith('ai 뉴스'):
+        elif cmd == 'open_config':
+            if self.on_open_config: self.on_open_config()
+            else: tel_send("ℹ️ 설정창 열기는 GUI 환경에서만 작동합니다.")
+        elif cmd == 'open_ai_settings':
+            if self.on_open_ai_settings: self.on_open_ai_settings()
+            else: tel_send("ℹ️ AI 설정창 열기는 GUI 환경에서만 작동합니다.")
+        elif cmd.startswith('ai 뉴스') or cmd.startswith('ai news'):
             parts = cmd_full.split()
-            if len(parts) > 2:
-                stock_name = parts[2].strip()
-                tel_send(f"⏳ '{stock_name}' 최신 뉴스 검색 및 AI 분석 시작... (최대 10초 소요)")
+            if len(parts) >= 2:
+                # [신규 v5.3.0] AI NEWS ALL 또는 AI NEWS [키워드] 처리
+                # parts[0] = AI, parts[1] = NEWS/뉴스, parts[2:] = 키워드
+                keyword = " ".join(parts[2:]).strip() if len(parts) > 2 else ""
+                
+                is_all = (keyword.lower() == 'all')
+                
+                if is_all:
+                    tel_send("⏳ <b>전체 시장 뉴스 수집 및 AI 브리핑 시작...</b> (잠시만 기다려주세요)", parse_mode='HTML')
+                elif keyword:
+                    tel_send(f"⏳ '{keyword}' 최신 뉴스 검색 및 AI 분석 시작... (최대 10초 소요)")
+                else:
+                    tel_send("❓ 키워드를 입력해주세요. (예: AI NEWS 삼성전자 / AI NEWS ALL)")
+                    return
+
                 from news_sniper import run_news_sniper
-                
-                # 웹 스크래핑과 AI 통신은 시간이 걸리므로 메인 스레드 블로킹 방지를 위해 비동기 실행
                 loop = asyncio.get_event_loop()
-                result_msg = await loop.run_in_executor(None, run_news_sniper, stock_name)
+                result_msg = await loop.run_in_executor(None, run_news_sniper, keyword, is_all)
                 
-                # HTML 태그가 포함되어 있으므로 parse_mode='HTML'을 사용해 전송
-                # HTML 태그가 포함되어 있으므로 parse_mode='HTML'을 사용해 전송
-                await loop.run_in_executor(None, real_tel_send, result_msg, 'HTML')
-                
-                # [신규] GUI가 켜져 있다면 팝업창으로도 결과 전송
-                if self.on_news_result:
-                    self.on_news_result(result_msg)
+                if result_msg:
+                    # HTML 태그가 포함되어 있으므로 parse_mode='HTML'을 사용해 전송
+                    await loop.run_in_executor(None, real_tel_send, result_msg, 'HTML')
+                    
+                    # [신규] GUI가 켜져 있다면 팝업창으로도 결과 전송
+                    if self.on_news_result:
+                        self.on_news_result(result_msg)
+                    
+                    # [V5.7.1] AI 시장 브리핑(is_all) 결과는 음성으로도 즉시 브리핑하도록 연동
+                    if is_all and self.on_ai_voice_response:
+                        # HTML 태그 제거 및 TTS용 클린 텍스트 생성
+                        clean_briefing = re.sub(r'<[^>]*>', '', result_msg)
+                        # 인사말 추가하여 더욱 친근하게 브리핑
+                        voice_msg = f"자기야! 오늘 시장 브리핑 들려줄게. {clean_briefing}"
+                        self.on_ai_voice_response(voice_msg)
             else:
-                tel_send("❓ 종목명을 함께 입력해주세요. (예: ai 뉴스 삼성전자)")
+                tel_send("❓ 키워드를 함께 입력해주세요. (예: AI NEWS ALL / AI NEWS 삼성전자)")
         elif cmd == 'help': await self.help()
         elif cmd.startswith('tel today'):
             sub_raw = cmd_full[4:].strip() 
@@ -1446,4 +1613,171 @@ class ChatCommand:
             elif sub_cmd == 'jun': await self.today(sort_mode='jun', is_reverse=is_rev, send_telegram=False)
             elif sub_cmd == 'son': await self.today(sort_mode='son', is_reverse=is_rev, send_telegram=False)
             else: await self.today(is_reverse=is_rev, send_telegram=False) 
-        else: tel_send(f"❓ 알 수 없는 명령어: {text}")
+        elif cmd == 'close_bet':
+            # [신규 v5.7.28] 종가 베팅 추천 (3시 이후 권장)
+            now = datetime.now()
+            if now.hour < 15:
+                 tel_send("⚠️ 아직 종가 베팅을 분석하기엔 이른 시간이야. (보통 15:00 이후 권장)")
+            
+            tel_send("⏳ <b>오늘 시장을 복기하고 종가 베팅 종목을 분석 중이야...</b> (잠시만 기다려줘)", parse_mode='HTML')
+            
+            from news_sniper import run_news_sniper
+            loop = asyncio.get_event_loop()
+            result_msg = await loop.run_in_executor(None, run_news_sniper, None, False, True)
+            
+            if result_msg:
+                await loop.run_in_executor(None, real_tel_send, result_msg, 'HTML')
+                if self.on_news_result:
+                    self.on_news_result(result_msg)
+                
+                if self.on_ai_voice_response:
+                    clean_msg = re.sub(r'<[^>]*>', '', result_msg)
+                    voice_msg = f"자기야! 오늘 종가 베팅 추천 종목 분석 결과가 나왔어. {clean_msg}"
+                    self.on_ai_voice_response(voice_msg)
+
+                # [신규 v6.1.16] AI 추천 종목 자동 1주 매수 (종가 베팅 전용)
+                from news_sniper import extract_target_stocks_from_msg, get_stock_code_by_name
+                from buy_stock import fn_kt10000 as buy_stock
+                
+                target_names = extract_target_stocks_from_msg(result_msg)
+                if target_names:
+                    log_and_tel(f"🚀 <b>AI 추천 종목 자동 매수 기동:</b> {', '.join(target_names)} (각 1주씩)")
+                    token = await loop.run_in_executor(None, self.get_valid_token)
+                    
+                    for name in target_names:
+                        code = await loop.run_in_executor(None, get_stock_code_by_name, name)
+                        if code:
+                            # 시장가(3)로 1주 매수 시도
+                            ret_code, ret_msg = await loop.run_in_executor(None, buy_stock, code, 1, 0, '3', 'N', '', token)
+                            if ret_code == '0':
+                                log_and_tel(f"✅ <b>[자동매수 성공]</b> {name}({code}) 1주 시장가 주문 완료!")
+                            else:
+                                log_and_tel(f"❌ <b>[자동매수 실패]</b> {name}: {ret_msg}")
+                        else:
+                            log_and_tel(f"⚠️ {name} 종목의 코드를 찾을 수 없어 매수를 생략했어.")
+                else:
+                    log_and_tel("ℹ️ 자동 매수할 명시적인 종목 태그([BUY:...])를 찾지 못했어.")
+
+                # [신규 v6.1.17] 종가 베팅 4번 항목: KipoStock 관점 분석
+                from trade_logger import session_logger
+                perspective_list = await loop.run_in_executor(None, session_logger.get_kipostock_perspective, token)
+                if perspective_list:
+                    # GUI 시그널 발생 (메인 스레드에서 다이얼로그 팝업)
+                    self.signals.perspective_signal.emit(perspective_list)
+                    
+                    # 텔레그램으로도 간략히 보고
+                    names = [f"{item['name']}({item['peak_rt']:.1f}%)" for item in perspective_list]
+                    log_and_tel(f"🎯 <b>[KipoStock 관점 추천]:</b> {', '.join(names)} 종목이 포착됐어! (GUI에서 체크!")
+
+        elif cmd.startswith('buy_one_share '):
+            # [신규 v6.1.17] 특정 종목 1주 시장가 즉시 매수
+            # args[0], args[1] 대신 cmd_full에서 분리
+            parts = cmd_full.split()
+            if len(parts) >= 3:
+                code, name = parts[1], parts[2]
+                from buy_stock import fn_kt10000 as buy_stock
+                loop = asyncio.get_event_loop()
+                token = await loop.run_in_executor(None, self.get_valid_token)
+                ret_code, ret_msg = await loop.run_in_executor(None, buy_stock, code, 1, 0, '3', 'N', '', token)
+                if ret_code == '0':
+                    log_and_tel(f"✅ <b>[KipoStock 관점 주문성공]</b> {name}({code}) 1주 시장가 체결 완료!")
+                else:
+                    log_and_tel(f"❌ <b>[KipoStock 관점 주문실패]</b> {name}: {ret_msg}")
+            else:
+                log_and_tel("⚠️ buy_one_share 명령어 형식이 잘못되었습니다. (예: buy_one_share 005930 삼성전자)")
+
+        elif cmd == 'ai_news_brief_simple':
+            # [신규 v5.7.32] 시장 간편 브리핑 (종목 중심)
+            tel_send("⏳ <b>바쁜 자기를 위해 핵심 종목만 쏙쏙 뽑아서 분석 중이야...</b> (잠시만 기다려줘)", parse_mode='HTML')
+            
+            from news_sniper import run_news_sniper
+            loop = asyncio.get_event_loop()
+            result_msg = await loop.run_in_executor(None, run_news_sniper, None, False, False, True)
+            
+            if result_msg:
+                await loop.run_in_executor(None, real_tel_send, result_msg, 'HTML')
+                if self.on_news_result:
+                    self.on_news_result(result_msg)
+                
+                if self.on_ai_voice_response:
+                    clean_msg = re.sub(r'<[^>]*>', '', result_msg)
+                    voice_msg = f"자기야! 시장 핵심 요약 들려줄게. {clean_msg}"
+                    self.on_ai_voice_response(voice_msg)
+        elif cmd == 'export_today_excel':
+            # [신규 v6.1.12 Hotfix] 당일 매매 내역을 엑셀/CSV로 수동 내보내기
+            await self.today(send_telegram=True)
+            log_and_tel("📊 <b>당일 매매 내역 엑셀/CSV 생성이 완료되었습니다.</b>", parse_mode='HTML')
+        elif cmd == 'sync_google_drive':
+            # [신규 v6.1.12 Hotfix] 당일 매매 내역을 구글 시트에 동기화
+            await self.sync_to_google_drive()
+        elif cmd.startswith('query_sql'):
+            # [신규 v6.1.25] 로컬 DB(PostgreSQL) 데이터 분석 액션
+            question = cmd_full[9:].strip()
+            log_and_tel(f"🔍 <b>[AI DB 분석 요청]:</b> '{question}'... (로컬 DB 분석을 시작할게!)")
+            # 실제 구현은 DB 연결 설정 후 진행 (현재는 인지 단계)
+            tel_send("💡 (안내) 현재 PostgreSQL 서버 연동 준비 중이야. 조금만 더 학습하면 완벽한 데이터 통계를 내줄게!")
+        elif cmd.startswith('market_signals'):
+            # [신규 v6.1.25] Alpha Vantage 금융 지표 조회 액션
+            target = cmd_full[14:].strip()
+            log_and_tel(f"📡 <b>[AI 지표 조회 요청]:</b> '{target}'... (Alpha Vantage 데이터를 가져오는 중!)")
+            # 실제 구현은 Alpha Vantage API 연동 모듈 호출
+            tel_send(f"📊 {target}에 대한 기술적 지표(RSI/MACD)는 현재 분석 준비 중이야. API 키 연동 후 곧 보여줄게!")
+        elif cmd.startswith('analyze_sheets'):
+            # [신규 v6.1.25] 구글 시트 데이터 분석 액션
+            target = cmd_full[14:].strip()
+            log_and_tel(f"📊 <b>[AI 시트 분석 요청]:</b> '{target}'... (구글 시트 수익 데이터를 읽는 중!)")
+            # 실제 구현은 gspread로 시트 데이터 로드 후 제미나이 재분석
+            tel_send("📑 구글 시트의 과거 매매 패턴을 입체적으로 분석해서 곧 리포트로 알려줄게, 자기야!")
+ 
+        else:
+            # [NEW V5.4.0] 알 수 없는 명령어는 자연어로 간주하고 제미나이 AI 비서에게 넘김
+            try:
+                from gemini_bot import process_natural_language
+                loop = asyncio.get_event_loop()
+                # [v6.3.0+] AI 비서 작동 여부를 시각적으로 보여주기 위해 로그 유지
+                log_and_tel(f"💬 <b>[AI 비서 요청]:</b> '{text}'... (제미나이가 고민 중이야!)", parse_mode='HTML')
+                
+                ai_response = await loop.run_in_executor(None, process_natural_language, text)
+                
+                if ai_response["type"] == "action":
+                    log_and_tel(f"⚡ <b>[AI 명령 실행]:</b> {ai_response['cmd']}")
+                    await self.process_command(ai_response["cmd"])
+                elif ai_response["type"] == "msg":
+                    tel_send(f"💬 [AI 비서] {ai_response['msg']}")
+                    # GUI의 speak_text 호출을 위한 훅
+                    if self.on_ai_voice_response:
+                        self.on_ai_voice_response(ai_response["msg"])
+                else:
+                    # 에러 메시지 출력
+                    tel_send(f"⚠️ {ai_response['msg']}")
+            except Exception as e:
+                tel_send(f"❓ 명령어 또는 자연어 해석 오류: {text} ({e})")
+
+    async def sync_to_google_drive(self):
+        """오늘 매매 데이터를 구글 시트에 동기화합니다."""
+        try:
+            log_and_tel("⏳ <b>구글 드라이브 동기화 시작...</b> (잠시만 기다려줘)", parse_mode='HTML')
+            
+            # 1. 오늘 매매 데이터 가져오기 (processed_data 리스트 반환)
+            data_list = await self.today(sync_only=True)
+            if not data_list or not isinstance(data_list, list):
+                log_and_tel("📭 동기화할 매매 내역이 없네, 자기야!")
+                return
+
+            # 2. 구글 시트 동기화 모듈 호출
+            try:
+                from google_drive_sync import GoogleSheetSync
+                sync_tool = GoogleSheetSync()
+                success, msg = await sync_tool.sync_all_trades_today(self)
+                
+                if success:
+                    log_and_tel(f"✅ <b>구글 드라이브 동기화 완료!</b><br>{msg}", parse_mode='HTML')
+                else:
+                    log_and_tel(f"❌ <b>동기화 실패:</b> {msg}", parse_mode='HTML')
+            except ImportError as e:
+                log_and_tel(f"❌ <b>동기화 모듈 오류:</b> google_drive_sync.py가 없거나 gspread 라이브러리가 부족해. ({e})")
+            except Exception as e:
+                log_and_tel(f"❌ <b>동기화 오류:</b> {e}")
+                
+        except Exception as e:
+            log_and_tel(f"❌ <b>구글 드라이브 동기화 프로세스 오류:</b> {e}")

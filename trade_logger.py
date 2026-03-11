@@ -12,6 +12,7 @@ class TradeLogger:
         self.cumulative_pnl = 0
         self.pnl_history = [0] # MDD 계산용 누적 손익 히스토리
         self.returns_history = [] # 샤프 지수 계산용 개별 매매 수익률 히스토리
+        self.sync_required = False # [v5.5] API 리포트 차트 강제 동기화 플래그
         
         # [신규] 경로 설정
         if getattr(sys, 'frozen', False):
@@ -24,6 +25,10 @@ class TradeLogger:
             try: os.makedirs(self.data_dir)
             except: pass
         self.backup_file = os.path.join(self.data_dir, 'session_trades.json')
+        
+        # [v6.0.4] 차트 시작점을 08:55:00으로 고정 (사용자 요청)
+        if not self.load_session() or not self.pnl_history:
+            self.pnl_history = [{'time': "08:55:00", 'pnl': 0}]
 
     def save_session(self):
         """[신규] 현재 세션 데이터를 파일로 백업"""
@@ -54,10 +59,24 @@ class TradeLogger:
             if data.get('date') == today_str:
                 self.trades = data.get('trades', [])
                 self.cumulative_pnl = data.get('cumulative_pnl', 0)
-                self.pnl_history = data.get('pnl_history', [0])
-                self.pnl_history = data.get('pnl_history', [{'time': time.strftime("%H:%M:%S"), 'pnl': 0}]) # 초기값 형식 유지
+                
+                # [v5.4.1] pnl_history 데이터 형식 정규화 (호환성 보장)
+                raw_pnl_history = data.get('pnl_history', [])
+                self.pnl_history = []
+                
+                for item in raw_pnl_history:
+                    if isinstance(item, dict) and 'time' in item and 'pnl' in item:
+                        self.pnl_history.append(item)
+                    elif isinstance(item, (int, float)):
+                        # 레거시 데이터 형식([0, 100, ...]) 대응
+                        self.pnl_history.append({'time': datetime.now().strftime("%H:%M:%S"), 'pnl': item})
+                
+                # 데이터가 비어있으면 초기값 설정
+                if not self.pnl_history:
+                    self.pnl_history = [{'time': datetime.now().strftime("%H:%M:%S"), 'pnl': 0}]
+                
                 self.returns_history = data.get('returns_history', [])
-                print(f"✅ [TradeLogger] 이전 세션 복원 완료 ({len(self.trades)}건의 거래)")
+                print(f"✅ [TradeLogger] 이전 세션 복원 완료 ({len(self.trades)}건의 거래, 그래프 데이터 {len(self.pnl_history)}건)")
                 return True
             else:
                 print(f"ℹ️ [TradeLogger] 이전 세션이 오늘 데이터가 아니므로 새로 시작합니다.")
@@ -81,9 +100,12 @@ class TradeLogger:
             'strat_mode': strat_mode,
             'seq': seq # [신규] 시퀀스(프로필) 번호 기록
         })
-        # [v4.7.2] 매수 시에도 현재 누적 수익 현황 기록 (그래프 실시간 갱신용)
-        self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
+        # [v6.0.4] 매수 시에는 P&L 히스토리를 추가하지 않음 (사용자 요청: 매도 시만 타점 기록)
+        # self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
         self.save_session() # [신규] 실시간 백업
+        # [신규 v6.2.0] SQLite 로컬 DB에도 영구 저장
+        from kipodb import kipo_db
+        kipo_db.insert_trade(self.trades[-1])
 
     def record_sell(self, code, name, qty, price, pl_rt, pnl_amt, tax=0, seq=None):
         """매도 기록"""
@@ -106,7 +128,11 @@ class TradeLogger:
         self.cumulative_pnl += pnl_amt
         self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
         self.returns_history.append(pl_rt)
+        self.sync_required = True # [v5.5] API 싱크 시그널 활성화
         self.save_session() # [신규] 실시간 백업
+        # [신규 v6.2.0] SQLite 로컬 DB에도 영구 저장
+        from kipodb import kipo_db
+        kipo_db.insert_trade(self.trades[-1])
 
     def get_session_report(self, target_seq=None):
         """세션 전체 또는 특정 시퀀스 리포트 생성"""
@@ -226,6 +252,39 @@ class TradeLogger:
             'profit_factor': profit_factor,
             'expectancy': expectancy
         }
+
+    def get_kipostock_perspective(self, token):
+        """[신규 v6.1.17] 4번 항목: 당일 급등 후 조정 중인 종목 추출"""
+        report = self.get_session_report()
+        if not report or 'stock_summary' not in report:
+            return []
+            
+        from stock_info import get_price_high_data
+        perspective_list = []
+        
+        for code, info in report['stock_summary'].items():
+            if info['buy_qty'] > 0:
+                avg_buy_price = info['buy_amt'] / info['buy_qty']
+                now_prc, high_prc, base_prc = get_price_high_data(code, token)
+                
+                if avg_buy_price > 0 and high_prc > 0:
+                    # 1. 고가 수익률 (피크) - 매수가 기준이 아닌 당일 시가(기준가) 대비로 볼지, 매수가 대비로 볼지 결정 필요
+                    # 사용자 요청: "최고점에 도달한 것 중에 15% 이상" -> 보통 당일 상승률을 의미함
+                    day_peak_rt = ((high_prc - base_prc) / base_prc * 100) if base_prc > 0 else 0
+                    day_now_rt = ((now_prc - base_prc) / base_prc * 100) if base_prc > 0 else 0
+                    
+                    # 조건: 당일 고가 15% 이상 AND 현재가 5%~12% 사이
+                    if day_peak_rt >= 15.0 and 5.0 <= day_now_rt <= 12.0:
+                        perspective_list.append({
+                            'code': code,
+                            'name': info['name'],
+                            'peak_rt': day_peak_rt,
+                            'now_rt': day_now_rt,
+                            'avg_buy': avg_buy_price,
+                            'now_prc': now_prc
+                        })
+        
+        return perspective_list
 
 # 싱글톤 인스턴스
 session_logger = TradeLogger()

@@ -42,3 +42,9 @@ def get_setting(key, default=''):
 def cached_setting(key, default=''):
     """기존 인터페이스 유지를 위해 사용 (이제 get_setting 자체가 캐싱됨)"""
     return get_setting(key, default)
+
+def clear_settings_cache():
+    """[v6.8.8] 파일 저장 후 캐시를 강제로 비워 최신 정보를 즉시 리로드하도록 함"""
+    global _SETTINGS_CACHE, _LAST_SETTINGS_LOAD_TIME
+    _SETTINGS_CACHE = {}
+    _LAST_SETTINGS_LOAD_TIME = 0
