@@ -107,7 +107,7 @@ class TradeLogger:
         from kipodb import kipo_db
         kipo_db.insert_trade(self.trades[-1])
 
-    def record_sell(self, code, name, qty, price, pl_rt, pnl_amt, tax=0, seq=None):
+    def record_sell(self, code, name, qty, price, pl_rt, pnl_amt, tax=0, seq=None, strat_mode=None):
         """매도 기록"""
         current_time_str = time.strftime("%H:%M:%S")
         amount = qty * price
@@ -122,7 +122,8 @@ class TradeLogger:
             'pl_rt': pl_rt,
             'pnl_amt': pnl_amt,
             'tax': tax,
-            'seq': seq # [신규] 시퀀스(프로필) 번호 기록
+            'seq': seq, # [신규] 시퀀스(프로필) 번호 기록
+            'strat_mode': strat_mode # [신규 v1.0.7] 매도 시점에도 전략 모드 기록 보존
         })
         # 퀀트 분석용 데이터 업데이트
         self.cumulative_pnl += pnl_amt

@@ -1,6 +1,9 @@
 # Secrets
 config.py
 settings.json
+login.py
+stock_conditions.json
+session_trades.json
 
 # Python 관련
 __pycache__/
@@ -18,6 +21,24 @@ dist/
 *.log
 trade_log_*.csv
 LogData/
+*.json
+
+# Diagnostic & Test Scripts (Sensitive or Temporary)
+check_keys.py
+check_structure.py
+deep_inspect.py
+diagnostic_power.py
+diagnostic_strength.py
+dump_numeric.py
+final_key_check.py
+final_structure_check.py
+find_101.py
+find_strength.py
+full_check.py
+inspect_all_fields.py
+inspect_power_v3.py
+test_*.py
+tmp_*.py
 
 # IDE 설정
 .idea/

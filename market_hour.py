@@ -9,6 +9,9 @@ class MarketHour:
 	MARKET_END_HOUR = 15
 	MARKET_END_MINUTE = 30
 	
+	# 수동 시작 오버라이드 플래그
+	_MANUAL_OVERRIDE = False
+
 	@classmethod
 	def set_market_hours(cls, start_hour, start_minute, end_hour, end_minute):
 		"""장 시작/종료 시간을 설정합니다."""
@@ -17,7 +20,6 @@ class MarketHour:
 		cls.MARKET_END_HOUR = int(end_hour)
 		cls.MARKET_END_MINUTE = int(end_minute)
 
-	
 	@staticmethod
 	def _is_weekday():
 		"""평일인지 확인합니다."""
@@ -87,20 +89,6 @@ class MarketHour:
 		market_end = cls._get_market_time(cls.MARKET_END_HOUR, cls.MARKET_END_MINUTE)
 		return now >= market_end and (now - market_end).seconds < 60  # 1분 이내
 
-	@classmethod
-	def is_waiting_period(cls):
-		"""장 종료 시간 ~ 익일 오전 9:00 사이인지 확인합니다."""
-		now = datetime.datetime.now()
-		now_time = now.hour * 100 + now.minute
-		
-		market_end_time = cls.MARKET_END_HOUR * 100 + cls.MARKET_END_MINUTE
-		market_start_time = cls.MARKET_START_HOUR * 100 + cls.MARKET_START_MINUTE
-		
-		# 설정된 종료 시간 이후거나 설정된 시작 시간 이전이면 True
-		if now_time >= market_end_time or now_time < market_start_time:
-			return True
-		return False
-
 	@staticmethod
 	def is_actual_market_open_time():
 		"""사용자 설정과 관계없이 실제 한국 거래소 데이터 발생 시간(08:30~15:40)인지 확인합니다."""
@@ -110,9 +98,6 @@ class MarketHour:
 		now_val = now.hour * 100 + now.minute
 		# [수정] 장후 시간외 거래(15:30~15:40)까지 커버하기 위해 1540으로 연장
 		return 830 <= now_val < 1540
-
-	# [신규] 수동 시작 오버라이드 플래그
-	_MANUAL_OVERRIDE = False
 
 	@classmethod
 	def set_manual_mode(cls, enabled: bool):
@@ -125,21 +110,18 @@ class MarketHour:
 
 	@classmethod
 	def is_waiting_period(cls):
-		"""장 종료 시간 ~ 익일 오전 9:00 사이인지 확인합니다."""
-		
-		# [수정] 수동 모드일 경우: 실제 장 운영 시간이면 대기 시간이 아님 (무조건 통과)
-		if cls._MANUAL_OVERRIDE:
-			if cls.is_actual_market_open_time():
-				return False # 장중이면 대기 아님 -> 매매 진행
-			# 수동 모드라도 장 시간이 아니면(밤 등) 대기
-		
+		"""장 종료 시간 ~ 익일 오전 9:00 사이인지 확인합니다. (수동 모드 대응)"""
 		now = datetime.datetime.now()
 		now_time = now.hour * 100 + now.minute
+		
+		# [수정] 수동 모드일 경우: 실제 장 운영 시간이면 대기 시간이 아님
+		if cls._MANUAL_OVERRIDE:
+			if cls.is_actual_market_open_time():
+				return False
 		
 		market_end_time = cls.MARKET_END_HOUR * 100 + cls.MARKET_END_MINUTE
 		market_start_time = cls.MARKET_START_HOUR * 100 + cls.MARKET_START_MINUTE
 		
 		# 설정된 종료 시간 이후거나 설정된 시작 시간 이전이면 True
-		if now_time >= market_end_time or now_time < market_start_time:
-			return True
-		return False
+		is_waiting = (now_time >= market_end_time or now_time < market_start_time)
+		return is_waiting

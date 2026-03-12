@@ -39,6 +39,7 @@ from acc_realized import fn_kt00006 as get_realized_pnl
 from acc_diary import fn_ka10170 as get_trade_diary, fn_ka10077 as get_realized_detail, fn_ka10076 as get_exec_list
 from login import fn_au10001
 import pandas as pd
+from morning_bet_engine import MorningBetEngine
 
 def _generate_pnl_chart_png(pnl_history: list, output_dir: str) -> str:
     """
@@ -193,12 +194,23 @@ class ChatCommand:
         self.on_news_result = None  # [신규] 뉴스 분석 결과 GUI 전달용 콜백
         self.on_ai_voice_response = None # [신규 v5.4.0] 제미나이 AI 비서의 음성 답변 데이터 전달용 콜백
         
-        # [신규] rt_search의 콜백을 wrapper로 연결
+        # [신규] rt_search의 콜백을 wrapper로 연결 (v1.1.7 복구)
         self.rt_search.on_condition_loaded = self._on_condition_loaded_wrapper
         # [신규 v5.1] 실시간 뉴스 결과 콜백 연결
         self.rt_search.on_news_result = lambda msg: self.on_news_result(msg) if self.on_news_result else None
         # [신규] 가속도 추가 매수 콜백 등록
         self.rt_search.on_acceleration_trigger = self.on_accel_buy_trigger
+
+        # [신규] 시초가 전용 엔진 (MorningBetEngine) - v1.1.7
+        from morning_bet_engine import MorningBetEngine
+        # [수정] news_sniper 콜백 전달
+        self.morning_engine = MorningBetEngine(
+            api_core=self, 
+            news_sniper=lambda msg: self.on_news_result(msg) if hasattr(self, 'on_news_result') and self.on_news_result else None
+        ) 
+
+        # [신규] 시초가 실시간 체결 데이터 연결
+        self.rt_search.on_realtime_trade = self.morning_engine.on_realtime_data
 
         # [신규] 이전 세션 데이터 복원
         try:
@@ -342,6 +354,10 @@ class ChatCommand:
             if success:
                 self.check_n_sell_task = asyncio.create_task(self._check_n_sell_loop())
                 self.account_sync_task = asyncio.create_task(self._account_sync_loop())
+                
+                # [신규] 시초가 엔진 시작
+                self.morning_engine.start()
+                
                 log_and_tel(f"🚀 실시간 감시 엔진 {profile_info if profile_info else '기본'} 모드 시작 완료")
                 if self.on_start: self.on_start() # [신규] GUI 상태 동기화
                 return True
@@ -364,6 +380,8 @@ class ChatCommand:
                 self.update_setting('auto_start', False)
             await self._cancel_tasks()
             await self.rt_search.stop()
+            self.morning_engine.stop() # [신규] 시초가 엔진 정지
+            
             if not quiet:
                 log_and_tel("⏹ 실시간 감시 엔진이 정지되었습니다.")
                 if self.on_stop: self.on_stop() # [신규] GUI 상태 동기화
@@ -685,13 +703,22 @@ class ChatCommand:
                     if isinstance(mapping_val, dict):
                         cond_name = mapping_val.get('name', "직접매매")
                         strat_key = mapping_val.get('strat', 'none')
-                        strat_map = {'qty': '1주', 'amount': '금액', 'percent': '비율', 'HTS': 'HTS'}
-                        strat_nm = strat_map.get(strat_key, '--')
+                        # [v1.3.1] 전략 맵 확장
+                        strat_map = {
+                            'qty': '1주', 'amount': '금액', 'percent': '비율', 
+                            'HTS': 'HTS', 'BULTAGI': '불타기', 'MORNING': '시초가', 'ACCEL': '가속'
+                        }
+                        strat_nm = strat_map.get(strat_key)
+                        
+                        # [v1.3.1] 전략명이 없으면 조건명(cond_name)을 표시하도록 폴백
+                        if not strat_nm:
+                            strat_nm = cond_name if cond_name != '직접매매' else '--'
                         
                         if not found_buy_time:
                             found_buy_time = mapping_val.get('time')
                     else:
                         cond_name = str(mapping_val)
+                        strat_nm = cond_name # 직접매매가 아니면 cond_name(조건명)을 전략명으로 사용
                     
                     is_restored = False
                     if not found_buy_time:
@@ -1431,6 +1458,11 @@ class ChatCommand:
                 
             with open(self.settings_file, 'w', encoding='utf-8') as f:
                 json.dump(settings, f, indent=4, ensure_ascii=False)
+            
+            # [v1.1.6] 설정 변경 시 시초가 엔진에도 실시간 반영 (Hot-Reload)
+            if hasattr(self, 'morning_engine') and self.morning_engine:
+                self.morning_engine.reload_parameters()
+                
             return True
         except Exception as e:
             print(f"❌ 설정 저장 실패: {e}")
@@ -1462,6 +1494,15 @@ class ChatCommand:
         tel_send(help_msg)
 
     async def process_command(self, text):
+        if not text: return
+        
+        # [신규 v6.1.30] 콤마(,)로 구분된 다중 명령어 처리 (AI 루프 방지 핵심)
+        if ',' in text and not text.startswith('msg '):
+            cmds = [c.strip() for c in text.split(',')]
+            for c in cmds:
+                if c: await self.process_command(c)
+            return
+
         cmd_full = text.strip()
         cmd = cmd_full.lower()
         

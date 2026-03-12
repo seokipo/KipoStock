@@ -62,11 +62,13 @@ def trigger_bultagi_buy(stk_cd, token=None):
         if str(ret_code) == '0':
             # [신규 v6.4.5] 주문 캐시 즉시 업데이트 (HTS 오인 감지 방지 전용 락)
             try:
-                from check_n_buy import RECENT_ORDER_CACHE
+                from check_n_buy import RECENT_ORDER_CACHE, get_stock_name_safe
                 RECENT_ORDER_CACHE[stk_cd.replace('A', '')] = time.time()
-            except: pass
+                s_name = get_stock_name_safe(stk_cd, token)
+            except: 
+                s_name = stk_cd
 
-            msg = f"🔥 [불타기집행] {stk_cd} {ord_qty}주 시장가 추가 매수 완료!"
+            msg = f"🔥 [불타기집행] {s_name} {ord_qty}주 시장가 추가 매수 완료!"
             print(f"<font color='#ff4444'><b>{msg}</b></font>")
             tel_send(msg, msg_type='log')
             

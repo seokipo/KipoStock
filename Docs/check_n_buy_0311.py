@@ -247,7 +247,7 @@ def update_account_cache(token):
                             b_time = b_entry.get('time') if isinstance(b_entry, dict) else b_entry
                             if b_time and b_time != "99:99:99":
                                 print(f"🛠️ [매핑복구] {names.get(code, code)} ({code}): 매핑 누수 감지 -> {b_time} 기반 자동 복구")
-                                update_stock_condition(code, name='HTS매매', strat='HTS', time_val=b_time)
+                                update_stock_condition(code, name=names.get(code, '복구종목'), strat='HTS', time_val=b_time)
                 except: pass
             
             # 2. 종목 삭제 / 수량 감소 (매도)
@@ -403,13 +403,11 @@ def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
 def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None):
     stk_cd = stk_cd.replace('A', '') 
     
-    # [Debug] 매수 진입로깅 (v1.2.3 제거)
-    # print(f"🔍 [진입] chk_n_buy: {stk_cd}, seq={seq}, name={seq_name}")
+    # [Debug] 매수 진입로깅
+    # print(f"🔍 [BUY_DEBUG] chk_n_buy 진입: {stk_cd}, seq={seq} (type={type(seq)})")
 
     # 0. 메모리 락 (동시 처리 방지)
     if stk_cd in PROCESSING_FLAGS:
-        if not cached_setting('simple_log', False):
-            print(f"⚠️ [차단] 이미 처리 중인 종목: {stk_cd}")
         return
     PROCESSING_FLAGS.add(stk_cd)
 
@@ -417,6 +415,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         current_time = time.time()
         last_entry = RECENT_ORDER_CACHE.get(stk_cd, 0)
 
+        RECENT_ORDER_CACHE[stk_cd] = current_time 
         token = token if token else get_token()
 
         max_stocks = cached_setting('max_stocks', 20) 
@@ -436,13 +435,9 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
                 add_buy(stk_cd, token=token, seq_name='VI해제탈출', qty=1, source='VI_TURBO', price_type=turbo_type)
                 return
 
-            # [v6.4.5] 사용자 요청: 이미 보유 중인 종목은 매수 안 함
-            if not cached_setting('simple_log', False):
-                print(f"ℹ️ [스킵] {s_name} ({stk_cd}) 이미 보유 중입니다.")
+            # [v6.4.5] 사용자 요청: 이미 보유 중인 종목은 매수 안 함 (투명성을 위한 디버그 로그)
+            print(f"ℹ️ <font color='#888888'>[디버그] {s_name} 종목은 이미 보유 중이므로 매수 시퀀스를 건너뜁니다.</font>")
             return
-
-        # [핵심] 주문 시도 시간 기록 (보유하지 않았을 때만 스로틀 작동) - v1.1.7
-        RECENT_ORDER_CACHE[stk_cd] = current_time 
 
         # [수정] A-2. 보유 종목 확인 (캐시 기반으로 충분, API 중복 호출 제거하여 속도 극대화)
         # 0.1초가 아쉬운 초단타를 위해 매수 직전 계좌 전체 조회 API는 생략함
@@ -450,40 +445,43 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         # B. 최대 종목 수 확인
         current_count = len(ACCOUNT_CACHE['holdings'])
         if current_count >= max_stocks:
-            if not cached_setting('simple_log', False):
-                s_name = get_stock_name_safe(stk_cd, token)
-                print(f"⛔ [차단] 최대 종목 수 도달 ({current_count}/{max_stocks}): {stk_cd}")
-                pretty_log("⛔", f"풀방({current_count})", s_name, stk_cd)
+            s_name = get_stock_name_safe(stk_cd, token)
+            pretty_log("⛔", f"풀방({current_count})", s_name, stk_cd)
             return
 
         # C. 잔고 체크 (Safe Retry)
         if ACCOUNT_CACHE['balance'] < 1000:
-            print(f"💸 [진단] 잔고 부족 예상 ({ACCOUNT_CACHE['balance']}), 재조회 시도...")
+            # [Fix] 잔고가 0원이거나 정보가 없을 수 있으므로 API로 한 번 더 확실하게 확인
+            # print(f"⚠️ [잔고재확인] 캐시 잔고({ACCOUNT_CACHE['balance']}) 부족 -> API 재조회 시도")
             try:
                 bal_data = get_balance(token=token, quiet=True)
                 if bal_data and isinstance(bal_data, dict):
                     real_bal = int(str(bal_data.get('balance', '0')).replace(',', ''))
                     ACCOUNT_CACHE['balance'] = real_bal
                     ACCOUNT_CACHE['acnt_no'] = bal_data.get('acnt_no', '')
-                    print(f"💰 [진단] 잔고 갱신 결과: {real_bal:,}원")
             except: pass
 
         if ACCOUNT_CACHE['balance'] < 1000: 
             s_name = get_stock_name_safe(stk_cd, token)
-            print(f"💸 [차단] 최종 잔고 부족: {ACCOUNT_CACHE['balance']}원")
             pretty_log("💸", "잔고부족", s_name, stk_cd)
+            # [Fix] 무한 재시도(로그 폭탄) 방지를 위해 10초 쿨타임 적용 (pop 제거)
+            # RECENT_ORDER_CACHE.pop(stk_cd, None) 
             return
 
         # =========================================================
         # 3. 매수 주문 전송
         # =========================================================
+        
+        # [신규] 조건식별 개별 매수 전략 적용 (V3.8.1)
         try:
+            # [신규 v6.9.5] Turbo VI 특별 예우
             if seq == 'SYSTEM_VI':
                 mode = 'qty'
-                val_str = '1'
+                val_str = '1' # 무조건 1주
                 print(f"🚀 <font color='#00e5ff'><b>[Turbo Pass]</b> {stk_cd}: VI 해제 즉시 진입 모드 (1주)</font>")
             else:
                 strat_map = cached_setting('condition_strategies', {})
+                # seq가 없거나 맵에 없으면 기본 qty 모드
                 mode = strat_map.get(str(seq), 'qty')
                 
                 if mode == 'qty':
@@ -518,9 +516,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
             try:
                 _, current_price = get_current_price(stk_cd, token=token)
             except: pass
-
-        # [삭제 v6.9.8] 시초가 베팅 A방식(조건식 연동) 제거 - 전용 엔진에서 B방식으로 일원화됨
-        
+            
         if p_type == 'current' and current_price > 0:
             trde_tp = '0' # 지정가
             ord_uv = str(current_price)
@@ -680,8 +676,11 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
         current_time = time.time()
         last_entry = RECENT_ORDER_CACHE.get(stk_cd, 0)
         
-        # [Fix] 불타기(BULTAGI) 또는 시초가(MORNING), VI터보 진입 시에는 쿨타임 무시
-        if source not in ['BULTAGI', 'VI_TURBO', 'MORNING'] and (current_time - last_entry < 5):
+        # [Fix] 불타기(BULTAGI) 진입 시에는 check_n_sell 에서 이미 대기 시간을 체크했으므로 
+        # add_buy 자체의 5초 쿨타임을 무조건 무시(프리패스) 해야 함.
+        # [신규 v6.9.5] VI_TURBO 진입 시에도 쿨타임 무시
+        # 중복 주문 방지 캐시 업데이트도 BULTAGI인 경우에만 제한 시간 우회
+        if source not in ['BULTAGI', 'VI_TURBO'] and (current_time - last_entry < 5):
             return False
 
         RECENT_ORDER_CACHE[stk_cd] = current_time
@@ -731,10 +730,6 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             
             # [v6.2.8] 매수 시간 및 정보 저장 (재매수 대응 overwrite=True)
             _LOG_QUEUE.put(('save_buy_time', {'code': stk_cd, 'overwrite': True}))
-            
-            # [신규] 시초가/불타기 등 전략 매핑 정보 업데이트 (chk_n_sell에서 TP/SL 인식용)
-            if seq_name:
-                update_stock_condition(stk_cd, name=seq_name, strat='MORNING' if source == 'MORNING' else 'BULTAGI', seq='MORNING')
             
             # 알림 및 로그
             if source == 'BULTAGI':
@@ -848,23 +843,3 @@ def update_stock_peak_rt(code, peak_rt):
             
     except Exception as e:
         print(f"⚠️ Peak RT 업데이트 실패: {e}")
-
-def remove_stock_condition(code):
-    """[신규 v1.3.4] 매도 완료 시 해당 종목의 매핑 정보를 삭제 (자기 요청 ❤️)"""
-    try:
-        code = code.replace('A', '')
-        if getattr(sys, 'frozen', False):
-            base_path = os.path.dirname(sys.executable)
-        else:
-            base_path = os.path.dirname(os.path.abspath(__file__))
-            
-        mapping_file = os.path.join(base_path, 'stock_conditions.json')
-        mapping = load_json_safe(mapping_file)
-        
-        if code in mapping:
-            del mapping[code]
-            save_json_safe(mapping_file, mapping)
-            # print(f"🧹 [매핑정리] {code} 삭제 완료")
-            
-    except Exception as e:
-        print(f"⚠️ 매핑 삭제 실패: {e}")

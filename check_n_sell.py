@@ -98,8 +98,13 @@ def chk_n_sell(token=None):
                 info = mapping[stk_cd]
                 strat_mode = info.get('strat', 'qty')
                 seq = info.get('seq')
+                s_name = info.get('name', '')
                 
-                if strat_mode == 'HTS':
+                # [신규 v6.9.7] 시초가 배팅 (Morning Bet) 전용 타이트 컷 (개별 룰 완전 우대)
+                if s_name.startswith('MorningBet'):
+                    specific_tp = float(cached_setting('morning_tp', 2.0))
+                    specific_sl = float(cached_setting('morning_sl', -1.5))
+                elif strat_mode == 'HTS':
                      st_data = cached_setting('strategy_tp_sl', {})
                      hts_set = st_data.get('HTS', {})
                      live_tp = float(hts_set.get('tp', 0))
@@ -232,16 +237,34 @@ def chk_n_sell(token=None):
                             bultagi_trigger_ok = True
                             
                             # [v6.6.3] 완료된 종목은 로그 창 가독성을 위해 출력을 스킵함
+                            # [신규 v1.3.5] 진단 로그 시 호가잔량비 미리 보기 (자기 요청!)
+                            diag_ratio_str = ""
+                            orderbook_en = cached_setting('bultagi_orderbook_enabled', False)
+                            if show_diag and orderbook_en and not info.get('bultagi_done'):
+                                try:
+                                    from stock_info import get_extended_stock_data
+                                    ex_diag = get_extended_stock_data(stk_cd, token=token)
+                                    if ex_diag and ex_diag.get('orderbook_valid'):
+                                        ask_q = ex_diag.get('total_ask_qty', 0)
+                                        bid_q = ex_diag.get('total_bid_qty', 1)
+                                        ratio = ask_q / bid_q if bid_q > 0 else 0
+                                        limit = float(cached_setting('bultagi_orderbook_val', 2.0))
+                                        diag_ratio_str = f" │ ⚖️ {ratio:.2f}/{limit}"
+                                except: pass
+
                             if show_diag and not info.get('bultagi_done'):
                                 status_icon = "✅ 이익구간" if is_profit_zone else "❌ 손실구간"
                                 time_icon = "⌛" if elapsed >= wait_sec else "⏳"
-                                done_mark = "" # [v6.6.3] 스킵하므로 빈 값
+                                done_mark = "" 
                                 source_icon = "🛠️" if is_recovered else "🔗"
                                 print(f"🔍 <font color='#f1c40f'><b>[불타기진단]</b></font> {source_icon} <font color='#ffffff'>{safe_stk_nm}{done_mark}</font> │ "
                                       f"{status_icon}({int(current_price):,}/{int(buy_price):,}) │ "
-                                      f"{time_icon} {int(elapsed)}초/{int(wait_sec)}초 경과")
+                                      f"{time_icon} {int(elapsed)}초/{int(wait_sec)}초 경과{diag_ratio_str}")
 
-                            if elapsed < wait_sec:
+                            if info.get('bultagi_done'):
+                                bultagi_trigger_ok = False
+                                # [v1.3.3] 이미 불타기 완료된 종목은 차단/대기 로그 전체 스킵 (자기 요청!)
+                            elif elapsed < wait_sec:
                                 bultagi_trigger_ok = False
                                 # [v6.4.5] 10초 이내 절대 재매수 금지 (설정값보다 우선하는 최소 안전장치)
                                 if elapsed < 10:
@@ -255,9 +278,6 @@ def chk_n_sell(token=None):
                                 bultagi_trigger_ok = False
                                 if show_diag:
                                     print(f"🚫 <font color='#e74c3c'>[불타기차단] {safe_stk_nm}: 손실구간 ({int(current_price):,}원 &lt; 매입가 {int(buy_price):,}원) — 수익권 회복 후 발동</font>")
-                            elif info.get('bultagi_done'):
-                                bultagi_trigger_ok = False
-                                # (완료 상태는 진단 로그에서 이미 표시됨)
                                 
                             if bultagi_trigger_ok:
                                 try:
@@ -270,14 +290,20 @@ def chk_n_sell(token=None):
                                     if power_en or slope_en or orderbook_en:
                                         from stock_info import get_extended_stock_data
                                         ex_data = get_extended_stock_data(stk_cd, token=token)
+                                        
+                                        # [v1.2.7] "로그 간단히" 해제 시 RAW 데이터 출력 (자기 요청!)
+                                        simple_log = cached_setting('simple_log', True)
+                                        if not simple_log and show_diag and ex_data:
+                                            raw_sample = ex_data.get('raw_log', 'N/A')
+                                            print(f"📦 <font color='#9b59b6'>[RAW데이터] {safe_stk_nm}</font> | {raw_sample}")
                                     
                                     if power_en and ex_data:
                                         p_limit = float(cached_setting('bultagi_power_val', 120))
                                         if ex_data['power'] <= 0:
-                                            # [v6.9.4] 정말 거래가 없어 0.0일 수도 있으므로 '수집 대기'를 '데이터 확인'으로 순화
-                                            print(f"⚠️ <font color='#888888'>[불타기진단] {safe_stk_nm}: 체결강도 확인 중 (0.0)</font>")
-                                            # [의논] 0.0일 때 무조건 차단할 것인가? 
-                                            # 일단 수집 실패/대기 상태로 간주하여 안전하게 차단 유지 (사용자 설정값 120 등 미달)
+                                            # [v1.2.4] 거래가 아예 없거나 데이터 수집 중일 때의 메시지 명확화
+                                            wait_msg = "체결 데이터 수집 대기 중..." if show_diag else None
+                                            if wait_msg:
+                                                print(f"⚠️ <font color='#888888'>[불타기진단] {safe_stk_nm}: {wait_msg} (0.0)</font>")
                                             bultagi_trigger_ok = False
                                         elif ex_data['power'] < p_limit:
                                             print(f"🚫 <font color='#e74c3c'>[불타기차단] {safe_stk_nm}: 체결강도 미달 ({ex_data['power']} < {p_limit})</font>")
@@ -326,7 +352,7 @@ def chk_n_sell(token=None):
                                             if success:
                                                 print(f"✅ [불타기성공] {safe_stk_nm}: 매수 주문이 성공적으로 발송되었습니다.")
                                                 update_stock_condition(
-                                                    stk_cd, safe_stk_nm, strat='불타기',
+                                                    stk_cd, name='불타기진입', strat='불타기',
                                                     seq=info.get('seq'), bultagi_done=True
                                                 )
                                             else:
@@ -364,9 +390,20 @@ def chk_n_sell(token=None):
                         return 0
                     tax_val = get_tax(stock)
 
+                    # [Fix v1.0.6] 실제 수익률 보존. pl_rt가 999로 덮어씌워진 경우 원본(stock['pl_rt']) 값을 불러오도록 처리
+                    actual_pl_rt = float(stock.get("pl_rt", pl_rt)) if pl_rt == 999 else pl_rt
+
+                    # [신규 v1.0.7] 전략 모드 파악 (mapping 정보 활용)
+                    strat_m = 'HTS' # 기본값
+                    try:
+                        stk_info = mapping.get(stk_cd)
+                        if stk_info: strat_m = stk_info.get('strat', 'HTS')
+                    except: pass
+
                     session_logger.record_sell(
                         stock['stk_cd'].replace('A', ''), stock['stk_nm'], qty, 
-                        sell_prc, pl_rt, pnl_amt, tax=tax_val, seq=seq
+                        sell_prc, actual_pl_rt, pnl_amt, tax=tax_val, seq=seq,
+                        strat_mode=strat_m # [신규] 매도 시에도 전략 기록
                     )
                 except Exception as ex:
                     print(f"⚠️ 세션 매도 기록 실패: {ex}")
@@ -388,6 +425,21 @@ def chk_n_sell(token=None):
                 except: pass
 
                 print(f"<font color='{log_color}'>{message}</font>")
+
+
+        # [신규 v1.3.4] 실시간 종목 리스트에서 빠진 종목은 매핑(불타기 조건)에서도 자동 삭제 (자기 요청!)
+        try:
+             # my_stocks 데이터가 신뢰성 있을 때만(보유 종목 조회 성공 시) 수행
+             current_holding_codes = {s['stk_cd'].replace('A', '') for s in my_stocks if int(s.get('rmnd_qty', 0)) > 0}
+             
+             # mapping은 루프 시작 시 로드한 최신 상태 사용
+             to_remove = [c for c in mapping.keys() if c not in current_holding_codes]
+             if to_remove:
+                 from check_n_buy import remove_stock_condition
+                 for c in to_remove:
+                     remove_stock_condition(c)
+        except Exception as e:
+             print(f"⚠️ 매핑 정리 오류: {e}")
 
         return True 
 

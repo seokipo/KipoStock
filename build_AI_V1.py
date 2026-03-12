@@ -7,7 +7,8 @@ import shutil
 # 이 스크립트가 우리의 새로운 전설의 시작을 만들어줄 거야! ✨🎨
 
 def build_kipo():
-    VERSION = "AI_V1"
+    VERSION = "AI_V1.5.0"
+
     target_file = "Kipo_GUI_main.py"
 
     # PyInstaller 실행 인자

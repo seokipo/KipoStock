@@ -92,38 +92,67 @@ def get_current_price(stk_cd, token=None):
 
 # [신규] 불타기 상세 조건을 위한 확장 데이터 조회 (체결강도, 호가잔량)
 def get_price_high_data(stk_cd, token=None):
-    """[신규 v6.1.17] 분석용 현재가, 고가, 기준가 조회"""
+    # [v1.4.0] 고가 및 기준가 매핑 보강 및 헤더 누락 해결
     headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10001' }
     try:
+        from config import host_url
+        import requests
         res = requests.post(host_url + '/api/dostk/stkinfo', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
         data = res.json().get('data', res.json())
         
-        # 현재가
+        def _clean(v):
+            if v is None: return 0
+            return abs(int(str(v).replace(',', '').replace('+', '').replace('-', '')))
+
+        # 현재가 (cur_prc, now_prc 등)
         now = 0
-        for k in ['now_prc', 'clpr', 'stck_prpr', 'price', 'cur_prc']:
-            v = data.get(k)
-            if v:
-                now = abs(int(str(v).replace(',', '')))
+        for k in ['cur_prc', 'now_prc', 'clpr', 'stck_prpr', 'price']:
+            if data.get(k):
+                now = _clean(data.get(k))
                 if now > 0: break
         
-        # 고가
+        # 고가 (high_pric, high_prc, hgpr 등)
         high = 0
-        for k in ['high_prc', 'hgpr', 'stck_hgpr', 'high']:
-            v = data.get(k)
-            if v:
-                high = abs(int(str(v).replace(',', '')))
+        for k in ['high_pric', 'high_prc', 'hgpr', 'stck_hgpr', 'high']:
+            if data.get(k):
+                high = _clean(data.get(k))
                 if high > 0: break
                 
-        # 전일종가/기준가 (수익률 계산용)
+        # 전일종가/기준가 (base_pric, base_prc, prev_clpr 등)
         base = 0
-        for k in ['base_prc', 'prev_clpr', 'stck_sdpr']:
-            v = data.get(k)
-            if v:
-                base = abs(int(str(v).replace(',', '')))
+        for k in ['base_pric', 'base_prc', 'prev_clpr', 'stck_sdpr']:
+            if data.get(k):
+                base = _clean(data.get(k))
                 if base > 0: break
         
         return now, high, base
     except:
+        return 0, 0, 0
+
+def get_morning_data(stk_cd, token=None):
+    """[신규 v6.9.7] 시초가 배팅 베이스 데이터 (현재가, 시가, 전일종가) 조회"""
+    headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10001' }
+    try:
+        import requests
+        from config import host_url
+        res = requests.post(host_url + '/api/dostk/stkinfo', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
+        data = res.json().get('data', res.json())
+        
+        now = 0
+        for k in ['now_prc', 'clpr', 'stck_prpr', 'price', 'cur_prc']:
+            if data.get(k): now = abs(int(str(data.get(k)).replace(',', ''))); break
+        
+        oprc = 0
+        for k in ['stck_oprc', 'oprc', 'open_prc', 'open']:
+            if data.get(k): oprc = abs(int(str(data.get(k)).replace(',', ''))); break
+            
+        base = 0
+        for k in ['base_prc', 'prev_clpr', 'stck_sdpr', 'prdy_clpr']:
+            if data.get(k): base = abs(int(str(data.get(k)).replace(',', ''))); break
+            
+        return now, oprc, base
+    except Exception as e:
+        print(f"⚠️ [MorningData] 조회 실패: {e}")
         return 0, 0, 0
 
 def get_extended_stock_data(stk_cd, token=None):
@@ -133,9 +162,10 @@ def get_extended_stock_data(stk_cd, token=None):
     result = {
         'name': '',
         'price': 0,
-        'power': 0.0,       # 체결강도 (%)
         'total_ask_qty': 0, # 총 매도 잔량
-        'total_bid_qty': 0  # 총 매수 잔량
+        'total_bid_qty': 0, # 총 매수 잔량
+        'power': 0.0,       # [v1.2.9 Fix] 누락된 키 복구
+        'raw_log': ""       # [v1.2.7] 상세 로그용 원시 데이터 샘플
     }
     
     # 1. 기본 정보 및 체결강도 조회 (ka10001)
@@ -152,15 +182,8 @@ def get_extended_stock_data(stk_cd, token=None):
                 result['price'] = abs(int(str(v).replace(',', '')))
                 if result['price'] > 0: break
         
-        # [v6.9.4] 체결강도 추출 필드 대폭 보강 (Kis API 다양한 TR 대응)
-        power_keys = ['vol_strength', 'strength', 'vol_power', '228', 'pwr_st', 'pwr_sg', 't_x_power']
-        for k in power_keys:
-            v = data.get(k)
-            if v is not None:
-                try:
-                    result['power'] = float(str(v).replace(',', ''))
-                    if result['power'] >= 0: break # 유효한 값이면 중단
-                except: continue
+        # [v1.2.7] 상세 로그용 원시 데이터 보관
+        result['raw_log'] += f"[ka10001] {str(data)[:200]}... "
     except: pass
 
     # 2. 호가 잔량 정보 조회 (ka10004)
@@ -189,35 +212,109 @@ def get_extended_stock_data(stk_cd, token=None):
                 found_bid = True
                 break
                 
-        # [v6.7.2] 데이터 유효성 플래그 (둘 다 가져왔을 때만 유효한 것으로 간주)
+        # [v1.3.0] 상세 로그용 원시 데이터 보관 (호가잔량비 추가)
+        ob_ratio_str = "N/A"
+        if found_ask and found_bid and result['total_bid_qty'] > 0:
+            ob_ratio_str = f"{result['total_ask_qty'] / result['total_bid_qty']:.2f}"
+            
+        result['raw_log'] += f"[ka10004] (Ask:{result['total_ask_qty']:,}/Bid:{result['total_bid_qty']:,}/Ratio:{ob_ratio_str}) {str(data)[:150]}... "
         result['orderbook_valid'] = found_ask and found_bid
     except: 
         result['orderbook_valid'] = False
 
-    # 3. [신규 v4.7.5] 정밀 체결강도 추이 조회 (ka10046) - 자기가 찾아준 보물!
+    # 3. [신규 v4.7.5] 정밀 체결강도 추이 조회 (ka10046)
     try:
         headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10046' }
         res = requests.post(host_url + '/api/dostk/mrkcond', headers=headers, json={'stk_cd': stk_cd}, timeout=5)
         res_json = res.json()
-        data_list = res_json.get('data', {}).get('pwr_st_list', [])
+        
+        # [v1.2.4 Fix] 응답 구조 유연성 확보 (dict/list 케이스 통합 대응)
+        data_obj = res_json.get('data', res_json)
+        data_list = []
+        if isinstance(data_obj, list):
+            data_list = data_obj
+        elif isinstance(data_obj, dict):
+            # [v1.2.7] cntr_str_tm 필수 추가 (사용자 제공 힌트 반영)
+            data_list = data_obj.get('cntr_str_tm') or data_obj.get('pwr_st_list') or data_obj.get('output') or data_obj.get('data_list') or []
         
         if data_list and len(data_list) > 0:
-            latest = data_list[0] # 가장 최신(첫번째) 데이터
-            # [v6.9.4] 'pwr_sg' 필드뿐만 아니라 'pwr_st' 등도 체크, 0.0 허용
-            pwr = latest.get('pwr_sg') or latest.get('pwr_st') or latest.get('strength')
-            if pwr is not None:
+            latest = data_list[0]
+            # [v1.2.7] HTS와 일치하는 'cntr_str_20min'을 1순위로 채택
+            pwr_val = latest.get('cntr_str_20min')
+            if pwr_val is None: pwr_val = latest.get('cntr_str')
+            if pwr_val is None: pwr_val = latest.get('pwr_sg')
+            if pwr_val is None: pwr_val = latest.get('pwr_st')
+            if pwr_val is None: pwr_val = latest.get('cntr_str_5min')
+            if pwr_val is None: pwr_val = latest.get('vol_power')
+            
+            # [v1.2.7] 상세 로그용 원시 데이터 보관
+            result['raw_log'] += f"[ka10046] {str(latest)[:200]}..."
+            
+            if pwr_val is not None:
                 try:
-                    result['power'] = float(str(pwr).replace(',', ''))
-                    # print(f"✨ [KA10046] 정밀 체결강도 획득: {result['power']}%")
+                    pwr_f = float(str(pwr_val).replace(',', ''))
+                    if pwr_f > 0 or result['power'] == 0.0:
+                        result['power'] = pwr_f
                 except: pass
-    except Exception as e:
-        # print(f"⚠️ [KA10046] 조회 실패: {e}")
-        pass
+    except: pass
 
     return result
+
+def get_morning_scan_data(token=None):
+    """
+    [신규 v1.1.5] 전장/장전 등락률 및 예상체결 상위 종목 스캔 (ka10019)
+    키움 opt10019(전차등락률상위) 대응
+    """
+    endpoint = '/api/dostk/mrkcond'
+    url = host_url + endpoint
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'api-id': 'ka10019'
+    }
+    
+    # 0: 전체, 1: 코스피, 2: 코스닥
+    params = {
+        'market_gb': '0',   # 시장구분
+        'vol_gb': '1',      # 거래량구분 (1:예상체결량)
+        'rt_gb': '1'        # 등락구분 (1:상승)
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=params, timeout=10)
+        res_json = response.json()
+        
+        data = res_json.get('data', {})
+        if isinstance(data, list):
+            items = data
+        else:
+            items = data.get('pwr_st_list') or data.get('data_list') or data.get('output', [])
+            
+        if not items:
+            return []
+            
+        scan_results = []
+        for item in items:
+            code = item.get('stk_cd') or item.get('code')
+            if not code: continue
+            
+            scan_results.append({
+                'code': code.replace('A', ''),
+                'name': item.get('stk_nm') or item.get('name', ''),
+                'expect_prc': abs(int(str(item.get('expect_prc', item.get('clpr', 0))).replace(',', ''))),
+                'expect_rt': float(str(item.get('expect_rt', item.get('cur_rt', 0))).replace(',', '')),
+                'expect_vol': int(str(item.get('expect_vol', 0)).replace(',', ''))
+            })
+            
+        return scan_results
+    except Exception as e:
+        print(f"⚠️ [MorningScan] API 호출 실패: {e}")
+        return []
 
 # 실행 구간
 if __name__ == '__main__':
     token = get_token()
     print(fn_ka10001('005930', token=token))
     print(get_current_price('005930', token=token))
+    # [v1.1.5] 스캔 테스트 추가
+    print("🌅 장전 스캔 테스트:", get_morning_scan_data(token=token))
