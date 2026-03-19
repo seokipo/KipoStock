@@ -4,7 +4,7 @@ import json
 from acc_val import fn_kt00004 as get_my_stocks
 from sell_stock import fn_kt10001 as sell_stock
 from tel_send import tel_send
-from get_setting import cached_setting, get_base_path
+from get_setting import cached_setting
 from login import fn_au10001 as get_token
 from market_hour import MarketHour
 from check_n_buy import load_json_safe, save_json_safe, update_stock_condition # [신규] 안전 함수 가져오기
@@ -13,7 +13,7 @@ from check_n_buy import load_json_safe, save_json_safe, update_stock_condition #
 _STRATEGY_MAPPING_CACHE = {}
 _LAST_MAPPING_MTIME = 0
 _LAST_BULTAGI_DIAG_TIME = 0 # [v6.3.0] 불타기 진단 로그 출력 시간 기록
-from check_n_buy import load_json_safe, save_json_safe, update_stock_condition, update_stock_peak_rt # [수정] update_stock_peak_rt 추가
+from check_n_buy import load_json_safe, save_json_safe, update_stock_condition, update_stock_peak_rt, update_stock_gate # [수정] update_stock_gate 추가
 
 def chk_n_sell(token=None):
     global _STRATEGY_MAPPING_CACHE, _LAST_MAPPING_MTIME, _LAST_BULTAGI_DIAG_TIME
@@ -32,7 +32,11 @@ def chk_n_sell(token=None):
     SL_RATE = cached_setting('stop_loss_rate', -10.0)
 
     # [최적화 & v6.4.4] 매핑 정보 파일 수정 시간 추적하여 즉각 갱신
-    base_path = get_base_path()
+    import sys
+    if getattr(sys, 'frozen', False):
+        base_path = os.path.dirname(sys.executable)
+    else:
+        base_path = os.path.dirname(os.path.abspath(__file__))
         
     mapping_file = os.path.join(base_path, 'stock_conditions.json')
     
@@ -96,9 +100,13 @@ def chk_n_sell(token=None):
                 if s_name.startswith('MorningBet'):
                     specific_tp = float(cached_setting('morning_tp', 2.0))
                     specific_sl = float(cached_setting('morning_sl', -1.5))
-                elif s_name.startswith('MorningBet'):
-                    # (위 조건과 동일하게 유지 - 가독성용)
-                    pass
+                elif strat_mode == 'HTS':
+                     st_data = cached_setting('strategy_tp_sl', {})
+                     hts_set = st_data.get('HTS', {})
+                     live_tp = float(hts_set.get('tp', 0))
+                     live_sl = float(hts_set.get('sl', 0))
+                     if live_tp != 0: specific_tp = live_tp
+                     if live_sl != 0: specific_sl = live_sl
                 else:
                     if info.get('tp') is not None: specific_tp = float(info['tp'])
                     if info.get('sl') is not None: specific_sl = float(info['sl'])
@@ -108,8 +116,7 @@ def chk_n_sell(token=None):
 
             if mapping and stk_cd in mapping:
                 info = mapping[stk_cd]
-                # [v2.5.4] HTS 로 일원화: 불타기 완료된 종목이거나 직접 매수(HTS) 매수한 종목일 경우 불타기 매도 룰 적용
-                if info.get('bultagi_done') or info.get('strat', '') == 'HTS':
+                if info.get('bultagi_done'):
                     b_tp_en = cached_setting('bultagi_tp_enabled', True)
                     b_tp = cached_setting('bultagi_tp', 5.0)
                     b_p_en = cached_setting('bultagi_preservation_enabled', False)
@@ -124,17 +131,20 @@ def chk_n_sell(token=None):
                         peak_rt = pl_rt
                         update_stock_peak_rt(stk_cd, pl_rt)
 
+                    # [신규 v1.7.8/v1.7.9] 트레일링 스톱 (Trailing Stop) - 상호 배타적 모드
                     ts_en = cached_setting('bultagi_trailing_enabled', False)
                     ts_val = cached_setting('bultagi_trailing_val', 1.0)
                     
-                    should_sell = False
-                    sell_reason = ""
-                    
                     if ts_en:
-                        # TS 모드: 고점 대비 하락 시 매도 (익절/보존 무시)
+                        # TS 모드일 때는 TP/Preservation 무시
+                        should_sell = False
+                        sell_reason = ""
+                        
+                        # 1. 고점에 따른 TS 판정
                         if peak_rt >= 0.5 and (peak_rt - pl_rt) >= ts_val:
                             should_sell = True
                             sell_reason = "트레일링스톱"
+                        # 2. 안전망 (손실제한)은 별도로 작동
                         elif b_sl_en and pl_rt <= b_sl:
                             should_sell = True
                             sell_reason = "손실제한"
@@ -177,7 +187,8 @@ def chk_n_sell(token=None):
                 
                 time_backup = {}
                 try:
-                    base_path = get_base_path()
+                    import sys
+                    base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
                     time_backup = load_json_safe(os.path.join(base_path, 'daily_buy_times.json'))
                 except: pass
 
@@ -229,8 +240,9 @@ def chk_n_sell(token=None):
 
                         current_price = safe_float(stock.get('prpr', stock.get('now_prc', stock.get('cur_prc', 0))))
                         buy_price = safe_float(stock.get('avg_prc', stock.get('pchs_avg_pric', 0)))
-
-                        # [v1.9.0] 불타기 5관문 시스템 (5-Gate System) 복구
+                        is_profit_zone = True if current_price > 0 and buy_price > 0 and current_price >= buy_price else False
+                        
+                        # [v1.9.0] 불타기 5관문 시스템 (5-Gate System)
                         if not info.get('bultagi_done'):
                             # 현재 도달한 관문 상태 (없으면 1관문부터)
                             current_gate = info.get('current_gate', 1)
@@ -251,6 +263,7 @@ def chk_n_sell(token=None):
                             except: pass
 
                             # --- Gate 1: 경과 시간 ---
+                            wait_sec = int(cached_setting('bultagi_wait_sec', 10))
                             if elapsed >= wait_sec:
                                 gate_status[0] = "✅"
                                 gate_details[0] = f"{int(elapsed)}s"
@@ -261,6 +274,8 @@ def chk_n_sell(token=None):
                                 current_gate = 1 
 
                             # --- Gate 2: 현재 수익 (수익권 확인) ---
+                            current_price = float(stock.get('prpr', stock.get('now_prc', stock.get('cur_prc', 0))))
+                            buy_price = float(stock.get('avg_prc', stock.get('pchs_avg_pric', 0)))
                             is_profit = current_price > 0 and buy_price > 0 and current_price >= buy_price
                             
                             if is_profit:
@@ -285,6 +300,7 @@ def chk_n_sell(token=None):
                                 else:
                                     gate_status[2] = "🚫"
                                     gate_details[2] = f"{cur_p:.1f}"
+                                    if current_gate > 3: pass # 단계 유지 (사용자 요청에 따라 조절 가능)
                             else:
                                 gate_status[2] = "⏩" # 비활성화 시 패스
                                 if current_gate == 3: current_gate = 4
@@ -330,15 +346,14 @@ def chk_n_sell(token=None):
                             # 현재 단계 저장 (상태 유지)
                             if current_gate != info.get('current_gate'):
                                 info['current_gate'] = current_gate
-                                try:
-                                    from check_n_buy import update_stock_gate
-                                    update_stock_gate(stk_cd, current_gate)
-                                except: pass
+                                update_stock_gate(stk_cd, current_gate)
                             
                             # GUI 상태 보드 전송 (구조화 로그)
-                            if current_gate <= 5: phase_txt = f"{current_gate}관문"
-                            else: phase_txt = "진입완료"
-                            
+                            # 형식: [BULTAGI_STAT] 종목명|단계|1차|2차|3차|4차|5차
+                            if current_gate <= 5:
+                                phase_txt = f"{current_gate}관문"  # 현재 검증 중인 관문 번호
+                            else:
+                                phase_txt = "진입완료"  # 6이상 = 5관문 모두 통과 → 주문 집행됨
                             stat_payload = f"{safe_stk_nm}|{phase_txt}|{gate_status[0]}{gate_details[0]}|{gate_status[1]}{gate_details[1]}|{gate_status[2]}{gate_details[2]}|{gate_status[3]}{gate_details[3]}|{gate_status[4]}{gate_details[4]}"
                             print(f"[BULTAGI_STAT] {stat_payload}")
 
@@ -358,12 +373,8 @@ def chk_n_sell(token=None):
                                         print(f"❌ [실패] {safe_stk_nm}: 엔진 호출은 성공했으나 주문 발송에 실패했습니다.")
                                 except Exception as eng_err:
                                     print(f"❌ [오류] {safe_stk_nm}: 엔진 호출 중 예외 발생: {eng_err}")
-                        
-                        elif info.get('bultagi_done'):
-                             print(f"[BULTAGI_STAT] {safe_stk_nm}|진입완료|✅|✅|✅|✅|✅")
-
                     except Exception as e_proc:
-                         print(f"⚠️ [불타기진단오류] {e_proc}")
+                         print(f"⚠️ [처리예외] {e_proc}")
 
             if pl_rt > specific_tp or pl_rt < specific_sl:
                 if not MarketHour.is_market_open_time():
@@ -424,6 +435,7 @@ def chk_n_sell(token=None):
                 except: pass
 
                 print(f"<font color='{log_color}'>{message}</font>")
+                # [v1.9.0] 매도 완료 즉시 불타기 보드에서 삭제 요청
                 print(f"[BULTAGI_REMOVE] {stock['stk_nm']}")
 
 
@@ -434,7 +446,7 @@ def chk_n_sell(token=None):
                  from check_n_buy import remove_stock_condition
                  for c in to_remove:
                      s_name = mapping.get(c, {}).get('name', c)
-                     print(f"[BULTAGI_REMOVE] {s_name}")
+                     print(f"[BULTAGI_REMOVE] {s_name}") # 보드에서 삭제 요청
                      remove_stock_condition(c)
         except Exception as e:
              print(f"⚠️ 매핑 정리 오류: {e}")

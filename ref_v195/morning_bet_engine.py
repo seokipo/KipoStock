@@ -102,22 +102,15 @@ class MorningBetEngine:
                     continue
                     
                 now = datetime.now()
+                token = get_token()
+                
                 # 1. 08:58:00 ~ 08:59:55 사이에 스캔 수행
                 if now.hour == 8 and 58 <= now.minute <= 59 and not scanned_today:
                      print("🔍 [A전략] 장전 상위 종목 스캔 중...")
-                     def _fetch_scan_data():
-                         token = get_token()
-                         return get_morning_scan_data(token=token)
-                     
-                     # 동기 네트워크 I/O(토큰 발급, 데이터 조회)를 비동기로 실행하여 루프 차단 방지
-                     self.candidate_stocks = await asyncio.to_thread(_fetch_scan_data)
-                     
+                     self.candidate_stocks = get_morning_scan_data(token=token)
                      if self.candidate_stocks:
                          print(f"✅ [A전략] 후보 {len(self.candidate_stocks)}종목 포착 완료!")
                          scanned_today = True
-                     else:
-                         # 스캔에 실패했거나 반환값이 없을 경우 서버 부하 방지를 위해 5초(아래 1초+4초) 대기
-                         await asyncio.sleep(4)
                 
                 # 2. 09:00:00 정각에 후보 종목들 시장가 타격
                 if now.hour == 9 and now.minute == 0 and now.second <= 5 and not bet_fired:
@@ -165,11 +158,16 @@ class MorningBetEngine:
                         oprc = data.get('open', 0)
                         
                         if oprc > 0 and price > 0:
+                            # 1. 눌림(-1.0% 이하) 감지
                             if price <= oprc * 0.99:
                                 self.stocks_data.setdefault(code, {})['dipped'] = True
+                            
+                            # 2. 거래량 동반 시가 재돌파 (+0.3% & 전일 대비 거래량 비율 1.0 이상)
                             if self.stocks_data.get(code, {}).get('dipped') and price >= oprc * 1.003:
-                                self.execute_bet(code, "B_OpenReBreak", tag='MORNING_B')
-                                processed_b.add(code)
+                                vol_rate = data.get('vol_rate', 0)
+                                if vol_rate >= 1.0: # 시가 재돌파 시 최소한의 거래량 동반 확인
+                                    self.execute_bet(code, "B_OpenReBreak", tag='MORNING_B')
+                                    processed_b.add(code)
                 
                 # 리셋
                 if now.hour == 9 and now.minute >= 30: processed_b.clear()
@@ -195,11 +193,12 @@ class MorningBetEngine:
                          price = data.get('price', 0)
                          minute_highs[code] = max(minute_highs.get(code, 0), price)
                 elif now.hour == 9 and 1 <= now.minute < 30:
-                    for code, data in list(self.last_rt_data.items()):
-                        if code in self.bet_history or code in processed_c: continue
                         target_high = minute_highs.get(code, 0)
                         price = data.get('price', 0)
-                        if target_high > 0 and price >= target_high * 1.003:
+                        vol_rate = data.get('vol_rate', 0)
+                        
+                        # 09:01 이후 1분봉 고가 돌파 & 거래량 동반(평소보다 강한 수급)
+                        if target_high > 0 and price >= target_high * 1.003 and vol_rate >= 2.0:
                             self.execute_bet(code, "C_1MinHigh", tag='MORNING_C')
                             processed_c.add(code)
                 
@@ -222,12 +221,8 @@ class MorningBetEngine:
                 if now.hour == 9 and now.minute < 10:
                     for code, data in list(self.last_rt_data.items()):
                         if code in self.bet_history or code in processed_d: continue
-                        
                         vol_rate = data.get('vol_rate', 0) 
-                        # [v2.1.0] 거래량 폭증 기준 하향 (10.0 -> 2.0, 즉 200% 초과)
-                        if vol_rate >= 2.0:
-                            s_name = data.get('name', code)
-                            print(f"🔥 [D전략 포착] {s_name}({code}) 거래량 폭증! (비분: {vol_rate:.1f}배)")
+                        if vol_rate >= 10.0:
                             self.execute_bet(code, "D_VolSurge", tag='MORNING_D')
                             processed_d.add(code)
                 
@@ -244,27 +239,13 @@ class MorningBetEngine:
         jmcode = jmcode.replace('A', '')
         
         # 데이터 정규화 및 저장
-        try:
-            # [v2.1.0] 데이터 추출 시 안전하게 형변환 (값이 없을 때를 대비한 0/1.0 세팅)
-            curr_p = data.get('now_prc', data.get('clpr', data.get('price', 0)))
-            open_p = data.get('oprc', data.get('stck_oprc', data.get('open', 0)))
-            v_rate = data.get('prdy_vol_rv_rate', data.get('vol_rate', 1.0))
-            
-            norm_data = {
-                'code': jmcode,
-                'name': data.get('302', data.get('name', '알수없음')),
-                'price': abs(int(float(curr_p))) if curr_p else 0,
-                'open': abs(int(float(open_p))) if open_p else 0,
-                'vol_rate': float(v_rate) if v_rate else 1.0
-            }
-            self.last_rt_data[jmcode] = norm_data
-            
-            # [Debug] 엔진 유입 확인 (매우 빈번할 수 있으므로 주석 처리 또는 전략 가동시에만 출력 권장)
-            # if self.is_running and jmcode in self.stocks_data:
-            #     print(f"📥 [Morning Data] {jmcode} 유입: {norm_data['price']}원")
-        except Exception as e:
-            # print(f"⚠️ [MorningBet] 데이터 정규화 오류: {e} (Data: {data})")
-            pass
+        norm_data = {
+            'code': jmcode,
+            'price': abs(int(data.get('now_prc', data.get('clpr', 0)))),
+            'open': abs(int(data.get('oprc', data.get('stck_oprc', 0)))),
+            'vol_rate': float(data.get('prdy_vol_rv_rate', data.get('vol_rate', 1.0)))
+        }
+        self.last_rt_data[jmcode] = norm_data
 
     def execute_bet(self, jmcode, strategy_name, tag='MORNING'):
         """최종 매수 실행 (리스크 최소화: 1주 고정)"""

@@ -1,0 +1,32 @@
+372: # [v5.6.5] 30초마다 API 수익 데이터와 실시간 차트 동기화 (HTS 매매 대응)
+1780: # ✅ [v1.8.9] 매매 내역 HTS 동기화용 백그라운드 워커
+1790: """별도 스레드에서 asyncio 루프를 돌려 HTS API 호출 (GUI 프리징 방지)"""
+1917: """[v1.8.9] 1단계: 로컬 DB 즉시 로드 -> 2단계: HTS 비동기 동기화 (GUI 프리징 방지)"""
+1936: # [2단계] HTS 최신 데이터 비동기 동기화 시작 (백그라운드 스레드)
+1943: self._hts_worker = HistoryWorker(main_win.worker.chat_command)
+1944: self._hts_worker.done_signal.connect(self._on_hts_done)
+1945: self._hts_worker.start()
+1954: def _on_hts_done(self, trades):
+1955: """HTS 동기화 완료 후 호출되는 콜백 (UI 갱신)"""
+1961: # [v1.9.8.2] HTS에서 가져온 데이터를 DB에 병합 (중복 제외)
+1965: if kipo_db.sync_trade_from_hts(t):
+1975: print(f"✅ [History] HTS 신규 매매 {new_sync_count}건 병합 완료")
+1980: print(f"⚠️ [HistoryDialog] _on_hts_done 오류: {e}")
+2497: 'HTS': 'HTS', 'BULTAGI': '불타기', 'MORNING': '시초가', 'ACCEL': '가속',
+2511: 'HTS': '#8a2be2', '불타기': '#f39c12', '시초가': '#e67e22', '가속': '#e91e63',
+3365: QLineEdit#input_hts_val { background-color: #e9ecef; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #495057; }
+3429: QLineEdit#input_hts_val { background-color: #2a2a2a; border: 2px solid #fd7e14; border-radius: 5px; padding: 2px; font-weight: bold; font-size: 13px; color: #aaa; }
+3915: # HTS - [v6.6.6] 불필요한 입력창 숨김 및 버튼 스타일 강화
+3916: self.input_hts_dummy, self.btn_hts_mode, self.input_hts_tp, self.input_hts_sl = add_strat_row("🖐 직접/HTS 관리", "#fd7e14", "hts", 60)
+3917: self.input_hts_dummy.hide()
+3918: self.btn_hts_mode.setCheckable(True); self.btn_hts_mode.setText("HTS")
+3919: self.btn_hts_mode.setFixedSize(60, 26) # [v6.9.1] 다른 입력박스(50-60px)와 높이(26px)에 맞춰 크기 정밀 조정
+3920: self.btn_hts_mode.setStyleSheet("""
+4924: if not any(important in text for important in ["[VI", "[매수", "[매도", "[HTS"]):
+4991: actual_buy_keywords = ["매수체결", "추가매수", "HTS매수", "HTS매매", "HTS외부감지", "직접매매", "불타기진입", "RankScout", "Ranking Scout"]
+5019: if "HTS매수" in text or "직접매매" in text: self.last_buy_color = "#ff9800"
+5527: load_strategy_tpsl('HTS', self.input_hts_tp, self.input_hts_sl)
+5778: h_tp = f"{sanitize_tp(self.input_hts_tp.text())}"; h_sl = f"{sanitize_sl(self.input_hts_sl.text())}"
+5784: self.input_hts_tp.setText(h_tp); self.input_hts_sl.setText(h_sl)
+5800: 'HTS': {'tp': safe_float(h_tp, 1.0), 'sl': safe_float(h_sl, -1.0)}
+5874: 'HTS': {'tp': safe_float(h_tp, 1.0), 'sl': safe_float(h_sl, -1.0)}

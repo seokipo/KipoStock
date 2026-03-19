@@ -15,11 +15,7 @@ class TradeLogger:
         self.sync_required = False # [v5.5] API 리포트 차트 강제 동기화 플래그
         
         # [신규] 경로 설정
-        # [V2.4.6] 사용자 요청에 따른 데이터 고정 경로 적용
-        fixed_path = r"D:\Work\Python\AutoBuy\ExeFile\KipoStockAi_V1.0"
-        if os.path.exists(fixed_path):
-            self.script_dir = fixed_path
-        elif getattr(sys, 'frozen', False):
+        if getattr(sys, 'frozen', False):
             self.script_dir = os.path.dirname(sys.executable)
         else:
             self.script_dir = os.path.dirname(os.path.abspath(__file__))

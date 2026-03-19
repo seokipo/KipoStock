@@ -7,7 +7,7 @@ import shutil
 # 이 스크립트가 우리의 새로운 전설의 시작을 만들어줄 거야! ✨🎨
 
 def build_kipo():
-    VERSION = "AI_V2.4.0"
+    VERSION = "AI_V1.9.10"
 
     target_file = "Kipo_GUI_main.py"
 
@@ -34,7 +34,8 @@ def build_kipo():
         dist_path = os.path.join("dist", f"KipoStock_{VERSION}.exe")
         if os.path.exists(dist_path):
             print(f"✅ 빌드 성공: {dist_path}")
-            exe_folder = "ExeFile"
+            # 사용자 요청에 따라 특정 폴더로 복사
+            exe_folder = r"D:\Work\Python\AutoBuy\ExeFile\KipoStockAi_V1.0"
             if not os.path.exists(exe_folder):
                 os.makedirs(exe_folder)
             shutil.copy(dist_path, os.path.join(exe_folder, f"KipoStock_{VERSION}.exe"))

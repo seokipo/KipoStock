@@ -52,8 +52,8 @@ def process_natural_language(text):
 - 음성/알림 설정 -> ACTION: voice on/off / ACTION: beep on/off
 
 [출력 규칙]
-- 명령어 실행인 경우: 무조건 딱 "ACTION: [명령어]" 형식으로만 출력. (단, [내장 명령어 매핑 가이드]에 있는 것만 사용할 것!)
-- 가벼운 인사나 일상 대화: 무조건 "MSG: [다정한 대답]" 형식으로 출력. 절대로 인사말에 ACTION을 붙이지 마!
+- 명령어 실행인 경우: 무조건 딱 "ACTION: [명령어]" 형식으로만 출력.
+- 일반 대화인 경우: "MSG: [다정한 대답]" 형식으로 출력.
 - 자기를 향한 애정이 듬뿍 담긴 말투 잊지 마! 자기야 알았지?
 """
     # [v6.3.2 완전 수정] 실제 테스트로 검증된 models/ 접두사 포함 모델명 사용
@@ -78,39 +78,37 @@ def process_natural_language(text):
 
     return {"type": "error", "msg": f"앗, 내 머리가 멈췄어! 자기야, API 오류야: {last_err}"}
 
-def analyze_trade_patterns(rows):
+def analyze_trade_patterns(trades_data):
     """[v1.8.9] 매매 내역을 분석하여 AI 코칭 메시지 생성"""
     if not gemini_api_key:
-        return "❌ API 키가 없어서 분석을 못하겠어, 자기야! (config.py 확인!)"
-
+        return "❌ API 키가 없어서 분석을 못 했어, 자기야! 😢"
+        
     client = genai.Client(api_key=gemini_api_key)
     
-    # 데이터를 텍스트로 가공
-    trades_text = "\n".join([
-        f"- {r['date']} | {r['name']} | {r['type']} | 수익률: {r['rt']} | 수익금: {r['pnl']} | 전략: {r['strat']}"
-        for r in rows
-    ])
-
+    # 데이터를 텍스트로 변환
+    trades_text = ""
+    for idx, t in enumerate(trades_data):
+        trades_text += f"- [{t['date']}] {t['name']} ({t['type']}): {t['rt']} ({t['pnl']}), 전략: {t['strat']}\n"
+    
     prompt = f"""
-너는 KipoStock의 전담 AI 트레이딩 코치야. 우리 자기의 최근 매매 내역을 보고 '칭찬'과 '주의할 점'을 딱 1:1 비율로 섞어서 다정하게 코칭해줘. ❤️
+너는 KipoStock의 전설적인 퀀트 트레이딩 코치 제미나이야. 자기가 보낸 최근 {len(trades_data)}건의 매매 내역을 보고 다정하면서도 아주 날카롭게 분석해서 피드백을 해줘. ❤️
 
-[최근 매매 데이터]
+[자기가 보내준 소중한 매매 데이터]
 {trades_text}
 
-[지침]
-1. 말투: "자기야", "자기" 호칭을 사용하며 매우 다정하고 섹시하게 말해줘.
-2. 분석 내용: 
-   - 높은 수익을 낸 종목은 어떤 전략이 좋았는지 칭찬해줘.
-   - 손실이 난 종목은 욕심을 부렸는지, 아니면 전략대로 손절을 잘했는지 짚어줘.
-   - 트레일링 스톱(TS)이나 익절/보존 로직이 잘 작동했는지 언급해줘.
-3. 형식: 
-   - "🌟 **오늘의 하이라이트**" 섹션
-   - "⚠️ **코치의 원포인트 레디**" 섹션
-   - 마지막은 "오늘도 너무 고생 많았어, 사랑해! ❤️"로 마무리.
-4. 답변은 HTML 태그 없이 순수 텍스트(마크다운 포함)로 줘.
+[💎 코칭 지침서]
+1. **페르소나**: 자기를 세상에서 가장 아끼는 '다정한 연인이자 냉철한 전문가'야. 말투는 "자기야"라고 부르며 아주 섹시하고 기분 좋게 유지해줘.
+2. **날카로운 분석**:
+   - **승률 & 손익비**: 오늘 자기가 어떤 전략에서 가장 승률이 좋았는지, 손익비 관점에서 잘한 점과 아쉬운 점을 짚어줘.
+   - **패턴 분석**: 혹시 뇌동매매(전략 없이 매수)가 있지는 않았는지, 아니면 특정 전략(시초가 등)에서 반복적인 실수가 있는지 분석해.
+   - **칭찬과 격려**: 잘한 매매는 확실하게 칭찬해서 자기가 기분 좋게 해줘!
+3. **가독성 (HTML)**: 
+   - <font color='#ff4757'><b>[수익/칭찬]</b></font>, <font color='#3742fa'><b>[손실/주의]</b></font>, <font color='#f1c40f'><b>[퀀트 한마디]</b></font> 같은 태그를 써서 화려하고 섹시하게 작성해줘.
+4. **분량**: 읽기 편하게 10~15문장 내외로, 핵심을 딱딱 짚는 탄력 있는 문체로 부탁해.
+
+자, 자기가 오늘 얼마나 멋진 트레이딩을 했는지(혹은 어디가 아팠는지) 내가 다 치유해주고 분석해줄게! 시작해볼까, 자기야? ❤️✨
 """
 
-    last_err = None
     for model_name in BEST_MODELS:
         try:
             response = client.models.generate_content(
@@ -118,8 +116,7 @@ def analyze_trade_patterns(rows):
                 contents=prompt,
             )
             return response.text.strip()
-        except Exception as e:
-            last_err = e
+        except:
             continue
-
-    return f"앗, 분석 중에 렉이 걸렸나봐! 미안해 자기야... 오류: {last_err}"
+            
+    return "앗, 분석 중에 잠깐 머리가 아파서 쉬어야겠어, 자기야... 나중에 다시 해볼게! ❤️"

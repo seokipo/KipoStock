@@ -8,7 +8,7 @@ from buy_stock import fn_kt10000 as buy_stock
 from stock_info import fn_ka10001 as stock_info, get_current_price
 from acc_val import fn_kt00004 as get_my_stocks
 from tel_send import tel_send
-from get_setting import cached_setting, get_base_path
+from get_setting import cached_setting
 from login import fn_au10001 as get_token
 import asyncio
 import subprocess
@@ -54,8 +54,11 @@ def _process_save_mapping(data):
         mode = data['mode']
         seq = data.get('seq') # [신규] 시퀀스 정보
         
-        # [v2.4.6] 경로 로직 통합 (get_base_path 사용)
-        base_path = get_base_path()
+        # 경로 로직 통합
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
         
         mapping_file = os.path.join(base_path, 'stock_conditions.json')
         mapping = load_json_safe(mapping_file)
@@ -155,16 +158,9 @@ def update_account_cache(token):
         names = {}
         
         my_stocks_data = get_my_stocks(token=token)
-        if my_stocks_data is None:
-            # [Fix v3.0.3] API 통신 실패 시 기존 데이터를 날리지 않고 유지하여 UI 증발 방지
-            return
-
         my_stocks = []
+        
         if isinstance(my_stocks_data, dict):
-            # [v3.0.3] 만약 에러 응답(msg가 있고 stocks가 없는 경우)이면 업데이트 스킵
-            if 'stocks' not in my_stocks_data and 'msg' in my_stocks_data:
-                print(f"⚠️ [계좌갱신] API 응답 에러 (데이터 유지): {my_stocks_data.get('msg')}")
-                return
             my_stocks = my_stocks_data.get('stocks', [])
             # [신규] 계좌번호 확보 (예수금 조회 실패 대비)
             if not ACCOUNT_CACHE['acnt_no']:
@@ -238,7 +234,8 @@ def update_account_cache(token):
                 # [v6.2.8] 매핑 누락 자동 복구 로직
                 # stock_conditions.json(mapping)에 없지만 보유 중인 종목을 daily_buy_times.json 기반으로 구제
                 try:
-                    base_path = get_base_path()
+                    import sys
+                    base_path = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
                     mapping_file = os.path.join(base_path, 'stock_conditions.json')
                     buy_times_file = os.path.join(base_path, 'daily_buy_times.json')
                     
@@ -403,8 +400,8 @@ def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
     if is_error: log_line += " ❌"
     print(log_line)
 
-def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None, vi_type=None):
-    stk_cd = stk_cd.replace('A', '') 
+def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None):
+    stk_cd = str(stk_cd).replace('A', '')[:6] 
     
     # [Debug] 매수 진입로깅 (v1.2.3 제거)
     # print(f"🔍 [진입] chk_n_buy: {stk_cd}, seq={seq}, name={seq_name}")
@@ -427,61 +424,11 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         token = token if token else get_token()
 
         max_stocks = cached_setting('max_stocks', 20) 
-        # [신규 v2.0.0] Turbo VI (SYSTEM_VI) 정밀 필터링 로직
-        if seq == 'SYSTEM_VI':
-            s_name = get_stock_name_safe(stk_cd, token)
-            
-            # 1단계: 가격대 필터링
-            min_p = int(cached_setting('bultagi_turbo_vi_min_price', '0').replace(',', ''))
-            max_p = int(cached_setting('bultagi_turbo_vi_max_price', '99999999').replace(',', ''))
-            
-            # 현재가 확인 (trade_price가 없으면 API 호출)
-            if not trade_price or int(trade_price) == 0:
-                _, trade_price = get_current_price(stk_cd, token=token)
-            
-            cur_p = int(trade_price) if trade_price else 0
-            
-            if cur_p < min_p:
-                msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 현재가({cur_p:,}원) < 최소설정({min_p:,}원)</font>"
-                print(msg)
-                return
-            if cur_p > max_p:
-                msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 현재가({cur_p:,}원) > 최대설정({max_p:,}원)</font>"
-                print(msg)
-                return
-
-            # 2단계: VI 타입 필터링 (1:정적, 2:동적)
-            use_static = cached_setting('bultagi_turbo_vi_static', True)
-            use_dynamic = cached_setting('bultagi_turbo_vi_dynamic', True)
-            
-            vi_t_txt = "정적" if vi_type == '1' else ("동적" if vi_type == '2' else "알수없음")
-            
-            if vi_type == '1' and not use_static:
-                msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 정적 VI 필터 비활성 스킵</font>"
-                print(msg)
-                return
-            if vi_type == '2' and not use_dynamic:
-                msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 동적 VI 필터 비활성 스킵</font>"
-                print(msg)
-                return
-                
-            # 3단계: 제외 잡주 정밀 필터
-            if cached_setting('bultagi_turbo_ex_etf', True):
-                if any(x in s_name for x in ['KODEX', 'TIGER', 'KBSTAR', 'HANARO', 'KOSEF', 'ARIRANG', 'SOL', 'ACE', 'TRUE', 'TIMEFOLIO', 'FOCUS', 'HK', '마이티', '파워', 'ETN']):
-                    print(f"📡 <font color='#888888'>[Turbo 스킵] {s_name} (ETF/ETN 제외)</font>")
-                    return 
-            if cached_setting('bultagi_turbo_ex_spac', True):
-                if '스팩' in s_name or ('제' in s_name and '호' in s_name):
-                    print(f"📡 <font color='#888888'>[Turbo 스킵] {s_name} (스팩 제외)</font>")
-                    return
-            if cached_setting('bultagi_turbo_ex_prefer', True):
-                if s_name.endswith('우') or s_name.endswith('우B') or s_name.endswith('우C'):
-                    print(f"📡 <font color='#888888'>[Turbo 스킵] {s_name} (우선주 제외)</font>")
-                    return
-            
-            # [통과] 쿨타임 패스
-            print(f"🚀 <font color='#00e5ff'><b>[Turbo Pass]</b> {s_name}({stk_cd}) 필터 통과! ({cur_p:,}원/{vi_t_txt}) 즉시 진입!</font>")
-        
+        # [v1.5.9] VI 해제(SYSTEM_VI)는 쿨타임을 무시하고 즉시 처리 (긴급 상황)
+        if (seq == 'SYSTEM_VI'):
+             s_name = get_stock_name_safe(stk_cd, token)
+             # [신규] 긴급 진입 로그 상세화
+             print(f"📡 <font color='#00e5ff'><b>[SYSTEM_VI]</b> {s_name} ({stk_cd}) VI 해제 즉시 진입 시도! (쿨타임 패스)</font>")
         elif (current_time - last_entry < 5):
             s_name = get_stock_name_safe(stk_cd, token)
             return 
@@ -489,11 +436,12 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         # A. 보유 종목 확인 (캐시 기반)
         if stk_cd in ACCOUNT_CACHE['holdings']:
             s_name = get_stock_name_safe(stk_cd, token)
-            # [신규 v6.9.5] 보유 중인데 VI 해제 신호가 왔다면 "VI 탈출 불타기"로 전환
+            # [v1.9.1] VI 해제 신호 시 이미 보유 중이라도 1주 추가 매수 (불타기) 무조건 실행
             if seq == 'SYSTEM_VI':
-                print(f"🔥 <font color='#f1c40f'><b>[Turbo VI]</b> {s_name} 보유 중 확인! 즉시 추가 매수(불타기) 시도...</font>")
-                turbo_type = cached_setting('bultagi_turbo_vi_type', 'current')
-                add_buy(stk_cd, token=token, seq_name='VI해제탈출', qty=1, source='VI_TURBO', price_type=turbo_type)
+                print(f"🔥 <font color='#f1c40f'><b>[Turbo VI]</b> {s_name} 보유 확인! 1주 추가 매수(VI탈출용) 즉시 실행!</font>")
+                # add_buy 대신 직접 buy_stock을 호출하여 1주를 확실히 주문
+                buy_stock(stk_cd, 1, '0', trde_tp='3', token=token) # 시장가 1주
+                tel_send(f"🚀 [VI탈출매수] {s_name} 1주 주문 완료!", msg_type='log')
                 return
 
             # [v6.4.5] 사용자 요청: 이미 보유 중인 종목은 매수 안 함
@@ -588,7 +536,6 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
             # pretty_log("📍", "현재가", f"{current_price:,}원", stk_cd)
 
         try:
-            qty = 1 # [Fix] 기본값 미리 할당
             if mode == 'qty':
                 # 고정 수량
                 qty = int(val_str.replace(',', ''))
@@ -764,12 +711,11 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
 
         # [필수] 추가 매수(불타기)이므로 보유 중인 종목인 경우에만 진행 (0->1은 chk_n_buy가 담당)
         current_holdings = ACCOUNT_CACHE['holdings'].get(stk_cd, 0)
-        # [v2.2.7] Ranking Scout는 추가 매수 형식이지만 첫 진입이 주 목적이므로 0주여도 허용
         if current_holdings <= 0:
             # [Fix] 캐시 지연 방어: chk_n_sell에서 호출되었다면 보유 중일 확률이 매우 높으므로 로그만 남기고 일단 진행
-            # [v1.5.7 / v2.2.7] 시초가 추매나 VI터보, 정찰병 진입 시에는 0주여도 허용 (첫 진입 대응)
-            if source in ['BULTAGI', 'VI_TURBO', 'RankScout'] or source.startswith('MORNING'):
-                print(f"ℹ️ [{source}] 캐시상 보유 수량 0주이나 진입 신호 확인되어 매수 시도. (첫 진입 보류 해제)")
+            # [v1.5.7 수정] 시초가 추매나 VI터보 진입 시에는 0주여도 허용 (첫 진입 대응)
+            if source in ['BULTAGI', 'VI_TURBO'] or source.startswith('MORNING'):
+                print(f"ℹ️ [{source}] 캐시상 보유 수량 0주이나 진입 신호 확인되어 매수 시도. (캐시지연 방어 및 첫 진입 대응)")
             else:
                 return False
 
@@ -830,10 +776,6 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
                 tel_msg = f"🌅 [시초가추매 완료] {s_name} {qty}주 추가 체결!"
                 m_type = source.split('_')[-1] # A, B, C, D
                 voice_msg = f"{s_name} 시초가 {m_type} 추가매수"
-            elif source == 'RankScout':
-                log_msg = f"<font color='#ffbb33'>🚩<b>[정찰병 투입]</b> {s_name} ({final_price:,}원/{qty}주)</font>"
-                tel_msg = f"🚩 [정찰병 완료] {s_name} {qty}주 즉시 매수!"
-                voice_msg = f"{s_name} 정찰병 투입"
             else:
                 log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수 성공]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
                 tel_msg = f"🔥 [추가매수 완료] {s_name} {qty}주 추가 체결! (수급폭발)"
@@ -879,11 +821,6 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
         if spec_tp == 0: spec_tp = 12.0
         if spec_sl == 0: spec_sl = -1.5
         
-        # [신규] RankScout 전용 기본값 (정찰병은 보수적 대응)
-        if strat == 'RankScout':
-            spec_tp = 20.0 # 정찰병은 크게 본다
-            spec_sl = -3.0
-        
         # 새 데이터 구성 (기존 데이터 위에 덮어쓰기)
         new_info = existing_info.copy()
         
@@ -928,7 +865,10 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
 # [신규] 특정 종목의 최고 수익률(Peak)만 원자적으로 업데이트 (데이터 유실 방지)
 def update_stock_peak_rt(code, peak_rt):
     try:
-        base_path = get_base_path()
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
             
         mapping_file = os.path.join(base_path, 'stock_conditions.json')
         
@@ -944,11 +884,32 @@ def update_stock_peak_rt(code, peak_rt):
     except Exception as e:
         print(f"⚠️ Peak RT 업데이트 실패: {e}")
 
+def update_stock_gate(code, gate):
+    """[신규 v1.9.0] 불타기 진행 단계(Gate)를 원자적으로 업데이트합니다."""
+    try:
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        mapping_file = os.path.join(base_path, 'stock_conditions.json')
+        mapping = load_json_safe(mapping_file)
+        
+        if code in mapping:
+            mapping[code]['current_gate'] = gate
+            save_json_safe(mapping_file, mapping)
+            
+    except Exception as e:
+        print(f"⚠️ Gate 업데이트 실패: {e}")
+
 def remove_stock_condition(code):
     """[신규 v1.3.4] 매도 완료 시 해당 종목의 매핑 정보를 삭제 (자기 요청 ❤️)"""
     try:
         code = code.replace('A', '')
-        base_path = get_base_path()
+        if getattr(sys, 'frozen', False):
+            base_path = os.path.dirname(sys.executable)
+        else:
+            base_path = os.path.dirname(os.path.abspath(__file__))
             
         mapping_file = os.path.join(base_path, 'stock_conditions.json')
         mapping = load_json_safe(mapping_file)

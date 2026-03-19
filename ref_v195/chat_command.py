@@ -625,66 +625,6 @@ class ChatCommand:
             log_and_tel(f"❌ <b>리포트 생성 중 오류 발생:</b> {e}", parse_mode='HTML')
             return False
 
-    async def report_range_command(self, days=7, title="[기간별 통계]"):
-        """[신규 v2.2.1] 주간/월간 DB 기반 통계 리포트"""
-        try:
-            from datetime import timedelta
-            end_date = datetime.now().strftime("%Y%m%d")
-            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
-            
-            log_and_tel(f"⏳ <b>{title}:</b> {start_date} ~ {end_date} 데이터를 분석 중이야...")
-            
-            from kipodb import kipo_db
-            trades = kipo_db.get_trades_by_range(start_date, end_date)
-            
-            if not trades:
-                tel_send(f"📭 {start_date} ~ {end_date} 기간에 기록된 매매 데이터가 없어, 자기야! (HTS 싱크 필요)")
-                return
-            
-            # 통계 계산
-            total_buy = sum(t['amount'] for t in trades if t['type'] == 'BUY')
-            total_sell = sum(t['amount'] for t in trades if t['type'] == 'SELL')
-            total_tax = sum(t['tax'] for t in trades if t['type'] == 'SELL')
-            total_pnl = sum(t['pnl_amt'] for t in trades if t['type'] == 'SELL')
-            
-            win_count = len([t for t in trades if t['type'] == 'SELL' and t['pnl_amt'] > 0])
-            lose_count = len([t for t in trades if t['type'] == 'SELL' and t['pnl_amt'] <= 0])
-            win_rate = (win_count / (win_count + lose_count) * 100) if (win_count + lose_count) > 0 else 0
-            
-            # 전략별 통계
-            strat_stats = {}
-            for t in trades:
-                if t['type'] == 'SELL':
-                    sm = t['strat_mode'] or 'none'
-                    if sm not in strat_stats: 
-                        strat_stats[sm] = {'pnl': 0, 'count': 0, 'wins': 0}
-                    strat_stats[sm]['pnl'] += t['pnl_amt']
-                    strat_stats[sm]['count'] += 1
-                    if t['pnl_amt'] > 0: strat_stats[sm]['wins'] += 1
-
-            # 메시지 구성
-            pnl_color = "#ff4444" if total_pnl >= 0 else "#33b5e5"
-            msg = f"📊 <b>{title} 리포트</b>\n"
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            msg += f"📅 기간: {start_date} ~ {end_date}\n"
-            msg += f"💰 <b>총 누적 손익 :</b> <font color='{pnl_color}'><b>{int(total_pnl):+,}원</b></font>\n"
-            msg += f"📈 <b>전체 승률 :</b> <b>{win_rate:.1f}%</b> ({win_count}승 {lose_count}패)\n"
-            msg += "────────────────────────\n"
-            
-            msg += "📂 <b>[ 주요 전략별 성적 ]</b>\n"
-            sorted_strats = sorted(strat_stats.items(), key=lambda x: x[1]['pnl'], reverse=True)
-            for sm, sdata in sorted_strats:
-                s_wr = (sdata['wins'] / sdata['count'] * 100) if sdata['count'] > 0 else 0
-                s_color = "#ff4444" if sdata['pnl'] >= 0 else "#33b5e5"
-                msg += f"🔹 {sm:<10}: <font color='{s_color}'><b>{int(sdata['pnl']):+,}원</b></font> ({s_wr:.1f}%)\n"
-            
-            msg += "━━━━━━━━━━━━━━━━━━━━━━━━"
-            log_and_tel(msg, parse_mode='HTML')
-            
-        except Exception as e:
-            print(f"❌ report_range_command 오류: {e}")
-            tel_send(f"❌ 리포트 생성 실패: {e}")
-
     def get_pnl_timeline(self):
         """실시간 수익 그래프를 위한 누적 손익 타임라인 데이터를 반환합니다."""
         try:
@@ -699,7 +639,7 @@ class ChatCommand:
             print(f"⚠️ P&L 타임라인 추출 실패: {e}")
             return []
 
-    async def today(self, sort_mode=None, is_reverse=False, summary_only=False, send_telegram=False, return_text=False, return_stats=False, sync_only=False):
+    async def today(self, sort_mode=None, is_reverse=True, summary_only=False, send_telegram=False, return_text=False, return_stats=False, sync_only=False):
         """당일 매매 일지 조회 (Hybrid: ka10170 전체목록 + ka10077 상세세금 + ka10076 체결시간복원 + V5.5 API동기화)"""
         if not sync_only:
             print(f"▶ Today 명령어 수신 (모드: {sort_mode}, 역순: {is_reverse}, 요약: {summary_only}, 텔레그램전송: {send_telegram})")
@@ -709,12 +649,26 @@ class ChatCommand:
                 
             loop = asyncio.get_event_loop()
             
+            # 1. 당일 매매 일지 (ka10170) - 기본 리스트
             res_list = await loop.run_in_executor(None, get_trade_diary, self.token)
             diary_list = res_list.get('list', [])
             
-            if not diary_list:
-                tel_send("📭 오늘 매매 내역이 없습니다.")
-                return
+            # 2. 당일 실현 손익 상세 (ka10077) - 정밀 수익/세금 데이터
+            realized_map = {}
+            try:
+                realized_res = await loop.run_in_executor(None, get_realized_detail, self.token)
+                realized_list = realized_res.get('list', [])
+                if isinstance(realized_list, dict): realized_list = [realized_list]
+                for r_item in realized_list:
+                    r_code = r_item.get('stk_cd', '').replace('A', '')
+                    if r_code:
+                        realized_map[r_code] = r_item
+            except Exception as e_real:
+                print(f"⚠️ [ka10077] 실현손익 연동 실패: {e_real}")
+
+            if not diary_list and not realized_map:
+                if not sync_only: tel_send("📭 오늘 매매 내역이 없습니다.")
+                return []
 
             exec_time_map = {}
             try:
@@ -752,6 +706,9 @@ class ChatCommand:
                             if v is not None and str(v).strip() != "": return v
                         return 0
 
+                    # realized_map(ka10077) 데이터가 있으면 우선 적용 (수익금, 수익률, 세금)
+                    r_data = realized_map.get(code, {})
+
                     mapping_val = cond_mapping.get(code, "직접매매")
                     cond_name = "직접매매"
                     strat_key = "none"
@@ -763,22 +720,23 @@ class ChatCommand:
                     if isinstance(mapping_val, dict):
                         cond_name = mapping_val.get('name', "직접매매")
                         strat_key = mapping_val.get('strat', 'none')
-                        # [v1.3.1] 전략 맵 확장
+                        # [v1.3.1 / v1.8.9 보강] 전략 맵 확장 및 한글화 강화
                         strat_map = {
                             'qty': '1주', 'amount': '금액', 'percent': '비율', 
-                            'HTS': 'HTS', 'BULTAGI': '불타기', 'MORNING': '시초가', 'ACCEL': '가속'
+                            'HTS': 'HTS', 'BULTAGI': '불타기', 'MORNING': '시초가', 'ACCEL': '가속',
+                            'CLOSING_BET': '종가'
                         }
                         strat_nm = strat_map.get(strat_key)
                         
-                        # [v1.3.1] 전략명이 없으면 조건명(cond_name)을 표시하도록 폴백
-                        if not strat_nm:
-                            strat_nm = cond_name if cond_name != '직접매매' else '--'
+                        # [v1.8.9] 전략명이 없거나 qty인 경우 보정
+                        if not strat_nm or strat_key == 'qty':
+                            strat_nm = '1주' if strat_key == 'qty' else (cond_name if cond_name != '직접매매' else '--')
                         
                         if not found_buy_time:
                             found_buy_time = mapping_val.get('time')
                     else:
                         cond_name = str(mapping_val)
-                        strat_nm = cond_name # 직접매매가 아니면 cond_name(조건명)을 전략명으로 사용
+                        strat_nm = cond_name if cond_name != '직접매매' else '--'
                     
                     is_restored = False
                     if not found_buy_time:
@@ -812,33 +770,59 @@ class ChatCommand:
                     if is_overnight:
                         if found_buy_time: final_buy_time = f"전일 {found_buy_time[:5]}"
                         else: final_buy_time = "[전일]"
-                    
+
+                    # [v1.8.9] 매수/매도 행 분리 (구분 누락 해결)
+                    buy_qty_val = int(float(val(['buy_qty', 'tot_buy_qty'])))
                     sel_qty_val = int(float(val(['sell_qty', 'tot_sel_qty', 'sel_qty'])))
                     
-                    # [v1.9.8.1] 매매 타입(BUY/SELL) 결정 로직 강화
-                    # 매도 수량이 있으면 SELL, 없으면 BUY (단, 미체결 상태는 매수 기준)
-                    t_type = 'SELL' if sel_qty_val > 0 else 'BUY'
-
-                    row = {
+                    base_row = {
                         'code': code,
                         'name': item.get('stk_nm', '--'),
-                        'type': t_type,  # [Fix v1.9.8.1] 누락된 매매 구분 필드 복구
-                        'buy_time': final_buy_time,
-                        'buy_avg': int(float(val(['buy_avg_pric', 'buy_avg_prc']))),
-                        'buy_qty': int(float(val(['buy_qty', 'tot_buy_qty']))),
-                        'buy_amt': buy_amt_val,
-                        'sel_avg': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric']))),
-                        'sel_qty': sel_qty_val,
-                        'sel_amt': int(float(val(['sell_amt', 'tot_sel_amt', 'sel_amt']))),
-                        'tax': int(float(val(['cmsn_alm_tax', 'cmsn_tax', 'tax']))),
-                        'pnl': int(float(val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl']))),
-                        'pnl_rt': float(val(['prft_rt', 'pl_rt', 'profit_rate'])),
                         'cond_name': cond_name,
                         'strat_key': strat_key,
                         'strat_nm': strat_nm,
                         'is_overnight': is_overnight
                     }
-                    processed_data.append(row)
+
+                    # 1. 매수 행 추가
+                    if buy_qty_val > 0:
+                        buy_row = base_row.copy()
+                        buy_row.update({
+                            'type': 'BUY',
+                            'buy_time': final_buy_time,    # [Fix] 정렬용 키 유지
+                            'trade_time': final_buy_time,
+                            'qty': buy_qty_val,
+                            'price': int(float(val(['buy_avg_pric', 'buy_avg_prc']))),
+                            'amount': buy_amt_val,
+                            'buy_amt': buy_amt_val,        # 합산 로직용
+                            'sel_amt': 0,                  # 합산 로직용
+                            'tax': 0, 'pnl': 0, 'pnl_rt': 0
+                        })
+                        processed_data.append(buy_row)
+
+                    # 2. 매도 행 추가 (수익금/수익률 포함)
+                    if sel_qty_val > 0:
+                        sel_row = base_row.copy()
+                        # [v1.8.9] ka10077 매핑을 통한 정하성 보정
+                        pnl_val = int(float(r_data.get('pnl_amt', val(['pl_amt', 'pnl_amt', 'rznd_pnl', 'tdy_sel_pl']))))
+                        pnl_rt_val = float(r_data.get('pnl_rt', val(['prft_rt', 'pl_rt', 'profit_rate'])))
+                        tax_val = int(float(r_data.get('cnsm_tax', val(['cmsn_alm_tax', 'cmsn_tax', 'tax']))))
+                        
+                        sel_row.update({
+                            'type': 'SELL',
+                            'buy_time': "장중" if not is_overnight else final_buy_time, # 정렬용
+                            'trade_time': "장중" if not is_overnight else final_buy_time,
+                            'qty': sel_qty_val,
+                            'price': int(float(val(['sel_avg_pric', 'sel_avg_prc', 'sell_avg_pric']))),
+                            'amount': int(float(val(['sell_amt', 'tot_sel_amt', 'sel_amt']))),
+                            'buy_amt': 0,                                             # 합산 로직용
+                            'sel_amt': int(float(val(['sell_amt', 'tot_sel_amt', 'sel_amt']))),
+                            'tax': tax_val,
+                            'pnl': pnl_val,
+                            'pnl_rt': pnl_rt_val
+                        })
+                        processed_data.append(sel_row)
+
                 except Exception as e: 
                     print(f"⚠️ [Today] 종목({item.get('stk_nm')}) 파싱 스킵: {e}")
                     continue
@@ -951,14 +935,7 @@ class ChatCommand:
             running_pnl = 0
             
             # 시간순으로 정렬된 데이터를 바탕으로 수익 정점 기록
-            # [v2.2.6] 타임머신 차트 방지: "전일" 데이터를 리스트 상단(과거)으로 정렬
-            def get_sort_time_key(r):
-                t = r.get('buy_time', '99:99:99')
-                # '전일'이 포함된 경우 장 시작 전(00:xx)으로 간주하여 앞에 오도록 정렬
-                if '전일' in t or '[' in t:
-                    return f"00:{t.replace('[', '').replace(']', '').replace('전일 ', '').strip()}"
-                return f"11:{t}"
-            time_sorted_data = sorted(processed_data, key=get_sort_time_key)
+            time_sorted_data = sorted(processed_data, key=lambda x: x['buy_time'])
             for r in time_sorted_data:
                 running_pnl += r['pnl']
                 if running_pnl > peak_pnl:
@@ -1557,8 +1534,6 @@ class ChatCommand:
   - today jun : 전략순 (매수전략)
   - today sic : 조건식순 (검색식명)
   - today son : 손익순 (손익금액)
-• sync : HTS 매매 내역을 로컬 DB로 동기화
-• report week/month : 주간/월간 통계 리포트
 • AI NEWS ALL : 시장 전반 AI 브리핑
 • AI NEWS {키워드} : 종목/테마 AI 뉴스 분석
 • exp : 로그 데이터 폴더(LogData) 열기
@@ -1572,15 +1547,14 @@ class ChatCommand:
 • msg {메세지} : 텔레그램 메세지 직접 전송"""
         tel_send(help_msg)
 
-    async def process_command(self, text, is_ai=False):
+    async def process_command(self, text):
         if not text: return
         
         # [신규 v6.1.30] 콤마(,)로 구분된 다중 명령어 처리 (AI 루프 방지 핵심)
         if ',' in text and not text.startswith('msg '):
             cmds = [c.strip() for c in text.split(',')]
             for c in cmds:
-                # [v6.3.3] 재귀 호출 시 is_ai 플래그 유지
-                if c: await self.process_command(c, is_ai=is_ai)
+                if c: await self.process_command(c)
             return
 
         cmd_full = text.strip()
@@ -1646,8 +1620,6 @@ class ChatCommand:
             await asyncio.get_event_loop().run_in_executor(None, log_and_tel, cmd_full[9:].strip())
         elif cmd == 'refresh_conditions': 
             await self.rt_search.refresh_conditions(self.token)
-        elif cmd == 'sync':
-            await self.sync_db_command()
         elif cmd == 'exp':
             if os.path.exists(self.data_dir):
                 os.startfile(self.data_dir)
@@ -1735,8 +1707,6 @@ class ChatCommand:
             elif sub_cmd == 'sic': await self.today(sort_mode='sic', is_reverse=is_rev, send_telegram=False)
             elif sub_cmd == 'jun': await self.today(sort_mode='jun', is_reverse=is_rev, send_telegram=False)
             elif sub_cmd == 'son': await self.today(sort_mode='son', is_reverse=is_rev, send_telegram=False)
-            elif sub_cmd == 'week': await self.report_range_command(days=7, title="[주간 통계]")
-            elif sub_cmd == 'month': await self.report_range_command(days=30, title="[월간 통계]")
             else: await self.today(is_reverse=is_rev, send_telegram=False) 
         elif cmd == 'close_bet':
             # [신규 v5.7.28] 종가 베팅 추천 (3시 이후 권장)
@@ -1857,11 +1827,6 @@ class ChatCommand:
         else:
             # [NEW V5.4.0] 알 수 없는 명령어는 자연어로 간주하고 제미나이 AI 비서에게 넘김
             try:
-                # [v6.3.3] AI로부터 온 명령어가 unrecognized 상태라면 무한 루프 방지를 위해 차단
-                if is_ai:
-                    log_and_tel(f"⚠️ <b>[AI 루프 차단]:</b> 알 수 없는 AI 명령어는 재해석하지 않아! ('{text}')", parse_mode='HTML')
-                    return
-
                 from gemini_bot import process_natural_language
                 loop = asyncio.get_event_loop()
                 # [v6.3.0+] AI 비서 작동 여부를 시각적으로 보여주기 위해 로그 유지
@@ -1871,8 +1836,7 @@ class ChatCommand:
                 
                 if ai_response["type"] == "action":
                     log_and_tel(f"⚡ <b>[AI 명령 실행]:</b> {ai_response['cmd']}")
-                    # [v6.3.3] AI가 요청한 명령임을 명시하여 재귀 루프 방지
-                    await self.process_command(ai_response["cmd"], is_ai=True)
+                    await self.process_command(ai_response["cmd"])
                 elif ai_response["type"] == "msg":
                     tel_send(f"💬 [AI 비서] {ai_response['msg']}")
                     # GUI의 speak_text 호출을 위한 훅
@@ -1912,30 +1876,3 @@ class ChatCommand:
                 
         except Exception as e:
             log_and_tel(f"❌ <b>구글 드라이브 동기화 프로세스 오류:</b> {e}")
-
-    async def sync_db_command(self):
-        """[신규 v2.2.1] HTS 매매 데이터를 로컬 DB(kipodb)로 동기화"""
-        try:
-            log_and_tel("🔄 <b>HTS 데이터 동기화 시작...</b>", parse_mode='HTML')
-            
-            # 1. HTS 데이터 가져오기 (today 메서드의 sync_only 모드 활용)
-            processed_data = await self.today(sync_only=True)
-            
-            if not processed_data or not isinstance(processed_data, list):
-                log_and_tel("📭 동기화할 매매 내역이 없네, 자기야!")
-                return
-                
-            # 2. DB에 저장 (중복 방지는 kipodb에서 처리)
-            from kipodb import kipo_db
-            new_count = 0
-            for t in processed_data:
-                # 딕셔너리 키 매핑 (today의 processed_data -> kipodb 기대 형식)
-                # already mostly matches, but kipo_db.sync_trade_from_hts will handle it
-                if kipo_db.sync_trade_from_hts(t):
-                    new_count += 1
-            
-            log_and_tel(f"✅ <b>동기화 완료!</b> (신규 {new_count}건 저장됨)")
-            
-        except Exception as e:
-            print(f"❌ sync_db_command 오류: {e}")
-            log_and_tel(f"❌ 데이터 동기화 실패: {e}")

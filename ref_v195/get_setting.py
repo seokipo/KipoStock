@@ -4,12 +4,7 @@ import time
 import json
 
 def get_base_path():
-    """사용자가 지정한 고정 데이터 경로를 최우선으로 반환"""
-    # [v2.4.6] 사용자 요청에 따른 데이터 고정 경로 적용
-    fixed_path = r"D:\Work\Python\AutoBuy\ExeFile\KipoStockAi_V1.0"
-    if os.path.exists(fixed_path):
-        return fixed_path
-        
+    """EXE로 실행될 때와 파이썬으로 실행될 때의 경로를 구분하여 반환"""
     if getattr(sys, 'frozen', False):
         # EXE로 실행 중일 때: EXE 파일이 위치한 폴더 반환
         return os.path.dirname(sys.executable)

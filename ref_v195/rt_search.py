@@ -37,8 +37,6 @@ class RealTimeSearch:
         
         # [v1.9.5] 종목별 VI 상태 캐시 (상태 변화 시에만 로깅/알람 트리거용)
         self.vi_state_cache = {} 
-        # [v2.3.0] 해제 신호 직후 가짜 발동 신호 차단용 캐시 (종목코드: (해제시간, vi_time))
-        self.vi_release_cache = {}
 
     async def connect(self, token, acnt_no=None):
         try:
@@ -65,43 +63,36 @@ class RealTimeSearch:
         loop = asyncio.get_event_loop()
         print("👀 [감시모드] 초고속 수신 대기 중...")
         
-        # [v2.5.3] VI 로그 정밀 필터링 (통과한 종목만 표시)
-        def _passes_vi_filter(name, v_price, v_type):
-            if not get_setting('bultagi_turbo_vi', False): return False
-            try:
-                p = int(float(v_price)) if v_price else 0
-                if p > 0:
-                    min_p = int(str(get_setting('bultagi_turbo_vi_min_price', '0')).replace(',', ''))
-                    max_p = int(str(get_setting('bultagi_turbo_vi_max_price', '99999999')).replace(',', ''))
-                    if p < min_p or p > max_p: return False
-                    
-                if v_type == '1' and not get_setting('bultagi_turbo_vi_static', True): return False
-                if v_type == '2' and not get_setting('bultagi_turbo_vi_dynamic', True): return False
-                
-                if get_setting('bultagi_turbo_ex_etf', True):
-                    if any(x in name for x in ['KODEX', 'TIGER', 'KBSTAR', 'HANARO', 'KOSEF', 'ARIRANG', 'SOL', 'ACE', 'TRUE', 'TIMEFOLIO', 'FOCUS', 'HK', '마이티', '파워', 'ETN']): return False
-                if get_setting('bultagi_turbo_ex_spac', True):
-                    if '스팩' in name or ('제' in name and '호' in name): return False
-                if get_setting('bultagi_turbo_ex_prefer', True):
-                    if name.endswith('우') or name.endswith('우B') or name.endswith('우C'): return False
-                return True
-            except: return True
-
+        # [v1.9.1] 딥 디버깅용 변수
+        last_heartbeat = time.time()
+        
         while self.keep_running and self.websocket:
             try:
+                # [v1.9.1] 10초마다 하트비트 출력 (프로세스 생존 확인)
+                if time.time() - last_heartbeat > 10:
+                    print("💓 [RT-SEARCH] 감시 루프 정상 작동 중...")
+                    last_heartbeat = time.time()
+
                 raw_message = await self.websocket.recv()
                 if not raw_message: continue
                 
                 response = json.loads(raw_message)
                 trnm = response.get('trnm')
 
+                # [v1.9.3] 로깅 다이어트: 모든 패킷 덤프 제거 (I/O 부하 방지)
+                # 꼭 필요할 때만 아래 주석을 풀어서 사용
+                # try:
+                #     with open("rt_packet_dump.log", "a", encoding="utf-8") as f:
+                #         f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')}] {raw_message}\n")
+                # except: pass
+
                 # [🎰 마스터 스니퍼] 모든 메시지 수신 확인 (PING 제외)
                 tr_lower = str(trnm).strip().lower() if trnm else ''
                 
-                if tr_lower != 'ping':
-                    if tr_lower not in ['real', 'cnsr', 'rscn', 'system', '1h']:
-                        # print(f"📥 [수신] {trnm}") # [v1.2.3 제거]
-                        pass
+                if tr_lower == 'reg':
+                    r_code = response.get('return_code')
+                    r_msg = response.get('return_msg', '')
+                    print(f"📡 [REG응답] 결과:{r_code} | 메시지:{r_msg}")
 
                 if tr_lower == 'login':
                     if response.get('return_code') == 0:
@@ -222,133 +213,72 @@ class RealTimeSearch:
                                             tel_send(f"🕵️ [HTS매수] {s_name} 체결!")
                                 continue
 
-                            # [v2.2.6] VI 감지 조건 극한 확장 (9068, 9051, 1224, 1225 등 가용한 모든 필드 체크)
-                            vi_status_raw = values.get('9068') or values.get('1225') # VI상태/구분
-                            vi_time_raw = values.get('9051') or values.get('1224') # 시간
-                            
-                            is_vi_event = ('VI' in target_name or item.get('type') == '1h' or vi_status_raw or vi_time_raw)
+                            # [v1.9.1] VI 감지 조건 강화 및 디버깅 로그
+                            is_vi_event = ('VI' in target_name or item.get('type') == '1h' or '9068' in values or '9051' in values)
                             
                             if is_vi_event:
+                                # [v1.9.3] 종목 코드 정규화: _AL 등이 붙어있더라도 숫자 6자리만 추출
                                 raw_jm = values.get('9001', '').replace('A', '') or item.get('item', '').replace('A', '')
                                 jmcode = str(raw_jm)[:6]
                                 s_name = values.get('302', jmcode)
                                 
+                                # [v1.9.5] 9068뿐만 아니라 1225(VI구분), 9051(해제시간) 등 다양한 필드 조합 대응
                                 vi_status = str(values.get('9068', '')) # 1:발동, 2:해제, 3:중지, 4:재개
-                                # [v2.2.8] 시간 감지 필드 보강: 9051, 1224가 000000일 경우 1223 시도
-                                vi_time = values.get('9051') or values.get('1224')
-                                if not vi_time or vi_time == '000000':
-                                    vi_time = values.get('1223') or ""
-                                
-                                vi_type = values.get('9052') or values.get('1225', '') or str(values.get('9069', '')) # 1:정적, 2:동적, 3:변동성
+                                vi_time = values.get('9051') or values.get('1224') or "" # HHMMSS
+                                vi_type = values.get('9052') or values.get('1225', '') # 1:정적, 2:동적, 3:변동성
                                 vi_price = values.get('9054') or values.get('1236', '0')
 
                                 # [v1.9.5] 강력한 상태 감지: 9068이 없더라도 해제 시간이 들어오면 '발동(1)' 또는 '해제(2)'로 추정
                                 if not vi_status and vi_time:
-                                    vi_status = '1' if (vi_price != '0' and vi_price != '') else '2'
-
-                                # [v2.2.9] 시간 계산 유틸리티
-                                def add_2min(t_str):
-                                    if not t_str or len(t_str) != 6: return t_str
-                                    try:
-                                        h, m, s = int(t_str[:2]), int(t_str[2:4]), int(t_str[4:6])
-                                        total = (h * 3600 + m * 60 + s + 120) % 86400
-                                        return f"{total//3600:02d}{(total%3600)//60:02d}{total%60:02d}"
-                                    except: return t_str
+                                    # 발동가(1236)가 있고 해제시간이 있으면 발동(1) 상태로 간주
+                                    vi_status = '1' if vi_price != '0' else '2'
 
                                 # [v1.9.5] 중복 로그 방지: 이전 상태와 동일하면 로깅 스킵
                                 cache_key = f"{jmcode}_{vi_status}_{vi_time}"
-                                last_val = self.vi_state_cache.get(jmcode, "") 
-                                if last_val == cache_key:
+                                if self.vi_state_cache.get(jmcode) == cache_key:
                                     continue
-                                
-                                # [v2.2.9] 해제 오판단 방어: 발동(1) 상태에서 110초 이후의 신호는 해제로 간주
-                                if vi_status == '1' and last_val:
+                                self.vi_state_cache[jmcode] = cache_key
+
+                                # [v1.9.3] VI 상세 덤프 로그 (파일) - VI 이벤트만 기록하여 부하 최소화
+                                # [v1.9.4] I/O 블로킹 방지를 위해 run_in_executor 사용
+                                def log_vi_event(msg_line):
                                     try:
-                                        parts = last_val.split('_')
-                                        if len(parts) >= 3:
-                                            last_st, last_t = parts[1], parts[2]
-                                            
-                                            # Case A: 발동(1) 상태에서 110초 이상 경과 시 해제(2)로 보정
-                                            if last_st == '1' and len(vi_time) == 6 and len(last_t) == 6:
-                                                dt = (int(vi_time[:2])*3600 + int(vi_time[2:4])*60 + int(vi_time[4:6])) - \
-                                                     (int(last_t[:2])*3600 + int(last_t[2:4])*60 + int(last_t[4:6]))
-                                                if dt >= 110:
-                                                    vi_status = '2' # 해제로 강제 보정
-                                                    print(f"🕵️‍♂️ [v2.2.9] {s_name} 시간 경과({dt}초)에 의한 해제(2) 보정 적용")
-                                            
-                                            # [v2.3.0] Case B: 방금 해제(2) 되었는데 즉시 발동(1) 신호가 오면 무시 (노이즈 차단)
-                                            if last_st == '2' and vi_status == '1':
-                                                rel_data = self.vi_release_cache.get(jmcode)
-                                                if rel_data:
-                                                    last_rel_sys_t, last_rel_vi_t = rel_data
-                                                    if (time.time() - last_rel_sys_t) < 5 and vi_time == last_rel_vi_t:
-                                                        print(f"🕵️‍♂️ [v2.3.0] {s_name} 해제 직후 가짜 발동 신호 차단 (Time:{vi_time})")
-                                                        continue
+                                        with open("vi_event_debug.log", "a", encoding="utf-8") as f:
+                                            f.write(msg_line)
                                     except: pass
-
-                                # [v2.3.0] 해제(2) 발생 시 캐시에 기록
-                                if vi_status == '2':
-                                    self.vi_release_cache[jmcode] = (time.time(), vi_time)
-
-                                self.vi_state_cache[jmcode] = f"{jmcode}_{vi_status}_{vi_time}"
-
-                                # [v2.5.3] 필터 조건 미달 시 로깅 및 진행 완전 차단 (사용자 요청)
-                                if not _passes_vi_filter(s_name, vi_price, vi_type):
-                                    continue
-
-                                # [v2.2.0 / v2.2.9] 로그에서 종목코드 제거
-                                # [v1.9.1] VI 감지 시 즉시 로우 데이터 출력
-                                print(f"📡 [VI-DEBUG] [{s_name}] 수신! [9068:{vi_status}] | Time:{vi_time} | Type:{vi_type}")
                                 
-                                # [v1.9.5] 패킷 전체 덤프 (자기 요청 스크린샷 대응)
-                                print(f"📡 <font color='#888888'>[VI-DEBUG] trnm={trnm} | 패킷: {str(response)[:300]}</font>")
+                                log_line = f"[{datetime.now().strftime('%H:%M:%S')}] {s_name}({jmcode}) | 9068:{vi_status} | {raw_message}\n"
+                                loop.run_in_executor(None, log_vi_event, log_line)
 
-                                if vi_status:
-                                    status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
-                                    st_txt = status_map.get(vi_status, vi_status)
-                                    
-                                    # 상세 정보 조합
-                                    # [v2.2.9] 해제 예정 시간 2분 추가 계산 적용
-                                    release_time_raw = add_2min(vi_time) if vi_status == '1' else vi_time
-                                    time_fmt = f"{release_time_raw[:2]}:{release_time_raw[2:4]}:{release_time_raw[4:6]}" if len(release_time_raw) == 6 else release_time_raw
-                                    
-                                    type_map = {'1': '정적', '2': '동적', '3': '변동성', '정적': '정적', '동적': '동적'}
-                                    vi_type_txt = type_map.get(vi_type, "알수없음")
-                                    detail_info = f" | {vi_type_txt}VI | 발동가: {int(float(vi_price or 0)):,} | 해제예정: {time_fmt}" if vi_status == '1' else ""
-                                    
-                                    # [v1.5.4] GUI 알람 트리거를 위해 [VI발동] 또는 [VI감지] 키워드 필수 포함
-                                    tag = "[VI발동]" if vi_status == '1' else "[VI감지]"
-                                    raw_sample = f" <font color='#888888'>(9068:{vi_status}{detail_info})</font>"
-                                    # [v2.2.8 / v2.2.9] 사용자 요청: 로그에서 종목코드 제거
-                                    print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name} 상태: {st_txt}</font>{raw_sample}")
+                                # [v1.9.1] VI 감지 시 즉시 로우 데이터 출력 (상세 로그창으로)
+                                print(f"📡 [VI-DEBUG] {s_name}({jmcode}) 수신! [9068:{vi_status}] | Time:{vi_time} | Type:{vi_type}")
+                                
+                                # 시간 포맷팅 (140530 -> 14:05:30)
+                                time_fmt = f"{vi_time[:2]}:{vi_time[2:4]}:{vi_time[4:6]}" if len(vi_time) == 6 else vi_time
+                                type_map = {'1': '정적', '2': '동적', '3': '변동성', '정적': '정적', '동적': '동적'}
+                                type_txt = type_map.get(vi_type, '알수없음')
+
+                                status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
+                                st_txt = status_map.get(vi_status, vi_status)
+                                
+                                # 상세 정보 조합 (해제 시간, 종류, 발동가)
+                                detail_info = f" | {type_txt}VI | 발동가: {int(float(vi_price)):,} | 해제예정: {time_fmt}" if vi_status == '1' else ""
+                                
+                                # [v1.6.1] 로우 데이터 무조건 출력 (상세 로그창 전용)
+                                raw_sample = f" <font color='#888888'>(9068:{vi_status}{detail_info})</font>"
+                                print(f"📡 <font color='#f1c40f'>[VI감지] {s_name}({jmcode}) 상태: {st_txt}</font>{raw_sample}")
 
                                 if get_setting('bultagi_turbo_vi', False):
-                                    # [신규 v1.5.4] VI 발동(1) 시 보유 종목일 경우 1분 50초 알람 타이머 가동
-                                    if vi_status == '1':
-                                        from check_n_buy import ACCOUNT_CACHE
-                                        if jmcode in ACCOUNT_CACHE['holdings']:
-                                            s_name = values.get('302', jmcode)
-                                            # [v2.2.9] 로그에서도 코드 제거
-                                            print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! 1분 50초 후 알람 예약...</font>")
-                                            
-                                            async def vi_alarm_timer(name, code):
-                                                await asyncio.sleep(110) # 1분 50초 대기
-                                                # [v2.2.8] 사용자 요청: 알람 문구에서 종목코드 제거
-                                                print(f"📢 <font color='#f1c40f'><b>[VI해제임박]</b> {name} VI 해제 10초 전! (타입:{vi_type_txt}) 얼른 보러 와!</font>")
-                                                try:
-                                                    from check_n_buy import say_text
-                                                    say_text(f"{name} 브이아이 해제 긴급")
-                                                except: pass
-                                            
-                                            asyncio.create_task(vi_alarm_timer(s_name, jmcode))
-
                                     # [핵심] 해제(2) 또는 재개(4) 시 즉시 매수 트리거
-                                    elif vi_status in ['2', '4']:
-                                        s_name = values.get('302', jmcode)
-                                        print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {s_name} ({jmcode}) {vi_type_txt} VI 해제 신호 발생!</font>")
-                                        from check_n_buy import chk_n_buy
-                                        # [v2.0.0 / v2.2.7 오타 수정] vi_type 전달 (vi_type_code -> vi_type)
-                                        loop.run_in_executor(None, chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result, vi_type)
+                                    if vi_status in ['2', '4']:
+                                        # [v1.9.1] 0.5초 초단기 지연 후 주문 (안정적 체결 유도)
+                                        async def delayed_vi_buy(code, name):
+                                            await asyncio.sleep(0.5)
+                                            print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {name} ({code}) VI 해제 신호 발생!</font>")
+                                            from check_n_buy import chk_n_buy
+                                            loop.run_in_executor(None, chk_n_buy, code, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result)
+                                        
+                                        asyncio.create_task(delayed_vi_buy(jmcode, s_name))
                                 continue
 
                             # B. 일반 종목 신호 추출 강화 (API별 다양한 필드 대응)
@@ -366,10 +296,6 @@ class RealTimeSearch:
                                     # print(f"🔍 [진단] {jmcode} 검출! (Seq: {origin_seq}, Name: {seq_name})") # [v1.2.3 제거]
                                     from check_n_buy import chk_n_buy
                                     loop.run_in_executor(None, chk_n_buy, jmcode, self.token, origin_seq, trade_price, seq_name, self.on_news_result)
-                                
-                                # [신규 v2.1.0] 실시간 체결 데이터를 시초가 엔진 등으로 전달
-                                if self.on_realtime_trade:
-                                    self.on_realtime_trade(values)
 
                 elif tr_lower == 'cnsrreq':
                     rc = response.get('return_code', 0)
@@ -399,46 +325,43 @@ class RealTimeSearch:
                         print(f"🔍 [SYSTEM] {msg}")
 
                 elif tr_lower == '1h':
-                    # [v2.2.6] 단독 1h (VI 발동/해제) TR 처리 - 수신 확인용 RAW 로그 최우선 출력
+                    # [v1.9.0] 단독 1h (VI 발동/해제) TR 처리
+                    # [v1.9.0 수정] TR 0w (VI 발동/해제) 데이터 처리
                     data = response.get('data')
                     if isinstance(data, list):
                         for item in data:
                             values = item.get('values') or {}
-                            raw_item_id = item.get('item', '')
-                            jmcode = (values.get('9001') or raw_item_id or '').replace('A', '')[:6]
+                            vi_status = str(values.get('9068', ''))
+                            jmcode = (values.get('9001') or item.get('item', '')).replace('A', '')
                             s_name = values.get('302', jmcode)
                             
-                            # [v2.2.6] 수신된 1h 패킷 무조건 덤프 (진단용)
-                            print(f"📡 <font color='#888888'>[1h-DEBUG] {s_name}({jmcode}) 수신! Raw:{str(values)[:200]}</font>")
-
-                            vi_status = str(values.get('9068', ''))
-                            vi_time = values.get('9051') or values.get('1224') or ""
-                            vi_type = values.get('9052') or values.get('1225', '') or str(values.get('9069', ''))
-                            vi_price = values.get('9054') or values.get('1236', '0')
-                            
-                            # [v2.5.3] 필터 미달 시 잡주 로그 원천 차단
-                            if not _passes_vi_filter(s_name, vi_price, vi_type):
-                                continue
-                            
-                            # 중복 체크
-                            cache_key = f"{jmcode}_{vi_status}_{vi_time}"
-                            if self.vi_state_cache.get(jmcode) == cache_key: continue
-                            self.vi_state_cache[jmcode] = cache_key
-
-                            if vi_status or vi_time:
+                            # [v1.5.8] 단독 1h 수신 시에도 로그 출력 (디버깅용)
+                            if vi_status:
                                 status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
-                                st_txt = status_map.get(vi_status, "감지")
-                                tag = "[VI발동]" if vi_status == '1' else "[VI감지]"
-                                print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name}({jmcode}) 상태: {st_txt} | 시간:{vi_time}</font>")
+                                st_txt = status_map.get(vi_status, vi_status)
+                                # [v1.6.1] 1h 데이터도 로우 데이터 무조건 출력 (상세 로그창)
+                                raw_sample = f" (1h_9068:{vi_status}, 9001:{jmcode})"
+                                # [v1.9.0] 상세 로그창 출력을 위해 [VI감지] 태그 사용
+                                print(f"📡 <font color='#f1c40f'>[VI감지] {s_name}({jmcode}) 상태: {st_txt}</font>{raw_sample}")
 
-                            if get_setting('bultagi_turbo_vi', False) and vi_status in ['2', '4']:
-                                print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {s_name} ({jmcode}) VI 해제(1h) 발생!</font>")
-                                from check_n_buy import chk_n_buy
-                                asyncio.create_task(asyncio.to_thread(chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result))
+                            if get_setting('bultagi_turbo_vi', False) and (vi_status in ['2', '4'] or values.get('1224') == '000000'): 
+                                # [v1.9.4] 1224가 000000이 아니게 변할 때를 감지하는 로직 보강 필요하지만 일단 상태값 우선
+                                if vi_status in ['2', '4']:
+                                    print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {s_name} ({jmcode}) VI 해제(1h) 발생!</font>")
+                                    from check_n_buy import chk_n_buy
+                                    loop.run_in_executor(None, chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result)
 
                 else:
                     if tr_lower not in ['ping', 'reg']:
-                        print(f"🔍 [RAW] {trnm}: {response}")
+                        print(f"🔍 [RAW] {trnm}: {str(response)[:300]}")
+
+                # [v1.9.0 디버그] 1h/REAL 패킷 실제 구조 덤프 (VI 진단용)
+                # 모든 수신 메시지 중 9068 키가 있거나 1h인 경우 전체 출력
+                # [v1.9.0 디버그] 실시간 패킷 구조 덤프
+                if tr_lower in ['1h', 'real']:
+                    raw_str = str(response)
+                    if '9068' in raw_str or tr_lower == '1h':
+                        print(f"📡 [VI-DEBUG] trnm={trnm} | 패킷: {raw_str[:500]}")
 
             except Exception as e:
                 if not self.keep_running: break
@@ -487,20 +410,11 @@ class RealTimeSearch:
 
             print(f"🔔 실시간 체결 감시 등록...")
             acnt = self.acnt_no if self.acnt_no else ''
-            # [v2.2.6] 등록 항목 정교화: 1h를 별도 그룹으로 분리하여 수신 가능성 극대화
             reg_items = [
                 {'item': [''], 'type': ['00']},
-                {'item': [''], 'type': ['1h']} 
+                {'item': [''], 'type': ['1h']} # [v1.9.0] VI 발동/해제 실시간 수신 (공식가이드 확인됨: 1h)
             ]
             await self.send_message({'trnm': 'REG', 'grp_no': '1', 'refresh': '1', 'data': reg_items})
-            
-            if acnt:
-                # 계좌 관련은 별도 그룹으로 등록 (상호 간섭 배제)
-                reg_acc = [
-                    {'item': [acnt], 'type': ['01']},
-                    {'item': [acnt], 'type': ['02']}
-                ]
-                await self.send_message({'trnm': 'REG', 'grp_no': '2', 'refresh': '1', 'data': reg_acc})
 
             print("⏳ 목록 수신 대기 중...")
             try: await asyncio.wait_for(self.list_loaded_event.wait(), timeout=5.0)

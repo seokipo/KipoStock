@@ -4,6 +4,7 @@
     "bultagi_wait_sec": 10,
     "bultagi_mode": "multiplier",
     "bultagi_val": "10",
+    "bultagi_turbo_vi": true,
     "auto_start": false,
     "search_seq": [
         "0",
