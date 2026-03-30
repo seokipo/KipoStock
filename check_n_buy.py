@@ -99,6 +99,9 @@ ACCOUNT_CACHE = {
     'last_update': 0
 }
 
+# [v3.3.8] 거래대금 상위 종목 캐시 (rt_search.py에서 주기적으로 업데이트함)
+TOP_VOLUME_RANK_CACHE = [] # [V4.0.0] 순위 유지를 위해 list로 변경
+
 # [v6.7.3] 실시간 탐색 종목 이력 (AI 종가 추천용)
 DAILY_DETECTED_STOCKS = set()
 
@@ -156,14 +159,22 @@ def update_account_cache(token):
         
         my_stocks_data = get_my_stocks(token=token)
         if my_stocks_data is None:
-            # [Fix v3.0.3] API 통신 실패 시 기존 데이터를 날리지 않고 유지하여 UI 증발 방지
-            return
+            # [Fix v3.0.3] API 통신 실패 및 토큰 만료 시 기존 데이터를 날리지 않고 유지하여 UI 증발 방지
+            # [v3.0.4] 혹시 모를 토큰 만료 대응: 즉시 1회 자동 토큰 갱신 시도
+            print("⚠️ [계좌갱신] API 응답 에러 (데이터 유지 및 토큰 갱신 시도...)")
+            new_token = get_token()
+            if new_token:
+                # 갱신 성공 시 바로 1회 재시도 (재귀 호출 대신 직접 처리)
+                my_stocks_data = get_my_stocks(token=new_token)
+                if my_stocks_data:
+                    token = new_token # 이후 로직을 위해 토큰 교체
+                else: return # 재시도 실패 시 중단
+            else: return # 갱신 실패 시 중단
 
         my_stocks = []
         if isinstance(my_stocks_data, dict):
-            # [v3.0.3] 만약 에러 응답(msg가 있고 stocks가 없는 경우)이면 업데이트 스킵
-            if 'stocks' not in my_stocks_data and 'msg' in my_stocks_data:
-                print(f"⚠️ [계좌갱신] API 응답 에러 (데이터 유지): {my_stocks_data.get('msg')}")
+            # [v3.0.3] 만약 에러 응답(stocks가 없는 경우)이면 업데이트 스킵
+            if 'stocks' not in my_stocks_data:
                 return
             my_stocks = my_stocks_data.get('stocks', [])
             # [신규] 계좌번호 확보 (예수금 조회 실패 대비)
@@ -283,10 +294,11 @@ def update_account_cache(token):
         ACCOUNT_CACHE['names'].update(names)
         ACCOUNT_CACHE['last_update'] = time.time()
         
-        # print(f"\n💰 [계좌갱신] 잔고: {ACCOUNT_CACHE['balance']:,}원 | 보유: {len(new_holdings)}종목")
+        return token # [v3.0.4] 최신 토큰 반환
         
     except Exception as e:
         print(f"⚠️ 계좌 정보 갱신 실패: {e}")
+        return token
 
 def get_stock_name_safe(code, token):
     if code in ACCOUNT_CACHE['names']:
@@ -431,6 +443,13 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         if seq == 'SYSTEM_VI':
             s_name = get_stock_name_safe(stk_cd, token)
             
+            # [V3.3.8] 0단계: 거래대금 상위 필터링
+            if cached_setting('bultagi_turbo_vi_volume_enabled', False):
+                if TOP_VOLUME_RANK_CACHE and stk_cd not in TOP_VOLUME_RANK_CACHE:
+                    msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 거래대금 순위 밖 스킵</font>"
+                    print(msg)
+                    return
+
             # 1단계: 가격대 필터링
             min_p = int(cached_setting('bultagi_turbo_vi_min_price', '0').replace(',', ''))
             max_p = int(cached_setting('bultagi_turbo_vi_max_price', '99999999').replace(',', ''))

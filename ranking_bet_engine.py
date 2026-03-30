@@ -91,10 +91,17 @@ class RankingBetEngine:
                     await asyncio.sleep(1)
                     continue
                 
-                # 장중 시간 체크 (키움 조회 순위는 장중에만 의미 있음)
+                # [v3.3.1] 장중 시간 및 요일 체크 (키움 조회 순위는 장중에만 의미 있음)
                 now = datetime.now()
-                if now.hour < 9 or (now.hour == 15 and now.minute > 35) or now.hour > 15:
-                    await asyncio.sleep(60) # 장외에는 1분 단위로 체크
+                # 주말(토:5, 일:6) 체크 추가
+                is_weekend = now.weekday() >= 5
+                # 장외 시간 체크
+                is_off_hours = now.hour < 9 or (now.hour == 15 and now.minute > 35) or now.hour > 15
+                
+                if is_weekend or is_off_hours:
+                    # 장외나 주말에는 조용히 대기 (로그 출력 없이)
+                    wait_time = 600 if is_weekend else 60 # 주말 10분, 평일 장외 1분
+                    await asyncio.sleep(wait_time)
                     continue
 
                 token = get_token()
@@ -102,12 +109,15 @@ class RankingBetEngine:
                 current_ranking_list = await asyncio.to_thread(get_realtime_ranking_data, token=token, qry_tp=self.qry_tp)
                 
                 if current_ranking_list:
-                    # [v2.4.8] [Rank Raw] 상세 로그 출력 활성화 (자기 요청 ❤️)
+                    # [v4.0.2] [Ranking-DEBUG] 상세 로그 출력 강화 (로데이터 확인용 ❤️)
                     raw_count = len(current_ranking_list)
                     raw_str = ", ".join([f"{x['name']}({x['rank']}위)" for x in current_ranking_list[:15]])
                     if hasattr(self.api, 'append_log'):
-                        # 상세 로그창이 아니라 메인 로그에도 흐릿하게 뿌려주어 자기가 볼 수 있게 함
-                        self.api.append_log(f"<font color='#666666'>[Rank Raw] {raw_count}종목 수신 | Top15: {raw_str}</font>")
+                        # 상세 로그창에 [Ranking-DEBUG] 접두사를 붙여 투명하게 공개
+                        self.api.append_log(f"<font color='#888888'>[Ranking-DEBUG] 조회순위 {raw_count}종목 수신 | Top15: {raw_str}</font>")
+                    
+                    # [v2.4.8] [Rank Raw] 기존 로그 유지 (하위 호환)
+                    # print(f"[Rank Raw] {raw_count}종목 수신 | Top15: {raw_str}")
                     
                     new_ranking_map = {item['code']: item['rank'] for item in current_ranking_list}
                     
@@ -128,11 +138,11 @@ class RankingBetEngine:
                         rank_st = stock.get('rank_st', '') # N:신규, 1:상승...
                         rank_gap = stock.get('rank_gap', 0)
                         
-                        # 1. 신규 진입 감지 (사용자 요청: 키움에서 'N'으로 찍히는 녀석들)
-                        # 이전 리스트에는 없으면서, 키움 신호(rank_st)가 'N'이고, 설정된 순위 내일 때
-                        # [v2.4.8] 첫 동기화 시점(is_first_sync)에도 'N' 신호는 즉시 매수하도록 허용
-                        if (code not in self.previous_ranking or rank_st == 'N' or is_first_sync) and (rank_st == 'N'):
-                            if rank <= self.new_entry_threshold:
+                        # 1. 신규 진입 감지 (사용자 요청: 키움 'N' 신호 또는 첫 포착 종목)
+                        # 이전 리스트에는 없으면서(신규 등장) 설정된 순위 내일 때
+                        is_new_entry = (rank_st == 'N') or (code not in self.previous_ranking and not is_first_sync)
+                        
+                        if is_new_entry and rank <= self.new_entry_threshold:
                                 # 중복 방지: N으로 찍혀도 이미 이전 루프에서 샀으면 패스
                                 if code not in self.bet_history:
                                     print(f"✨ [Ranking Scout] 신규 진입(N) 포착! {name}({code}) {rank}위 등장!")
@@ -153,12 +163,17 @@ class RankingBetEngine:
                         self.api.append_log(f"<font color='#e74c3c'>[RANK_SCOUT] ⚠️ 실시간 조회 순위 수신 실패 (데이터 비어있음)</font>")
                 
                 # 설정된 간격만큼 대기
-                print(f"💓 [Ranking Scout] Heartbeat - 감시 루프 정상 작동 중... (설정 간격: {self.interval}초)")
+                msg = f"💓 [Ranking Scout] {self.qry_tp}구간 감시 중... ({self.interval}s)"
+                if hasattr(self.api, 'append_log'):
+                    self.api.append_log(f"<font color='#555555'>{msg}</font>")
                 await asyncio.sleep(self.interval)
                 
             except Exception as e:
-                print(f"⚠️ [RANK_SCOUT] Monitoring Error: {e}")
-                await asyncio.sleep(5)
+                # [v3.3.1] 에러 메시지가 너무 자주 노출되지 않도록 처리 (특히 JSON 파싱 등 통신 에러)
+                err_msg = str(e)
+                if "Expecting value" not in err_msg:
+                    print(f"⚠️ [RANK_SCOUT] Monitoring Error: {err_msg}")
+                await asyncio.sleep(10)
 
     def execute_bet(self, code, name, reason, tag='RANK_SCOUT'):
         """1주 정찰병 매수를 주문합니다. (V2.2.0 정식 버전 ❤️)"""

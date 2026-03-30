@@ -30,9 +30,9 @@ class TradeLogger:
             except: pass
         self.backup_file = os.path.join(self.data_dir, 'session_trades.json')
         
-        # [v6.0.4] 차트 시작점을 08:55:00으로 고정 (사용자 요청)
+        # [v3.0.9] 차트 시작점을 08:59:00으로 고정 (사용자 요청: 08:55 -> 08:59)
         if not self.load_session() or not self.pnl_history:
-            self.pnl_history = [{'time': "08:55:00", 'pnl': 0}]
+            self.pnl_history = [{'time': "08:59:00", 'pnl': 0}]
 
     def save_session(self):
         """[신규] 현재 세션 데이터를 파일로 백업"""
@@ -77,7 +77,13 @@ class TradeLogger:
                 
                 # 데이터가 비어있으면 초기값 설정
                 if not self.pnl_history:
-                    self.pnl_history = [{'time': datetime.now().strftime("%H:%M:%S"), 'pnl': 0}]
+                    # [v3.0.9] 장전(09:00 이전) 기동 시에는 08:59:00으로 시작점 고정
+                    now_t = datetime.now()
+                    if now_t.hour < 9:
+                        start_t = "08:59:00"
+                    else:
+                        start_t = now_t.strftime("%H:%M:%S")
+                    self.pnl_history = [{'time': start_t, 'pnl': 0}]
                 
                 self.returns_history = data.get('returns_history', [])
                 print(f"✅ [TradeLogger] 이전 세션 복원 완료 ({len(self.trades)}건의 거래, 그래프 데이터 {len(self.pnl_history)}건)")

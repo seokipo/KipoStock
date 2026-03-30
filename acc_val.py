@@ -29,6 +29,17 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 	
 	try:
 		data = response.json()
+		# [v3.0.4] API 에러 여부 체크 (문자열 변환 후 비교)
+		ret_code = str(data.get('return_code', '0')).strip()
+		if ret_code not in ['0', '0000', '00000']:
+			msg = data.get('return_msg', '알 수 없는 에러')
+			# [v3.0.5] 성공 메시지는 실패로 보지 않음
+			if "조회가 완료되었습니다" in msg or "성공" in msg:
+				pass 
+			elif not next_key: 
+				print(f"⚠️ [acc_val] API 조회 실패 ({ret_code}): {msg}")
+				return None
+		
 		stk_acnt_evlt_prst = data.get('stk_acnt_evlt_prst', [])
 		acnt_no = data.get('acnt_no', '')
 		
@@ -39,8 +50,8 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 		}
 			
 	except Exception as e:
-		print(f"⚠️ [acc_val] Error: {e}")
-		return {'stocks': [], 'acnt_no': ''}
+		print(f"⚠️ [acc_val] Exception: {e}")
+		return None # 예외 발생 시에도 None 반환
 
 	if print_df:
 		df = pd.DataFrame(stk_acnt_evlt_prst)[['stk_cd', 'stk_nm', 'pl_rt', 'rmnd_qty']]

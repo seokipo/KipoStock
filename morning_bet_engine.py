@@ -165,8 +165,12 @@ class MorningBetEngine:
                         oprc = data.get('open', 0)
                         
                         if oprc > 0 and price > 0:
-                            if price <= oprc * 0.99:
+                            # [V4.2.7] 눌림 기준 완화: -1.0% -> -0.5% (사용자 요청: "여러 종목 되더라도")
+                            if price <= oprc * 0.995: 
+                                if not self.stocks_data.get(code, {}).get('dipped'):
+                                    print(f"🎯 [B전략-눌림감지] {code} 눌림 확인 (-0.5% 하회)")
                                 self.stocks_data.setdefault(code, {})['dipped'] = True
+                            
                             if self.stocks_data.get(code, {}).get('dipped') and price >= oprc * 1.003:
                                 self.execute_bet(code, "B_OpenReBreak", tag='MORNING_B')
                                 processed_b.add(code)
@@ -224,12 +228,19 @@ class MorningBetEngine:
                         if code in self.bet_history or code in processed_d: continue
                         
                         vol_rate = data.get('vol_rate', 0) 
-                        # [v2.1.0] 거래량 폭증 기준 하향 (10.0 -> 2.0, 즉 200% 초과)
-                        if vol_rate >= 2.0:
+                        # [V4.2.7] 거래량 폭증 기준 동기화 (2.0 -> 10.0배)
+                        # 단, 5.0배 이상 포착 시 로그를 출력하여 자기가 진행 상황을 볼 수 있게 함
+                        if vol_rate >= 10.0:
                             s_name = data.get('name', code)
-                            print(f"🔥 [D전략 포착] {s_name}({code}) 거래량 폭증! (비분: {vol_rate:.1f}배)")
+                            print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 10배 폭증! 타격 개시")
                             self.execute_bet(code, "D_VolSurge", tag='MORNING_D')
                             processed_d.add(code)
+                        elif vol_rate >= 5.0:
+                            s_name = data.get('name', code)
+                            if code not in getattr(self, '_logged_vol', set()):
+                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 10배)")
+                                if not hasattr(self, '_logged_vol'): self._logged_vol = set()
+                                self._logged_vol.add(code)
                 
                 if now.hour == 9 and now.minute >= 10: processed_d.clear()
                 

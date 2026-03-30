@@ -40,20 +40,33 @@ class WebSocketClient:
 		if not self.connected:
 			if token:
 				await self.connect(token)  # 연결이 끊어졌다면 재연결
-		if self.connected:
+		
+		# [v3.3.0] NoneType 에러 방지: websocket 객체가 생성된 경우에만 전송 시도
+		if self.connected and self.websocket:
 			# message가 문자열이 아니면 JSON으로 직렬화
 			if not isinstance(message, str):
 				message = json.dumps(message)
-
-		await self.websocket.send(message)
+			try:
+				await self.websocket.send(message)
+			except Exception as e:
+				print(f"메시지 전송 실패: {e}")
+		else:
+			# 서버 연결이 안 된 상태라면 무시
+			pass
 		# print(f'Message sent: {message}')
 
 	# 서버에서 오는 메시지를 수신하여 출력합니다.
 	async def receive_messages(self):
 		while self.keep_running:
+			# [v3.3.0] NoneType 에러 방지: websocket 객체 유무 확인
+			if not self.websocket:
+				# print("수신용 소켓 객체가 없습니다. 수신을 중단합니다.")
+				break
+				
 			try:
 				# 서버로부터 수신한 메시지를 JSON 형식으로 파싱
-				response = json.loads(await self.websocket.recv())
+				raw_data = await self.websocket.recv()
+				response = json.loads(raw_data)
 
 				# 메시지 유형이 LOGIN일 경우 로그인 시도 결과 체크
 				if response.get('trnm') == 'LOGIN':
@@ -81,7 +94,8 @@ class WebSocketClient:
 				# print('Connection closed by the server')
 				self.connected = False
 				self.keep_running = False  # 무한 루프 방지
-				await self.websocket.close()
+				if self.websocket:
+					await self.websocket.close()
 
 	# WebSocket 실행
 	async def run(self, token):
@@ -92,7 +106,9 @@ class WebSocketClient:
 	async def disconnect(self):
 		self.keep_running = False
 		if self.connected and self.websocket:
-			await self.websocket.close()
+			try:
+				await self.websocket.close()
+			except: pass
 			self.connected = False
 			# print('Disconnected from WebSocket server')
 
@@ -118,7 +134,12 @@ async def get_condition_list(token):
 		return websocket_client.received_data if hasattr(websocket_client, 'received_data') else None
 		
 	except Exception as e:
-		print(f"조건식 목록 가져오기 실패: {e}")
+		# [v3.3.0] 주말이나 서버 점검 시 사용자 친화적인 메시지 출력
+		err_msg = str(e)
+		if "'NoneType' object has no attribute" in err_msg:
+			print("ℹ️ 실시간 서버에 연결할 수 없습니다. (주말 또는 서버 점검 중)")
+		else:
+			print(f"조건식 목록 가져오기 실패: {e}")
 		return None
 
 async def main():

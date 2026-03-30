@@ -288,15 +288,15 @@ class ChatCommand:
                     print("⚠️ 매도 루프 연속 실패로 재시작 시도")
                     break 
                 
-                # [최적화] CPU 점유율 과다 방지를 위해 0.5초 대기 (초고속 성능 유지와 부하 균형)
-                await asyncio.sleep(0.5) 
+                # [v4.2.2] 매매 감시 주기 0.5초 최적화 (0.5s -> 0.35s sleep)
+                await asyncio.sleep(0.35) 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"⚠️ 매도 루프 에러: {e}")
                 await asyncio.sleep(1) # 에러 시 잠시 대기
                 failure_count += 1
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.05)
 
     async def start(self, profile_info=None, manual=False):
         """시스템 시작"""
@@ -856,6 +856,7 @@ class ChatCommand:
             total_s_amt = sum(r['sel_amt'] for r in processed_data)
             total_tax = sum(r['tax'] for r in processed_data)
             total_pnl = sum(r['pnl'] for r in processed_data)
+            total_sell_qty = sum(r['sel_qty'] for r in processed_data) # [v3.3.3] 실제 매도 발생 여부 판단용
             
             # [v6.6.0] API의 전체 손익(total section)과 리스트 합산 비교 및 보정
             api_total_pnl = int(float(res_list.get('total', {}).get('tdy_sel_pl', total_pnl)))
@@ -995,11 +996,14 @@ class ChatCommand:
                     # [v5.6.5] 리포트용 합계 수익(total_pnl)을 동기화 값으로 사용 (계산 로직 일원화)
                     run_pnl = total_pnl
                     
-                    # [v5.6.3] 실시간 타임라인 오염 방지 및 스팸 로그 제거 (정밀도 개선: abs() > 1)
+                    # [v3.3.3] "매도 한 시점에만 기록" 원칙을 지키기 위해 total_sell_qty 변화 체크 추가
+                    # 1원 단위의 미세한 오차(세금 재계산 등)로 인해 불필요한 점이 찍히는 것을 방지
+                    last_sell_qty = getattr(session_logger, 'last_total_sell_qty', 0)
+                    
                     if abs(session_logger.cumulative_pnl - run_pnl) > 1:
                         if len(session_logger.pnl_history) <= 1:
-                            # 앱 초기 기동 시점에는 과거 흐름을 대략적으로 복원
-                            sync_history = [{'time': '09:00:00', 'pnl': 0}]
+                            # 앱 초기 기동 시점에는 과거 흐름을 대략적으로 복원 (08:59:00 시작)
+                            sync_history = [{'time': '08:59:00', 'pnl': 0}]
                             temp_pnl = 0
                             for r in time_sorted_data:
                                 temp_pnl += r['pnl']
@@ -1009,12 +1013,32 @@ class ChatCommand:
                                 else:
                                     sync_history.append({'time': time_str, 'pnl': temp_pnl})
                             session_logger.pnl_history = sync_history
-                        else:
-                            # 실시간 매매 중 API와 싱크가 어긋났을 때(HTS 강제청산 등) 그 시점부터 새 기준점 추가
+                        elif total_sell_qty != last_sell_qty:
+                            # [v3.3.5] 중복 타점(수직선) 방지 고도화
+                            # 실시간 record_sell()과 API 동기화 간의 시차(수초 내외) 및 미세 오차로 인한 중복 점 찍힘 차단
                             now_time = datetime.now().strftime("%H:%M:%S")
-                            session_logger.pnl_history.append({'time': now_time, 'pnl': run_pnl})
+                            
+                            last_point = session_logger.pnl_history[-1] if session_logger.pnl_history else None
+                            is_duplicate = False
+                            
+                            if last_point:
+                                # 마지막 기록 시점과 현재 시점의 차이 계산 (초 단위)
+                                try:
+                                    last_t = datetime.strptime(last_point['time'], "%H:%M:%S")
+                                    curr_t = datetime.strptime(now_time, "%H:%M:%S")
+                                    diff_sec = abs((curr_t - last_t).total_seconds())
+                                    
+                                    # 120초 이내의 기록이라면 새로운 점을 찍지 않고 마지막 수치만 보정 (수직선 제거)
+                                    if diff_sec <= 120:
+                                        last_point['pnl'] = run_pnl
+                                        is_duplicate = True
+                                except: pass
+                            
+                            if not is_duplicate:
+                                session_logger.pnl_history.append({'time': now_time, 'pnl': run_pnl})
                             
                         session_logger.cumulative_pnl = run_pnl
+                        session_logger.last_total_sell_qty = total_sell_qty # 상태 저장
                         session_logger.save_session()
                         # print(f"🔄 [차트 동기화] API 확정 수익 최신화 완료 (현재: {run_pnl:,}원)") # 사용자 요청으로 스팸 방지 목적 주석 처리
                         

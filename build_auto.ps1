@@ -1,6 +1,7 @@
-# KipoStock Build Script (V3.0.7)
-$VERSION = "V3.0.7"
-$SPEC_FILE = "KipoStock_AI_$VERSION.spec"
+# KipoStock Build Script (V4.3.3)
+$VERSION = "V4.3.3"
+$APP_NAME = "KipoStock_AI_$VERSION"
+$SPEC_FILE = "$APP_NAME.spec"
 $DEST_DIR = "D:\Work\Python\AutoBuy\ExeFile\KipoStockAi"
 
 Write-Host "--------------------------------------------------"

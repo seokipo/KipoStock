@@ -5,8 +5,8 @@ import json
 
 def get_base_path():
     """사용자가 지정한 고정 데이터 경로를 최우선으로 반환"""
-    # [v2.4.6] 사용자 요청에 따른 데이터 고정 경로 적용
-    fixed_path = r"D:\Work\Python\AutoBuy\ExeFile\KipoStockAi_V1.0"
+    # [v4.2.8] 사용자 요청에 따른 데이터 고정 경로 업데이트 (V1.0 제거)
+    fixed_path = r"D:\Work\Python\AutoBuy\ExeFile\KipoStockAi"
     if os.path.exists(fixed_path):
         return fixed_path
         

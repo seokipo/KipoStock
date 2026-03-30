@@ -182,6 +182,15 @@ def get_extended_stock_data(stk_cd, token=None):
                 result['price'] = abs(int(str(v).replace(',', '')))
                 if result['price'] > 0: break
         
+        # [v4.2.1] ka10001 체결강도는 상대 수치일 가능성이 높으므로 로깅만 수행 (V3.3.7 데이터원 ka10046 복원을 위해 우선순위 하향)
+        import re
+        pwr_val = data.get('cntr_str')
+        if pwr_val:
+            try:
+                # 로깅용으로만 보관하고 result['power']는 ka10046에서 결정하도록 함
+                result['raw_log'] += f"[ka10001-Pwr:{pwr_val}] "
+            except: pass
+
         # [v1.2.7] 상세 로그용 원시 데이터 보관
         result['raw_log'] += f"[ka10001] {str(data)[:200]}... "
     except: pass
@@ -193,10 +202,9 @@ def get_extended_stock_data(stk_cd, token=None):
         res_json = res.json()
         data = res_json.get('data', res_json)
         
-        # [v1.6.2 Fix 2] 총매도잔량/총매수잔량 필드명 매핑 대폭 강화
-        # 키움/한국투자/NH 등 모든 증권사 API 가능성 열어두기
+        # [v3.1.0] 호가 필드 매핑 숫자형 필드 전격 추가 (1237: 매도총량, 1238: 매수총량 추정)
         keys_ask = [
-            'tot_sel_req', 'ttlr_asqn', 'total_askp_rsqn', 'asqn_ttlr', 'total_ask_qty', 'ask_qty', 'total_askp_sqn', 
+            '1237', 'tot_sel_req', 'ttlr_asqn', 'total_askp_rsqn', 'asqn_ttlr', 'total_ask_qty', 'ask_qty', 'total_askp_sqn', 
             'asqn_ttlr_10', 'total_askp_rsqn_10', 'sel_rem_ttlr', 'sel_rem_qty', 'ask_rem_ttlr'
         ]
         found_ask = False
@@ -204,7 +212,6 @@ def get_extended_stock_data(stk_cd, token=None):
             v = data.get(k)
             if v is not None and str(v).strip() != "":
                 try:
-                    # [v1.6.2 Fix] 기호 및 공백 제거 로직 강화
                     val_str = "".join(filter(str.isdigit, str(v)))
                     if val_str:
                         result['total_ask_qty'] = int(val_str)
@@ -214,7 +221,7 @@ def get_extended_stock_data(stk_cd, token=None):
         
         found_bid = False
         keys_bid = [
-            'tot_buy_req', 'ttlr_bsqn', 'total_bidp_rsqn', 'bsqn_ttlr', 'total_bid_qty', 'bid_qty', 'total_bidp_sqn', 
+            '1238', 'tot_buy_req', 'ttlr_bsqn', 'total_bidp_rsqn', 'bsqn_ttlr', 'total_bid_qty', 'bid_qty', 'total_bidp_sqn', 
             'bsqn_ttlr_10', 'total_bidp_rsqn_10', 'bid_rem_ttlr', 'bid_rem_qty', 'bid_rem_ttlr'
         ]
         for k in keys_bid:
@@ -228,15 +235,18 @@ def get_extended_stock_data(stk_cd, token=None):
                         break
                 except: pass
                 
-                
+        # [v3.1.0] 상세 분석을 위한 전수 필드 로깅 (15개씩 끊어서 가독성 확보)
+        all_items = []
+        if isinstance(data, dict):
+            for k, v in data.items():
+                all_items.append(f"{k}:{v}")
+        
         # [v1.3.0] 상세 로그용 원시 데이터 보관 (호가잔량비 추가)
         ob_ratio_str = "N/A"
         if found_ask and found_bid and result['total_bid_qty'] > 0:
             ob_ratio_str = f"{result['total_ask_qty'] / result['total_bid_qty']:.2f}"
             
-        # [v1.6.7] 호가 0 출력 원인 분석을 위해 모든 수신 키 나열
-        received_keys = list(data.keys())
-        result['raw_log'] += f"[ka10004] (Ask:{result['total_ask_qty']:,}/Bid:{result['total_bid_qty']:,}/Ratio:{ob_ratio_str}) Keys:{received_keys} Data:{str(data)[:300]}... "
+        result['raw_log'] += f"[ka10004] (A:{result['total_ask_qty']:,}/B:{result['total_bid_qty']:,}/R:{ob_ratio_str}) ALL_KEYS: {', '.join(all_items[:15])}... "
         result['orderbook_valid'] = found_ask and found_bid
     except Exception as e: 
         result['raw_log'] += f"[ka10004-Error] {e} "
@@ -259,24 +269,33 @@ def get_extended_stock_data(stk_cd, token=None):
         
         if data_list and len(data_list) > 0:
             latest = data_list[0]
-            # [v1.2.7] HTS와 일치하는 'cntr_str_20min'을 1순위로 채택
-            pwr_val = latest.get('cntr_str_20min')
-            if pwr_val is None: pwr_val = latest.get('cntr_str')
-            if pwr_val is None: pwr_val = latest.get('pwr_sg')
-            if pwr_val is None: pwr_val = latest.get('pwr_st')
-            if pwr_val is None: pwr_val = latest.get('cntr_str_5min')
-            if pwr_val is None: pwr_val = latest.get('vol_power')
             
-            # [v1.2.7] 상세 로그용 원시 데이터 보관
-            result['raw_log'] += f"[ka10046] {str(latest)[:200]}..."
+            # [v3.1.0] 사용자가 제보한 1238 필드를 최우선 검색 (어제까지 잘 되었다는 필드)
+            # 숫자형 필드와 기존 필드 명칭 혼합 매핑
+            pwr_candidates = [
+                '1238', 'cntr_str_20min', 'cntr_str', 'pwr_st', 'pwr_sg', 'pwr_st', 
+                'cntr_str_5min', 'vol_power', 'dstr_rt'
+            ]
             
-            if pwr_val is not None:
-                try:
-                    pwr_f = float(str(pwr_val).replace(',', ''))
-                    if pwr_f > 0 or result['power'] == 0.0:
-                        result['power'] = pwr_f
-                except: pass
-    except: pass
+            found_pwr = None
+            for pk in pwr_candidates:
+                val = latest.get(pk)
+                if val is not None and str(val).strip() != "":
+                    try:
+                        f_val = float(str(val).replace(',', ''))
+                        if f_val > 0:
+                            found_pwr = f_val
+                            break
+                    except: pass
+            
+            # [v3.1.0] 전수 필드 로깅 추가 (latest 아이템 기준)
+            all_p_items = [f"{pk}:{pv}" for pk, pv in latest.items()]
+            result['raw_log'] += f"[ka10046] ALL_KEYS: {', '.join(all_p_items[:15])}... "
+            
+            if found_pwr is not None:
+                result['power'] = found_pwr
+    except Exception as e:
+        result['raw_log'] += f"[ka10046-Error] {e} "
 
     return result
 
@@ -353,11 +372,17 @@ def get_realtime_ranking_data(token=None, qry_tp='5'):
 
     try:
         response = requests.post(url, headers=headers, json=params, timeout=10)
-        res_json = response.json()
-
-        # [v2.4.0] API 통신 오류 로그 (빈 응답 추적용)
+        
+        # [v3.3.1] HTTP 상태 코드 먼저 확인
         if response.status_code != 200:
-            print(f"⚠️ [RankingData] HTTP 오류: {response.status_code} / 응답: {str(res_json)[:200]}")
+            # print(f"⚠️ [RankingData] HTTP 오류: {response.status_code}")
+            return []
+
+        # [v3.3.1] JSON 파싱 예외 처리 강화
+        try:
+            res_json = response.json()
+        except Exception:
+            # print(f"⚠️ [RankingData] JSON 파싱 실패 (응답이 비어있거나 올바르지 않음)")
             return []
         
         # [ka00198] 응답 구조: "item_inq_rank" 리스트 사용
@@ -406,6 +431,64 @@ def get_realtime_ranking_data(token=None, qry_tp='5'):
         print(f"⚠️ [RankingData] API 호출 실패: {e}")
         return []
 
+def get_top_trading_value(token=None, market_gb='0'):
+    """
+    [v4.0.1 Fix] 거래대금 상위 종목 데이터 조회 (ka10032 명세 적용)
+    - market_gb: 0:전체(코스피+코스닥), 1:코스피, 2:코스닥
+    """
+    from config import host_url
+    import requests
+    # [v4.0.3 Fix] 엔드포인트 오기 정정: mrkcond -> rkinfo (사용자 제보 ✅)
+    endpoint = '/api/dostk/rkinfo'
+    url = host_url + endpoint
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'api-id': 'ka10032' # [v4.0.1] ka00184 -> ka10032 변경
+    }
+    
+    # [v4.0.1] ka10032 전용 바디 파라미터 (이미지 명세 기반)
+    # mrkt_tp: 시장구분 (000:전체, 001:코스피, 101:코스닥)
+    m_tp = '000'
+    if market_gb == '1': m_tp = '001'
+    elif market_gb == '2': m_tp = '101'
+
+    params = {
+        'mrkt_tp': m_tp,           # 시장구분
+        'mang_stk_incls': '1',     # 관리종목포함 (0:미포함, 1:포함)
+        'stex_tp': '3'             # 거래소구분 (1:KRX, 2:NXT, 3:통합)
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=params, timeout=10)
+        if response.status_code != 200: return [], {"return_msg": f"HTTP {response.status_code}"}
+        
+        try:
+            res_json = response.json()
+        except: return [], {"return_msg": "JSON Parsing Error"}
+        
+        # [v4.0.3 Fix] rkinfo 응답 구조: trde_prica_upper (LIST)
+        data = res_json.get('data', res_json)
+        items = data.get('trde_prica_upper') or []
+        
+        if not items: return [], res_json
+            
+        results = []
+        for item in items:
+            # [v4.2.4] 종목 코드 정규화: 비숫자 문자(_AL 등)를 제거하고 순수 숫자 6자리만 추출하여 매칭 오류 방지
+            import re
+            code = item.get('stk_cd') or item.get('code')
+            if not code: continue
+            clean_code = re.sub(r'[^0-9]', '', str(code))[:6]
+            if clean_code:
+                results.append(clean_code)
+            if len(results) >= 150: break
+            
+        return results, res_json
+    except Exception as e:
+        # print(f"⚠️ [TopTradingValue] API 호출 실패: {e}")
+        return [], {"return_msg": str(e)}
+
 # 실행 구간
 if __name__ == '__main__':
     token = get_token()
@@ -413,3 +496,6 @@ if __name__ == '__main__':
     print(get_current_price('005930', token=token))
     # [v1.1.5] 스캔 테스트 추가
     print("🌅 장전 스캔 테스트:", get_morning_scan_data(token=token))
+    # [신규] 거래대금 랭킹 테스트
+    codes, _ = get_top_trading_value(token=token)
+    print("💎 거래대금 상위 10종목:", codes[:10])

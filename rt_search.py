@@ -36,9 +36,12 @@ class RealTimeSearch:
         self.on_realtime_trade = None # [신규] 실시간 체결 데이터 전달 콜백
         
         # [v1.9.5] 종목별 VI 상태 캐시 (상태 변화 시에만 로깅/알람 트리거용)
-        self.vi_state_cache = {} 
-        # [v2.3.0] 해제 신호 직후 가짜 발동 신호 차단용 캐시 (종목코드: (해제시간, vi_time))
         self.vi_release_cache = {}
+        self.vi_state_cache = {} # [V4.2.8] 중복 수신 방지용 캐시
+        
+        # [V3.3.8] 거래대금 상위 종목 캐시 (필터링용)
+        self.top_volume_set = set()
+        self.ranking_task = None
 
     async def connect(self, token, acnt_no=None):
         try:
@@ -66,26 +69,49 @@ class RealTimeSearch:
         print("👀 [감시모드] 초고속 수신 대기 중...")
         
         # [v2.5.3] VI 로그 정밀 필터링 (통과한 종목만 표시)
-        def _passes_vi_filter(name, v_price, v_type):
+        # [V4.2.8] 진단 로그 강화: 필터링 원인을 [VI-DEBUG]로 상세 로그창에 출력
+        def _passes_vi_filter(name, v_price, v_type, code):
             if not get_setting('bultagi_turbo_vi', False): return False
             try:
+                # [V3.3.8] 거래대금 상위 필터링 (최우선순위)
+                if get_setting('bultagi_turbo_vi_volume_enabled', False):
+                    # rank_limit = int(get_setting('bultagi_turbo_vi_volume_rank', 100))
+                    if self.top_volume_set and code not in self.top_volume_set:
+                        print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 거래대금 순위 밖 스킵</font>")
+                        return False
+
                 p = int(float(v_price)) if v_price else 0
                 if p > 0:
                     min_p = int(str(get_setting('bultagi_turbo_vi_min_price', '0')).replace(',', ''))
                     max_p = int(str(get_setting('bultagi_turbo_vi_max_price', '99999999')).replace(',', ''))
-                    if p < min_p or p > max_p: return False
+                    if p < min_p or p > max_p:
+                        print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 가격({p:,}원) 범위 밖 스킵</font>")
+                        return False
                     
-                if v_type == '1' and not get_setting('bultagi_turbo_vi_static', True): return False
-                if v_type == '2' and not get_setting('bultagi_turbo_vi_dynamic', True): return False
+                if v_type == '1' and not get_setting('bultagi_turbo_vi_static', True):
+                    print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 정적 VI 필터 OFF 스킵</font>")
+                    return False
+                if v_type == '2' and not get_setting('bultagi_turbo_vi_dynamic', True):
+                    print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 동적 VI 필터 OFF 스킵</font>")
+                    return False
                 
+                # 잡주 제외 필터
                 if get_setting('bultagi_turbo_ex_etf', True):
-                    if any(x in name for x in ['KODEX', 'TIGER', 'KBSTAR', 'HANARO', 'KOSEF', 'ARIRANG', 'SOL', 'ACE', 'TRUE', 'TIMEFOLIO', 'FOCUS', 'HK', '마이티', '파워', 'ETN']): return False
+                    if any(x in name for x in ['KODEX', 'TIGER', 'KBSTAR', 'HANARO', 'KOSEF', 'ARIRANG', 'SOL', 'ACE', 'TRUE', 'TIMEFOLIO', 'FOCUS', 'HK', '마이티', '파워', 'ETN']):
+                        print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) ETF/ETN 스킵</font>")
+                        return False
                 if get_setting('bultagi_turbo_ex_spac', True):
-                    if '스팩' in name or ('제' in name and '호' in name): return False
+                    if '스팩' in name or ('제' in name and '호' in name):
+                        print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 스팩 스킵</font>")
+                        return False
                 if get_setting('bultagi_turbo_ex_prefer', True):
-                    if name.endswith('우') or name.endswith('우B') or name.endswith('우C'): return False
+                    if name.endswith('우') or name.endswith('우B') or name.endswith('우C'):
+                        print(f"📡 <font color='#888888'>[VI-DEBUG] {name}({code}) 우선주 스킵</font>")
+                        return False
                 return True
-            except: return True
+            except Exception as e:
+                print(f"📡 <font color='#888888'>[VI-DEBUG] {name} 필터링 오류: {e}</font>")
+                return True
 
         while self.keep_running and self.websocket:
             try:
@@ -99,9 +125,8 @@ class RealTimeSearch:
                 tr_lower = str(trnm).strip().lower() if trnm else ''
                 
                 if tr_lower != 'ping':
-                    if tr_lower not in ['real', 'cnsr', 'rscn', 'system', '1h']:
-                        # print(f"📥 [수신] {trnm}") # [v1.2.3 제거]
-                        pass
+                    if tr_lower not in ['real', 'cnsr', 'rscn', 'system', '1h', 'login', 'cnsrlst']:
+                        print(f"📥 <font color='#888888'>[수신-알수없음] {trnm} 수신됨 ({len(str(response))} bytes)</font>")
 
                 if tr_lower == 'login':
                     if response.get('return_code') == 0:
@@ -293,7 +318,7 @@ class RealTimeSearch:
                                 self.vi_state_cache[jmcode] = f"{jmcode}_{vi_status}_{vi_time}"
 
                                 # [v2.5.3] 필터 조건 미달 시 로깅 및 진행 완전 차단 (사용자 요청)
-                                if not _passes_vi_filter(s_name, vi_price, vi_type):
+                                if not _passes_vi_filter(s_name, vi_price, vi_type, jmcode):
                                     continue
 
                                 # [v2.2.0 / v2.2.9] 로그에서 종목코드 제거
@@ -329,18 +354,9 @@ class RealTimeSearch:
                                         if jmcode in ACCOUNT_CACHE['holdings']:
                                             s_name = values.get('302', jmcode)
                                             # [v2.2.9] 로그에서도 코드 제거
-                                            print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! 1분 50초 후 알람 예약...</font>")
-                                            
-                                            async def vi_alarm_timer(name, code):
-                                                await asyncio.sleep(110) # 1분 50초 대기
-                                                # [v2.2.8] 사용자 요청: 알람 문구에서 종목코드 제거
-                                                print(f"📢 <font color='#f1c40f'><b>[VI해제임박]</b> {name} VI 해제 10초 전! (타입:{vi_type_txt}) 얼른 보러 와!</font>")
-                                                try:
-                                                    from check_n_buy import say_text
-                                                    say_text(f"{name} 브이아이 해제 긴급")
-                                                except: pass
-                                            
-                                            asyncio.create_task(vi_alarm_timer(s_name, jmcode))
+                                            # [v4.0.1] GUI의 append_log에서 [VI발동] 태그를 감지하여 110초 후 알람을 통합 관리하므로
+                                            # 엔진 내부의 중복 타이머는 제거하고 로그만 출력합니다.
+                                            print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! (1분 50초 후 알람 예약됨)</font>")
 
                                     # [핵심] 해제(2) 또는 재개(4) 시 즉시 매수 트리거
                                     elif vi_status in ['2', '4']:
@@ -416,8 +432,13 @@ class RealTimeSearch:
                             vi_type = values.get('9052') or values.get('1225', '') or str(values.get('9069', ''))
                             vi_price = values.get('9054') or values.get('1236', '0')
                             
+                            # [V4.2.8] 강력한 상태 감지Fallback: 9068이 없더라도 해제 시간/가격이 들어오면 추정
+                            if not vi_status and vi_time:
+                                vi_status = '1' if (vi_price != '0' and vi_price != '') else '2'
+                                print(f"📡 <font color='#888888'>[1h-DEBUG] vi_status 추정 적용: {vi_status} (Time:{vi_time})</font>")
+
                             # [v2.5.3] 필터 미달 시 잡주 로그 원천 차단
-                            if not _passes_vi_filter(s_name, vi_price, vi_type):
+                            if not _passes_vi_filter(s_name, vi_price, vi_type, jmcode):
                                 continue
                             
                             # 중복 체크
@@ -428,13 +449,22 @@ class RealTimeSearch:
                             if vi_status or vi_time:
                                 status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
                                 st_txt = status_map.get(vi_status, "감지")
-                                tag = "[VI발동]" if vi_status == '1' else "[VI감지]"
-                                print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name}({jmcode}) 상태: {st_txt} | 시간:{vi_time}</font>")
+                                # [V4.2.9] GUI의 보유 종목 매칭(regex)을 위해 종목코드 괄호를 제거하고 표준 포맷 유지
+                                print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name} 상태: {st_txt} | 시간:{vi_time}</font>")
+
+                            # [V4.2.9] 1h TR에서도 보유 종목일 경우 알람 예약용 로그 출력 (GUI 전송용)
+                            if get_setting('bultagi_turbo_vi', False) and vi_status == '1':
+                                try:
+                                    from check_n_buy import ACCOUNT_CACHE
+                                    if jmcode in ACCOUNT_CACHE['holdings']:
+                                        print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! (1분 50초 후 알람 예약됨)</font>")
+                                except: pass
 
                             if get_setting('bultagi_turbo_vi', False) and vi_status in ['2', '4']:
                                 print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {s_name} ({jmcode}) VI 해제(1h) 발생!</font>")
                                 from check_n_buy import chk_n_buy
-                                asyncio.create_task(asyncio.to_thread(chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result))
+                                # [V4.2.8 Fix] 누락된 vi_type 인자 추가
+                                asyncio.create_task(asyncio.to_thread(chk_n_buy, jmcode, self.token, 'SYSTEM_VI', None, 'VI해제', self.on_news_result, vi_type))
 
                 else:
                     if tr_lower not in ['ping', 'reg']:
@@ -458,14 +488,93 @@ class RealTimeSearch:
         except: return False
 
     async def _account_polling_loop(self):
-        """보조적으로 계좌 정보를 갱신"""
+        """보조적으로 계좌 정보를 갱신 (토큰 갱신 감지 포함)"""
         while self.keep_running:
             try:
                 from check_n_buy import update_account_cache
                 loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, update_account_cache, self.token)
-            except: pass
+                # [v3.0.4] 갱신된 최신 토큰을 받아 본인의 토큰 속성을 업데이트함
+                updated_token = await loop.run_in_executor(None, update_account_cache, self.token)
+                if updated_token and updated_token != self.token:
+                    print(f"🔄 [rt_search] 토큰 자동 갱신 확인 ({self.token[:5]}... -> {updated_token[:5]}...)")
+                    self.token = updated_token
+            except Exception as e:
+                print(f"⚠️ [Polling] 에러: {e}")
             await asyncio.sleep(60)
+ 
+    async def _ranking_update_loop(self):
+        """[V4.0.2] 주기적으로 거래대금 상위 종목 캐싱 (5분 간격)
+        - [v3.0.4] 토큰 만료 시 자동 갱신 시도
+        """
+        while self.keep_running:
+            try:
+                from get_setting import get_setting
+                from stock_info import get_top_trading_value
+                from login import fn_au10001 as get_token
+                
+                loop = asyncio.get_event_loop()
+                codes, res_json = await loop.run_in_executor(None, get_top_trading_value, self.token)
+                
+                # [v3.0.4] 토큰 오류 체크 (문자열 변환 후 정교하게 비교)
+                ret_code = str(res_json.get('return_code', '0')).strip()
+                if ret_code not in ['0', '0000', '00000']:
+                    msg = str(res_json.get('return_msg', ''))
+                    # [v3.0.5] 토큰 이슈일 때만 자동 갱신 시도 
+                    if 'token' in msg or 'auth' in msg or '인증' in msg:
+                        print("⚠️ [Ranking] 토큰 만료 감지 -> 즉시 자동 갱신 시도")
+                        new_token = await loop.run_in_executor(None, get_token)
+                        if new_token:
+                            self.token = new_token
+                            # 갱신 후 바로 1회 재시도
+                            codes, res_json = await loop.run_in_executor(None, get_top_trading_value, self.token)
+                    else:
+                        # 그 외 일반 서버 에러는 로그만 출력
+                         print(f"<font color='#e74c3c'>[Ranking-DEBUG] ⚠️ 조회 실패 ({ret_code}): {msg}</font>")
+                
+                if codes:
+                    rank_limit = int(get_setting('bultagi_turbo_vi_volume_rank', 100))
+                    limited_codes = codes[:rank_limit]
+                    
+                    # [V4.0.2] [Ranking-DEBUG] 로데이터 로그 출력 (상위 50개 미리보기)
+                    # [V4.2.8] 종목명 매핑 및 50위까지 확대 노출
+                    data_obj = res_json.get('data', res_json)
+                    items = data_obj.get('trde_prica_upper', [])
+                    import re
+                    # [V4.2.9] name, stk_name 등 다양한 가능성 시도 (미상 방지)
+                    name_map = {}
+                    for it in items:
+                        c = re.sub(r'[^0-9]', '', str(it.get('stk_cd', it.get('code', ''))))[:6]
+                        if not c: continue
+                        name = it.get('stk_nm') or it.get('name') or it.get('stk_name') or it.get('hts_kor_isnm', '')
+                        name_map[c] = name
+
+                    display_list = []
+                    for i, c in enumerate(limited_codes[:50]):
+                        name = name_map.get(c, "미상")
+                        display_list.append(f"{i+1}:{name}({c})")
+                    
+                    top50_str = ", ".join(display_list)
+                    print(f"<font color='#888888'>[Ranking-DEBUG] 거래대금 {len(limited_codes)}종목 갱신완료 | Top50: {top50_str}</font>")
+                    # [v4.2.5] 상세 로그창 가독성 확보를 위해 원시 데이터(Raw JSON) 출력 주석 처리
+                    # print(f"[Rank Raw] {res_json}")
+                    
+                    # [V3.3.8] VI 필터용 set 업데이트
+                    self.top_volume_set = set(limited_codes)
+                    
+                    # [V4.0.0] 매수/진단 엔진과 캐시 동기화 (순위 유지를 위해 list로 전달)
+                    try:
+                        import check_n_buy
+                        # [V4.0.2] Atomic 업데이트: 새 리스트 생성 후 통째로 교체 (스레드 안전)
+                        check_n_buy.TOP_VOLUME_RANK_CACHE = list(limited_codes)
+                    except Exception as sync_e:
+                        print(f"⚠️ [Ranking-DEBUG] 캐시 동기화 실패: {sync_e}")
+                else:
+                    msg = res_json.get('return_msg', '빈 응답')
+                    print(f"<font color='#e74c3c'>[Ranking-DEBUG] ⚠️ 거래대금 데이터 수신 실패 ({msg})</font>")
+                    
+            except Exception as e:
+                print(f"⚠️ [RankingCache] 갱신 오류: {e}")
+            await asyncio.sleep(300)
 
     async def start(self, token, acnt_no=None):
         try:
@@ -484,6 +593,8 @@ class RealTimeSearch:
 
             self.receive_task = asyncio.create_task(self.receive_messages())
             self.polling_task = asyncio.create_task(self._account_polling_loop())
+            # [V3.3.8] 랭킹 캐싱 태스크 시작
+            self.ranking_task = asyncio.create_task(self._ranking_update_loop())
 
             print(f"🔔 실시간 체결 감시 등록...")
             acnt = self.acnt_no if self.acnt_no else ''
