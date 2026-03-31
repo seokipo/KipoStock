@@ -125,7 +125,7 @@ class RealTimeSearch:
                 tr_lower = str(trnm).strip().lower() if trnm else ''
                 
                 if tr_lower != 'ping':
-                    if tr_lower not in ['real', 'cnsr', 'rscn', 'system', '1h', 'login', 'cnsrlst']:
+                    if tr_lower not in ['real', 'cnsr', 'rscn', 'system', '1h', 'login', 'cnsrlst', 'reg', 'cnsrreq']:
                         print(f"📥 <font color='#888888'>[수신-알수없음] {trnm} 수신됨 ({len(str(response))} bytes)</font>")
 
                 if tr_lower == 'login':

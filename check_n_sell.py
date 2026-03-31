@@ -17,8 +17,10 @@ _LAST_MAPPING_MTIME = 0
 _LAST_BULTAGI_DIAG_TIME = 0 # [v6.3.0] 불타기 진단 로그 출력 시간 기록
 from check_n_buy import load_json_safe, save_json_safe, update_stock_condition, update_stock_peak_rt # [수정] update_stock_peak_rt 추가
 
-def chk_n_sell(token=None):
+def chk_n_sell(token=None, disabled_stocks=None):
     global _STRATEGY_MAPPING_CACHE, _LAST_MAPPING_MTIME, _LAST_BULTAGI_DIAG_TIME
+    if disabled_stocks is None:
+        disabled_stocks = set()
     
     try:
         current_time = time.time()
@@ -416,23 +418,31 @@ def chk_n_sell(token=None):
 
                             # 최종 트리거 (진입 전일 때만 실행)
                             if not bultagi_done and current_gate >= 6:
-                                print(f"🔥 <font color='#ff4444'><b>[발송]</b></font> {safe_stk_nm}: 5관문 모두 돌파! 주문 집행...")
-                                try:
-                                    from bultagi_engine import trigger_bultagi_buy
-                                    success = trigger_bultagi_buy(stk_cd, token=token)
-                                    if success:
-                                        print(f"✅ [성공] {safe_stk_nm}: 매수 주문이 성공적으로 발송되었습니다.")
-                                        update_stock_condition(stk_cd, name='불타기진입', strat='불타기', seq=info.get('seq'), bultagi_done=True)
-                                    else:
-                                        print(f"❌ [실패] {safe_stk_nm}: 엔진 호출은 성공했으나 주문 발송에 실패했습니다.")
-                                except Exception as eng_err:
-                                    print(f"❌ [오류] {safe_stk_nm}: 엔진 호출 중 예외 발생: {eng_err}")
+                                # [V4.3.4] 일시 정지된 종목은 불타기 발동 스킵
+                                if safe_stk_nm in disabled_stocks:
+                                    print(f"⏸ <font color='#f39c12'>[정지중]</font> {safe_stk_nm}: 5관문 돌파! 그러나 일시 정지 중이라 주문을 건너뜁니다.")
+                                else:
+                                    print(f"🔥 <font color='#ff4444'><b>[발송]</b></font> {safe_stk_nm}: 5관문 모두 돌파! 주문 집행...")
+                                    try:
+                                        from bultagi_engine import trigger_bultagi_buy
+                                        success = trigger_bultagi_buy(stk_cd, token=token)
+                                        if success:
+                                            print(f"✅ [성공] {safe_stk_nm}: 매수 주문이 성공적으로 발송되었습니다.")
+                                            update_stock_condition(stk_cd, name='불타기진입', strat='불타기', seq=info.get('seq'), bultagi_done=True)
+                                        else:
+                                            print(f"❌ [실패] {safe_stk_nm}: 엔진 호출은 성공했으나 주문 발송에 실패했습니다.")
+                                    except Exception as eng_err:
+                                        print(f"❌ [오류] {safe_stk_nm}: 엔진 호출 중 예외 발생: {eng_err}")
 
                         except Exception as e_proc_inner:
                             if show_diag: print(f"⚠️ [불타기진단내부오류] {safe_stk_nm}: {e_proc_inner}")
 
                     # --- [Gate 6] 실제 매도 실행 로직 복구 (V3.1.9) ---
-                    if pl_rt > specific_tp or pl_rt < specific_sl:
+                    # [V4.3.4] 일시 정지 중인 종목은 매도도 스킵
+                    if safe_stk_nm in disabled_stocks:
+                        if pl_rt > specific_tp or pl_rt < specific_sl:
+                            print(f"⏸ <font color='#f39c12'>[정지중]</font> {safe_stk_nm}: 매도 조건 도달! 그러나 일시 정지 중이라 매도를 건너뜁니다.")
+                    elif pl_rt > specific_tp or pl_rt < specific_sl:
                         if MarketHour.is_market_open_time():
                             sell_result = sell_stock(stk_cd, str(qty), token=token)
                             

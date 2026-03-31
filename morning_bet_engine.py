@@ -228,17 +228,17 @@ class MorningBetEngine:
                         if code in self.bet_history or code in processed_d: continue
                         
                         vol_rate = data.get('vol_rate', 0) 
-                        # [V4.2.7] 거래량 폭증 기준 동기화 (2.0 -> 10.0배)
-                        # 단, 5.0배 이상 포착 시 로그를 출력하여 자기가 진행 상황을 볼 수 있게 함
-                        if vol_rate >= 10.0:
+                        # [V4.3.4] 거래량 폭증 기준 완화 (사용자 요청: 10.0 -> 5.0배)
+                        # 단, 3.0배 이상 포착 시 로그를 출력하여 자기가 진행 상황을 볼 수 있게 함
+                        if vol_rate >= 5.0:
                             s_name = data.get('name', code)
-                            print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 10배 폭증! 타격 개시")
+                            print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 5배 폭증! 타격 개시")
                             self.execute_bet(code, "D_VolSurge", tag='MORNING_D')
                             processed_d.add(code)
-                        elif vol_rate >= 5.0:
+                        elif vol_rate >= 3.0:
                             s_name = data.get('name', code)
                             if code not in getattr(self, '_logged_vol', set()):
-                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 10배)")
+                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 5배)")
                                 if not hasattr(self, '_logged_vol'): self._logged_vol = set()
                                 self._logged_vol.add(code)
                 

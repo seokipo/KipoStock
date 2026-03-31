@@ -162,14 +162,18 @@ def update_account_cache(token):
             # [Fix v3.0.3] API 통신 실패 및 토큰 만료 시 기존 데이터를 날리지 않고 유지하여 UI 증발 방지
             # [v3.0.4] 혹시 모를 토큰 만료 대응: 즉시 1회 자동 토큰 갱신 시도
             print("⚠️ [계좌갱신] API 응답 에러 (데이터 유지 및 토큰 갱신 시도...)")
-            new_token = get_token()
+            new_token = get_token(force=True) # 강제 재발급
             if new_token:
-                # 갱신 성공 시 바로 1회 재시도 (재귀 호출 대신 직접 처리)
+                # 갱신 성공 시 바로 1회 재시도
                 my_stocks_data = get_my_stocks(token=new_token)
                 if my_stocks_data:
-                    token = new_token # 이후 로직을 위해 토큰 교체
-                else: return # 재시도 실패 시 중단
-            else: return # 갱신 실패 시 중단
+                    token = new_token
+                else: 
+                    time.sleep(0.5)
+                    return token
+            else: 
+                time.sleep(0.5)
+                return token
 
         my_stocks = []
         if isinstance(my_stocks_data, dict):

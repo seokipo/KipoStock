@@ -1434,7 +1434,7 @@ class KipoFilterListDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("KipoStock AI V3.0.9")
+        self.setWindowTitle("KipoStock AI V4.3.4")
         self.setMinimumSize(480, 520)
         self.resize(520, 580)
         self._apply_style()
@@ -3146,9 +3146,10 @@ class KipoWindow(QMainWindow):
 
         self.bultagi_dialog = None # [신규] 모달리스 인스턴스 유지 변수
         self.advanced_visible = False # [Fix v6.2.5] AttributeError: 'KipoWindow' object has no attribute 'advanced_visible' 긴급 복구
+        self.disabled_auto_stocks = set() # [V4.3.4] 개별 종목 자동매매 일시 정지 목록
         
         # [v2.5.1] 성능 최적화 및 음성 토글 기능 통합 빌드
-        self.setWindowTitle("KipoStock Professional Trader AI - V4.3.0")
+        self.setWindowTitle("KipoStock Professional Trader AI - V4.3.4")
         self.is_closing = False # [v3.0.1] 종료 플래그 초기화
 
         # [NEW v6.5.1] 로그 버퍼링 타이머 가동 (0.25초 주기로 뭉쳐서 출력)
@@ -4432,8 +4433,8 @@ class KipoWindow(QMainWindow):
         
         # 3. 불타기 현황 보드 (Diagnosis Board)
         self.bultagi_status_board = QTableWidget()
-        self.bultagi_status_board.setColumnCount(9) # [V4.0.0] 8 -> 9 (거래대금 추가)
-        self.bultagi_status_board.setHorizontalHeaderLabels(["종목명", "진행", "거래대금", "1차(대기)", "2차(수익)", "3차(강도)", "4차(추세)", "5차(호가)", "매도조건"])
+        self.bultagi_status_board.setColumnCount(10) # [V4.3.4] 9 -> 10 (일시정지 체크박스 추가)
+        self.bultagi_status_board.setHorizontalHeaderLabels(["정지", "종목명", "진행", "거래대금", "1차(대기)", "2차(수익)", "3차(강도)", "4차(추세)", "5차(호가)", "매도조건"])
         self.bultagi_status_board.verticalHeader().setVisible(False)
         self.bultagi_status_board.verticalHeader().setDefaultSectionSize(24) # [V3.0.1] 보유 현황 테이블과 동일하게 24px 행 높이 설정
         self.bultagi_status_board.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -4445,7 +4446,9 @@ class KipoWindow(QMainWindow):
                 font-family: 'Malgun Gothic', 'Dotum'; font-size: 11px;
             }
             QHeaderView::section { background-color: #2c3e50; color: #ff6b6b; padding: 2px; border: 1px solid #333; font-weight: bold; }
+            QCheckBox::indicator { width: 11px; height: 11px; }
         """)
+        self.bultagi_status_board.setColumnWidth(0, 35) # [V4.3.4] 정지 컬럼 너비 슬림하게 조정
         self.bultagi_status_board.horizontalHeader().setStretchLastSection(True)
         self.bultagi_status_board.horizontalHeader().setFixedHeight(28) # [V3.0.1] 보유 현황 테이블과 동일한 헤더 높이(28px) 적용
         self.bultagi_status_board.setFixedHeight(146) # [V3.0.1] 5개 종목 표시에 맞게 최적화 (24px * 5 + 헤더 높이 + 여백)
@@ -5049,10 +5052,12 @@ class KipoWindow(QMainWindow):
             parts = payload.split('|')
             if len(parts) < 2: return
             stk_nm = parts[0]
+            is_paused = stk_nm in self.disabled_auto_stocks
             
             row = -1
+            # [V4.3.4] 종목명 컬럼이 1번(index)으로 이동
             for i in range(self.bultagi_status_board.rowCount()):
-                item = self.bultagi_status_board.item(i, 0)
+                item = self.bultagi_status_board.item(i, 1)
                 if item and item.text() == stk_nm:
                     row = i
                     break
@@ -5060,27 +5065,42 @@ class KipoWindow(QMainWindow):
             if row == -1:
                 row = self.bultagi_status_board.rowCount()
                 self.bultagi_status_board.insertRow(row)
+                
+                # [V4.3.4] col 0: 일시정지 체크박스
+                chk_widget = QWidget()
+                chk_layout = QHBoxLayout(chk_widget)
+                chk_layout.setContentsMargins(2, 0, 0, 0)
+                chk_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                chk = QCheckBox()
+                chk.setChecked(is_paused)
+                chk.setToolTip(f"{stk_nm} 자동매매 일시 정지")
+                chk.stateChanged.connect(lambda state, nm=stk_nm: self.on_auto_trade_toggle(state, nm))
+                chk_layout.addWidget(chk)
+                self.bultagi_status_board.setCellWidget(row, 0, chk_widget)
+                
+                # col 1: 종목명
                 name_item = QTableWidgetItem(stk_nm)
                 name_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.bultagi_status_board.setItem(row, 0, name_item)
+                self.bultagi_status_board.setItem(row, 1, name_item)
             
-            for col, val in enumerate(parts[1:], 1):
-                if col >= 9: break # [V4.0.0] 8 -> 9
+            # [V4.3.4] 데이터 컬럼은 2번부터 시작 (기존 1번->2번 시프트)
+            for col, val in enumerate(parts[1:], 2):
+                if col >= 10: break # [V4.3.4] 최대 10컬럼
                 item = QTableWidgetItem(val)
                 item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 
-                if col == 1:
+                if col == 2: # 진행
                     if "완료" in val: item.setForeground(QColor("#2ecc71"))
                     elif "관문" in val: item.setForeground(QColor("#f1c40f"))
                 
-                elif col == 2: # [V4.0.0] 거래대금 컬럼 색상 (하늘색)
+                elif col == 3: # 거래대금 (하늘색)
                     item.setForeground(QColor("#00e5ff"))
                     if "위" in val:
                         font = item.font()
                         font.setBold(True)
                         item.setFont(font)
 
-                elif col == 8: # [V4.0.0] 매도조건 컬럼 (기존 7 -> 8)
+                elif col == 9: # 매도조건 (기존 8 -> 9)
                     is_entry_done = ("진입완료" in parts[1])
                     if "✅" in val or is_entry_done: 
                         item.setForeground(QColor("#2ecc71"))
@@ -5090,20 +5110,39 @@ class KipoWindow(QMainWindow):
                 elif "✅" in val: item.setForeground(QColor("#2ecc71"))
                 elif any(x in val for x in ["🚫", "📉", "⚖️"]): item.setForeground(QColor("#e74c3c"))
                 
+                # 일시정지 상태면 행 전체 배경 어둡게
+                if is_paused:
+                    item.setBackground(QColor("#2a2a2a"))
+                    item.setForeground(QColor("#888888"))
+                
                 self.bultagi_status_board.setItem(row, col, item)
         except Exception as e:
             print(f"⚠️ [update_bultagi_status_board] 에러: {e}")
+
+    def on_auto_trade_toggle(self, state, stk_nm):
+        """[V4.3.4] 불타기 보드 체크박스 클릭 시 자동매매 일시 정지/재개 처리"""
+        try:
+            is_paused = (state == 2)  # Qt.CheckState.Checked == 2
+            if is_paused:
+                self.disabled_auto_stocks.add(stk_nm)
+                self.append_log(f"⏸ <b>[정지]</b> <font color='#f39c12'>{stk_nm}</font> 자동매매가 일시 정지되었습니다.")
+            else:
+                self.disabled_auto_stocks.discard(stk_nm)
+                self.append_log(f"▶️ <b>[재개]</b> <font color='#2ecc71'>{stk_nm}</font> 자동매매가 재개되었습니다.")
+        except Exception as e:
+            print(f"⚠️ [on_auto_trade_toggle] 에러: {e}")
 
     def remove_from_bultagi_status_board(self, stk_nm):
         """특정 종목을 불타기 보드에서 제거합니다."""
         try:
             target_nm = stk_nm.strip()
             for i in range(self.bultagi_status_board.rowCount() - 1, -1, -1):
-                item = self.bultagi_status_board.item(i, 0)
+                item = self.bultagi_status_board.item(i, 1) # [V4.3.4] col 0->1로 이동
                 if item:
                     current_nm = item.text().strip()
                     if current_nm == target_nm or target_nm in current_nm:
                         self.bultagi_status_board.removeRow(i)
+                        self.disabled_auto_stocks.discard(current_nm) # 정지 목록에서도 제거
                         # [v3.0.9] 동기화 가시성 확보를 위한 로그 추가
                         self.append_log(f"🧹 [동기화] 불타기 보드에서 종목 제거: {target_nm}")
         except Exception as e:
@@ -5117,7 +5156,7 @@ class KipoWindow(QMainWindow):
             
             # 테이블 역순 순회 (제거 시 인덱스 변화 방지)
             for i in range(self.bultagi_status_board.rowCount() - 1, -1, -1):
-                item = self.bultagi_status_board.item(i, 0)
+                item = self.bultagi_status_board.item(i, 1) # [V4.3.4] col 0->1로 이동
                 if item:
                     current_stk_nm = item.text().strip()
                     # 만약 보유 종목 리스트에 없다면 삭제 (주의: "종목명" 컬럼 기준)
@@ -7155,12 +7194,12 @@ if __name__ == '__main__':
     faulthandler.dump_traceback_later(300, repeat=True, file=f_fault)
 
     try:
-        log_step("--- START V4.3.0 ---")
+        log_step("--- START V4.3.4 ---")
         
         # [추가] Windows 작업표시줄 아이콘 고동
         if sys.platform == 'win32':
             import ctypes
-            myappid = 'kipo.buy.auto.4.2'
+            myappid = 'kipo.buy.auto.4.3.4'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
             log_step("OS ID Set")
 

@@ -222,10 +222,10 @@ class ChatCommand:
         if self.on_condition_loaded:
             self.on_condition_loaded()
 
-    def get_token(self):
+    def get_token(self, force=False):
         """새로운 토큰을 발급받고 모든 모듈에 강제 동기화합니다."""
         try:
-            token = fn_au10001()
+            token = fn_au10001(force=force)
             if token:
                 self.token = token
                 if self.rt_search:
@@ -253,9 +253,9 @@ class ChatCommand:
                 except Exception as api_err:
                     err_msg = str(api_err)
                     if any(x in err_msg for x in ['8005', 'Token', 'entr', 'Invalid']):
-                        print(f"⚠️ 인증 실패 감지: 토큰을 재발급합니다.")
-                        self.get_token()
-                        await asyncio.sleep(2)
+                        print(f"⚠️ 인증 실패 감지: 토큰을 강제 재발급합니다.")
+                        self.get_token(force=True) # 강제 재발급 메서드 호출
+                        await asyncio.sleep(3.0) # 넉넉히 대기
                         continue 
             except Exception as e:
                 print(f"⚠️ 계좌 동기화 루프 예외: {e}")
@@ -274,7 +274,13 @@ class ChatCommand:
                     await asyncio.sleep(1)
                     continue
                     
-                success = await asyncio.get_event_loop().run_in_executor(None, chk_n_sell, self.token)
+                # [V4.3.4] 일시 정지된 종목 목록을 매도 루프에 전달
+                disabled = set()
+                try:
+                    if hasattr(self, 'main_window') and hasattr(self.main_window, 'disabled_auto_stocks'):
+                        disabled = set(self.main_window.disabled_auto_stocks)
+                except: pass
+                success = await asyncio.get_event_loop().run_in_executor(None, chk_n_sell, self.token, disabled)
                 failure_count = 0 if success else failure_count + 1
                 
                 # [v5.5] 실시간 차트 API 동기화 감지 (매도 발생 시 1회)
