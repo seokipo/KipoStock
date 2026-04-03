@@ -740,8 +740,19 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
             
             s_name = get_stock_name_safe(stk_cd, token)
             
+            # [v5.0.8] 전략명 정규화 (랭크, 불타기, VI 등)
+            s_mode_db = '랭크'
+            if seq == 'SYSTEM_VI':
+                s_mode_db = 'VI'
+            elif seq_name and "MorningBet" in seq_name:
+                s_mode_db = '시초가'
+            elif mode == 'BULTAGI': 
+                s_mode_db = '랭크' # chk_n_buy는 1차 진입이므로 '랭크'
+            else:
+                s_mode_db = '랭크'
+            
             # 세션 매수 기록
-            session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=mode, seq=seq)
+            session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=s_mode_db, seq=seq)
             
             # [수정] 비동기 처리: 종목별 검색 조건명 및 전략 저장
             if seq_name:
@@ -905,13 +916,17 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             
             s_name = get_stock_name_safe(stk_cd, token)
             
-            # 세션 매수 기록 (전략별 태그 세분화: MORNING_*, VI해제, 그 외 ACCEL)
+            # 세션 매수 기록 (v5.0.8 전략 정규 명칭 반영: 시초가, VI, 랭크, 불타기 등)
             if source.startswith('MORNING'):
-                s_mode = source # MORNING_A, MORNING_B 등 그대로 사용
+                s_mode = '시초가'
             elif source == 'VI_TURBO':
-                s_mode = 'VI해제'
+                s_mode = 'VI'
+            elif source == 'RankScout':
+                s_mode = '랭크'
+            elif source == 'BULTAGI':
+                s_mode = '불타기'
             else:
-                s_mode = 'ACCEL'
+                s_mode = '가속'
             session_logger.record_buy(stk_cd, s_name, qty, final_price, strat_mode=s_mode)
             
             # [v6.2.8] 매수 시간 및 정보 저장 (재매수 대응 overwrite=True)

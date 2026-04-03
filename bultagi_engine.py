@@ -33,7 +33,8 @@ def trigger_bultagi_buy(stk_cd, token=None):
 
             for stock in my_stocks:
                 if stock['stk_cd'].replace('A', '') == stk_cd.replace('A', ''):
-                    holding_qty = int(stock.get('rmnd_qty', 0))
+                    # [v5.0.8] 필드명 호환성 보강 (rmnd_qty, hldg_qty 모두 시도)
+                    holding_qty = int(stock.get('rmnd_qty', stock.get('hldg_qty', 0)))
                     break
             
             if holding_qty <= 0:
@@ -79,7 +80,7 @@ def trigger_bultagi_buy(stk_cd, token=None):
             except: 
                 s_name = stk_cd
 
-            msg = f"🔥 [집행] {s_name} {ord_qty}주 시장가 추가 매수 완료!"
+            msg = f"🔥 [집행] {s_name} {buy_qty}주 시장가 추가 매수 완료!"
             print(f"<font color='#ff4444'><b>{msg}</b></font>")
             tel_send(msg, msg_type='log')
             
@@ -91,7 +92,10 @@ def trigger_bultagi_buy(stk_cd, token=None):
             
             return True
         else:
-            print(f"❌ [bultagi_engine] 주문 실패: {ret_msg}")
+            # [v5.0.8] 주문 실패 시 브로커 메시지(ret_msg) 상세 출력
+            fail_msg = f"❌ [bultagi_engine] 주문 실패 ({ret_code}): {ret_msg}"
+            print(fail_msg)
+            tel_send(fail_msg, msg_type='error')
             return False
 
     except Exception as e:

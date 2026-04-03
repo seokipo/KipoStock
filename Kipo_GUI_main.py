@@ -1494,7 +1494,7 @@ class KipoFilterListDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("KipoStock AI V5.0.7")
+        self.setWindowTitle("KipoStock AI V5.1.2")
         self.setMinimumSize(480, 520)
         self.resize(520, 580)
         self._apply_style()
@@ -2683,13 +2683,17 @@ class PortfolioTableWidget(QTableWidget):
                 m_info = mapping[clean_code]
                 s_key = m_info.get('strat', 'none')
                 
-                # 전략 맵 정규화 및 확장
+                # [v5.0.8] 전략 명칭 정밀 세분화 (랭크 vs 불타기 vs VI 등)
                 strat_map = {
                     'qty': '1주', 'amount': '금액', 'percent': '비율', 
                     'HTS': 'HTS', 'BULTAGI': '불타기', 'MORNING': '시초가', 'ACCEL': '가속',
-                    'CLOSING_BET': '종가베팅'
+                    'CLOSING_BET': '종가', 'SYSTEM_VI': 'VI'
                 }
                 strat_nm = strat_map.get(s_key)
+                
+                # [v5.0.8] 불타기 진입 전 상태(정찰병)일 경우 명칭을 '랭크'로 변경
+                if s_key == 'BULTAGI' and not m_info.get('bultagi_done', False):
+                    strat_nm = "랭크"
                 
                 # [v1.3.1] 전략 키가 없으면 조건식 명칭(name)을 표시하도록 폴백
                 if not strat_nm:
@@ -2697,17 +2701,18 @@ class PortfolioTableWidget(QTableWidget):
             
             item_strat = QTableWidgetItem(strat_nm)
             item_strat.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            # 색상 맵 확장
+            
+            # [v5.0.8] 색상 체계 고도화 (자기 요청!)
             strat_colors = {
                 '1주': '#ff4444', '금액': '#00c851', '비율': '#33b5e5', 
                 'HTS': '#8a2be2', '불타기': '#f39c12', '시초가': '#e67e22', '가속': '#e91e63',
-                '종가베팅': '#f1c40f'
+                '종가': '#f1c40f', '랭크': '#00e5ff', 'VI': '#00e5ff'
             }
             if strat_nm in strat_colors:
                 item_strat.setForeground(QColor(strat_colors[strat_nm]))
-                if strat_nm == '종가베팅':
+                if strat_nm in ['종가', '랭크', '불타기']:
                     font = item_strat.font()
-                    font.setBold(True)
+                    font.setBold(True) # 중요 전략은 볼드 처리
                     item_strat.setFont(font)
             self.setItem(row, 0, item_strat)
 
@@ -3218,7 +3223,7 @@ class KipoWindow(QMainWindow):
         self.disabled_auto_stocks = set() # [V4.3.4] 개별 종목 자동매매 일시 정지 목록
         
         # [v2.5.1] 성능 최적화 및 음성 토글 기능 통합 빌드
-        self.setWindowTitle("KipoStock Professional Trader AI - V5.0.8 (Gemini Hybrid)")
+        self.setWindowTitle("KipoStock Professional Trader AI - V5.1.2 (Gemini Hybrid)")
         self.is_closing = False # [v3.0.1] 종료 플래그 초기화
 
         # [NEW v6.5.1] 로그 버퍼링 타이머 가동 (0.25초 주기로 뭉쳐서 출력)
@@ -5241,8 +5246,11 @@ class KipoWindow(QMainWindow):
                 if col == 2: # 진행
                     if "완료" in val: item.setForeground(QColor("#2ecc71"))
                     elif "관문" in val: item.setForeground(QColor("#f1c40f"))
-                    elif "종가" in val: # [신규] 종가 베팅 종목 노란색 강조
-                         item.setForeground(QColor("#f1c40f"))
+                    elif any(x in val for x in ["종가", "랭크", "시초가"]): # [v5.0.8] 주요 전략 종목 강조
+                         if "종가" in val: item.setForeground(QColor("#f1c40f")) # 노란색 (종가)
+                         elif "시초가" in val: item.setForeground(QColor("#00e5ff")) # 청록색 (시초가)
+                         else: item.setForeground(QColor("#ff4757")) # 빨간색 (랭크)
+                         
                          font = item.font()
                          font.setBold(True)
                          item.setFont(font)

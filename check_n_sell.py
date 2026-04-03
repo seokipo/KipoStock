@@ -246,10 +246,10 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             buy_price = safe_float(stock.get('avg_prc', stock.get('pchs_avg_pric', 0)))
 
                             # [v1.9.0] 불타기 5관문 시스템 (5-Gate System) 복구
-                            # 현재 도달한 관문 상태 (없으면 1관문부터)
-                            current_gate = info.get('current_gate', 1)
-                            bultagi_done = info.get('bultagi_done', False)
+                            # [v5.0.8] 진입 상태 결정 고도화: 불타기 완료 여부 또는 HTS(직점매매) 여부를 통합 판단
+                            bultagi_done = info.get('bultagi_done', False) or info.get('strat') == 'HTS'
                             
+                            current_gate = info.get('current_gate', 1)
                             gate_status = ["⏳", "⏳", "⏳", "⏳", "⏳"] # 상태 아이콘
                             gate_details = ["-", "-", "-", "-", "-"] # 상세 수치
                             
@@ -348,23 +348,27 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             else:
                                 gate_status[4] = "⏩"
                                 if not bultagi_done and current_gate == 5: current_gate = 6
+                            
+                            # [v5.0.8 Hotfix] 현재 단계 저장 (상태 유지 및 DB 동기화)
+                            if not bultagi_done and current_gate != info.get('current_gate'):
+                                info['current_gate'] = current_gate
+                                try:
+                                    from check_n_buy import update_stock_gate
+                                    update_stock_gate(stk_cd, current_gate)
+                                except: pass
 
-                            # [v3.3.0] 진입 완료 상태일 경우 관문 상태를 강제로 완료 표시하되 상세 수치는 유지
+                            # [v5.0.8] 진입 완료 상태 결정 로직 정밀화 (bultagi_done 플래그 중심)
                             if bultagi_done:
                                 phase_txt = "진입완료"
-                                # 모든 관문을 완료로 표시하되, 상세 수치는 위에서 계산된 것을 사용
                                 for gi in range(5): gate_status[gi] = "✅"
                             else:
-                                # 현재 단계 저장 (상태 유지)
-                                if current_gate != info.get('current_gate'):
-                                    info['current_gate'] = current_gate
-                                    try:
-                                        from check_n_buy import update_stock_gate
-                                        update_stock_gate(stk_cd, current_gate)
-                                    except: pass
-                                
-                                if current_gate <= 5: phase_txt = f"{current_gate}관문"
-                                else: phase_txt = "진입완료"
+                                if current_gate <= 5: 
+                                    phase_txt = f"{current_gate}관문"
+                                    # [v5.0.8] 5관문 통과 직후 '주문중' 상태 표시로 유저 혼선 방지 (실제 체결 전 단계)
+                                    if current_gate == 5 and all(s == "✅" for s in gate_status):
+                                         phase_txt = "불타기중" 
+                                else: 
+                                    phase_txt = "주문대기"
                             
                             # [신규] 종가 베팅 종목일 경우 머리말 추가 (UI 강조용)
                             if info.get('strat') == 'CLOSING_BET':
@@ -386,18 +390,34 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             b_tp_en = cached_setting('bultagi_tp_enabled', True)
                             b_tp = float(cached_setting('bultagi_tp', 5.0))
                             
+                            # [v5.0.8] 매도 조건 표시 이원화 ([기본] vs [불타기])
                             conds = []
-                            if b_ts_en:
-                                drop = info.get('peak_pl_rt', 0.0) - diag_pl_rt
-                                # [V3.3.0] 진단용 ✅ 마킹은 peak_rt 가드 없이 수치 조건만 맞으면 표시하되, 진입완료 종목에만 적용
-                                is_met = "✅" if bultagi_done and drop >= b_ts_val else ""
-                                conds.append(f"{is_met}TS:{b_ts_val}(▼{drop:.1f})")
-                            if b_pres_en:
-                                is_met = "✅" if bultagi_done and peak_rt >= b_pres_trig and diag_pl_rt <= b_pres_lim else ""
-                                conds.append(f"{is_met}P:{b_pres_trig}>{b_pres_lim}(C:{diag_pl_rt:.1f})")
-                            if not b_ts_en and not b_pres_en and b_tp_en:
-                                is_met = "✅" if bultagi_done and diag_pl_rt >= b_tp else ""
-                                conds.append(f"{is_met}TP:{b_tp}(C:{diag_pl_rt:.1f})")
+                            if not bultagi_done:
+                                # [진입 전] 원래 설정된 기본 TP/SL 표시
+                                specific_tp_val = info.get('tp', specific_tp)
+                                specific_sl_val = info.get('sl', specific_sl)
+                                is_tp_met = "✅" if diag_pl_rt >= float(specific_tp_val) else ""
+                                is_sl_met = "✅" if diag_pl_rt <= float(specific_sl_val) else ""
+                                conds.append(f"{is_tp_met}기본TP:{specific_tp_val}%")
+                                conds.append(f"{is_sl_met}기본SL:{specific_sl_val}%")
+                            else:
+                                # [진입 후] 불타기 전용 매도 룰 표시
+                                # [v5.0.8 Fix] 트레일링 스톱 등 불타기 룰이 활성화된 경우만 표시, 아니면 기본 TP/SL의 불타기 버전 표시
+                                if b_ts_en:
+                                    drop = info.get('peak_pl_rt', 0.0) - diag_pl_rt
+                                    is_met = "✅" if (info.get('peak_pl_rt', 0.0) >= 0.5 and drop >= b_ts_val) else ""
+                                    conds.append(f"{is_met}불타기TS:{b_ts_val}(▼{drop:.1f})")
+                                if b_pres_en:
+                                    is_met = "✅" if peak_rt >= b_pres_trig and diag_pl_rt <= b_pres_lim else ""
+                                    conds.append(f"{is_met}불타기P:{b_pres_trig}>{b_pres_lim}(C:{diag_pl_rt:.1f})")
+                                
+                                # TS나 보존이 꺼져있거나, 켜져있더라도 기본 불타기 TP/SL은 항상 가이드로 표시 (사용자 요청)
+                                if b_tp_en:
+                                    is_met = "✅" if diag_pl_rt >= b_tp else ""
+                                    conds.append(f"{is_met}불타기TP:{b_tp}%")
+                                if b_sl_en:
+                                    is_met = "✅" if diag_pl_rt <= b_sl else ""
+                                    conds.append(f"{is_met}불타기SL:{b_sl}%")
 
                             if not conds: conds.append("-")
                             sell_cond_str = " / ".join(conds)
@@ -466,14 +486,28 @@ def chk_n_sell(token=None, disabled_stocks=None):
                                 tel_send(message, msg_type='log')
                                 print(f"[BULTAGI_REMOVE] {safe_stk_nm}") # UI 보드에서 삭제
                                 
-                                # [신규 v3.3.4] 수익 기록 및 차트 실시간 갱신 트리거
+                                # [v5.0.8] 매도 DB 저장 시 전략명 정규화 (랭크, 불타기, VI 등)
                                 try:
+                                    raw_strat = info.get('strat', 'none')
+                                    if raw_strat == 'SYSTEM_VI' or raw_strat == 'VI':
+                                        s_mode_db = 'VI'
+                                    elif raw_strat == 'MORNING' or (isinstance(raw_strat, str) and raw_strat.startswith('MORNING')):
+                                        s_mode_db = '시초가'
+                                    elif raw_strat == 'CLOSING_BET':
+                                        s_mode_db = '종가'
+                                    elif raw_strat == 'HTS':
+                                        s_mode_db = 'HTS'
+                                    elif raw_strat == 'BULTAGI' or raw_strat in ['qty', 'amount', 'percent']:
+                                        s_mode_db = '불타기' if bultagi_done else '랭크'
+                                    else:
+                                        s_mode_db = '불타기' if bultagi_done else '랭크'
+
                                     pnl_amt = float(stock.get('evlu_pfls_amt', 0))
                                     tax_amt = float(stock.get('evlu_pftls_tax', 0))
                                     session_logger.record_sell(
                                         stk_cd, safe_stk_nm, qty, current_price, 
                                         real_pl_rt, pnl_amt, tax=tax_amt, 
-                                        seq=seq, strat_mode=info.get('strat')
+                                        seq=seq, strat_mode=s_mode_db
                                     )
                                 except Exception as log_err:
                                     print(f"⚠️ [수익기록오류] {log_err}")

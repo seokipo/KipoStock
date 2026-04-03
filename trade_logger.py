@@ -237,11 +237,11 @@ class TradeLogger:
             if std_dev > 0:
                 sharpe_ratio = avg_return / std_dev
 
-        # 전략별 매수 건수 집계
-        strat_counts = {'qty': 0, 'amount': 0, 'percent': 0, 'HTS': 0}
+        # 전략별 매수 건수 집계 (v5.0.8 세분화된 전략명 대응)
+        strat_counts = {}
         for t in relevant_trades:
             if t['type'] == 'BUY':
-                mode = t.get('strat_mode', 'qty')
+                mode = t.get('strat_mode', '미상')
                 strat_counts[mode] = strat_counts.get(mode, 0) + 1
 
         total_pnl_rt = (total_pnl_amt / total_buy_amt * 100) if total_buy_amt > 0 else 0.0
