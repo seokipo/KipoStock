@@ -304,7 +304,7 @@ def get_morning_scan_data(token=None):
     [신규 v1.1.5] 전장/장전 등락률 및 예상체결 상위 종목 스캔 (ka10019)
     키움 opt10019(전차등락률상위) 대응
     """
-    endpoint = '/api/dostk/mrkcond'
+    endpoint = '/api/dostk/stkinfo'
     url = host_url + endpoint
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
@@ -312,11 +312,19 @@ def get_morning_scan_data(token=None):
         'api-id': 'ka10019'
     }
     
-    # 0: 전체, 1: 코스피, 2: 코스닥
+    # [V5.0.8] 최신 API 필수 파라미터 규격 적용 (mrkt_tp, vol_tp, flu_tp, tm_tp, tm, trde_qty_tp, stk_cnd, crd_cnd, pric_cnd, updown_incls, stex_tp)
     params = {
-        'market_gb': '0',   # 시장구분
-        'vol_gb': '1',      # 거래량구분 (1:예상체결량)
-        'rt_gb': '1'        # 등락구분 (1:상승)
+        'mrkt_tp': '000',       # 시장구분 (000:전체, 001:코스피, 101:코스닥)
+        'vol_tp': '1',         # 거래량구분 (1:예상체결거래량)
+        'flu_tp': '1',         # 등락구분 (1:상승)
+        'tm_tp': '1',          # 시간구분 (1:장전)
+        'tm': '085000',        # 시간 (08:50:00)
+        'trde_qty_tp': '1',    # 거래량구분 (1:전체)
+        'stk_cnd': '1',        # 종목조건 (1:전체)
+        'crd_cnd': '0',        # 신용조건 (0:전체)
+        'pric_cnd': '0',       # 가격조건 (0:전체)
+        'updown_incls': '0',   # 상하한포함 (0:포함)
+        'stex_tp': '3'         # 거래소구분 (3:통합)
     }
 
     try:
@@ -489,6 +497,79 @@ def get_top_trading_value(token=None, market_gb='0'):
         # print(f"⚠️ [TopTradingValue] API 호출 실패: {e}")
         return [], {"return_msg": str(e)}
 
+# [신규] 코스피/코스닥 지수 정보 조회 (업종현재가)
+def get_market_index_data(token=None):
+    """
+    [V4.4.6 Gemini Real-time Hybrid Edition] 통합 지수 정보 조회 (Primary: Naver Polling, Secondary: ka10011)
+    - 5초 주기 실시간 업데이트를 위해 네이버 파이낸스 폴링 API 사용으로 교체
+    """
+    try:
+        import requests
+        
+        result = {}
+        # 1. Naver Finance Polling API 우선 시도 (실시간)
+        try:
+            for symbol, key in [('KOSPI', 'kospi'), ('KOSDAQ', 'kosdaq')]:
+                url = f"https://polling.finance.naver.com/api/realtime/domestic/index/{symbol}"
+                # 5초 주기이므로 가볍고 짧은 타임아웃
+                res = requests.get(url, timeout=3)
+                data_list = res.json().get('datas', [])
+                if data_list:
+                    data = data_list[0]
+                    curr_price_str = str(data.get('closePrice', '0')).replace(',', '')
+                    rate_str = str(data.get('fluctuationsRatio', '0')).replace('%', '')
+                    
+                    curr_price = float(curr_price_str)
+                    rate = float(rate_str)
+                    
+                    result[key] = f"{curr_price:,.2f}"
+                    result[f"{key}_rate"] = round(rate, 2)
+            
+            if 'kospi' in result and 'kosdaq' in result:
+                # print("✅ [IndexData] Naver Polling 하이브리드 수집 성공")
+                return result
+        except Exception as naver_e:
+            pass # Naver 실패 시 증권사 API 폴백
+            
+        # 2. 증권사 API (ka10011) 폴백 시도
+        headers = { 'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10011' }
+        indices = {'001': 'KOSPI', '101': 'KOSDAQ'}
+        
+        from config import host_url
+        import requests
+        
+        for code, name in indices.items():
+            res = requests.post(host_url + '/api/dostk/stkinfo', headers=headers, json={'stk_cd': code}, timeout=5)
+            data = res.json().get('data', res.json())
+            
+            rate = 0.0
+            for k in ['bstp_nmix_prdy_ctrt', 'prdy_ctrt', 'fltt_rt', 'n_diff_rate', 'chg_rate']:
+                val = data.get(k)
+                if val is not None:
+                    try:
+                        rate = float(str(val).replace(',', '').replace('+', ''))
+                        break
+                    except: pass
+            
+            price = 0.0
+            for k in ['bstp_nmix_prpr', 'stck_prpr', 'now_prc', 'clpr', 'price', 'cur_prc']:
+                val = data.get(k)
+                if val:
+                    try:
+                        price = float(str(val).replace(',', '').replace('+', ''))
+                        break
+                    except: pass
+            
+            key = name.lower()
+            result[key] = f"{price:,.2f}"
+            result[f"{key}_rate"] = rate
+                
+        return result
+    except Exception as e:
+        # print(f"⚠️ [IndexData] 최종 수집 실패: {e}")
+        return None
+        return None
+
 # 실행 구간
 if __name__ == '__main__':
     token = get_token()
@@ -499,3 +580,5 @@ if __name__ == '__main__':
     # [신규] 거래대금 랭킹 테스트
     codes, _ = get_top_trading_value(token=token)
     print("💎 거래대금 상위 10종목:", codes[:10])
+    # [신규] 지수 테스트
+    print("📈 지수 정보:", get_market_index_data(token=token))

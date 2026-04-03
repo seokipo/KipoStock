@@ -57,6 +57,11 @@ def chk_n_sell(token=None, disabled_stocks=None):
 
         try:
             my_stocks_data = get_my_stocks(token=token)
+            # [v5.0.2] 8005 에러 감지 시 강제 재로그인 후 재시도 (Auto-Auth Recovery)
+            if isinstance(my_stocks_data, dict) and my_stocks_data.get('error_code') == '8005':
+                print("🔄 [chk_n_sell] 8005 감지 → 토큰 강제 갱신 후 재시도 중...")
+                token = get_token(force=True)
+                my_stocks_data = get_my_stocks(token=token)
             my_stocks = []
             
             if isinstance(my_stocks_data, dict):
@@ -360,6 +365,10 @@ def chk_n_sell(token=None, disabled_stocks=None):
                                 
                                 if current_gate <= 5: phase_txt = f"{current_gate}관문"
                                 else: phase_txt = "진입완료"
+                            
+                            # [신규] 종가 베팅 종목일 경우 머리말 추가 (UI 강조용)
+                            if info.get('strat') == 'CLOSING_BET':
+                                phase_txt = f"종가:{phase_txt}"
 
                             # [v3.3.0] 매도 조건 시각적 마킹 (✅) - 전 종목 적용
                             diag_pl_rt = pl_rt if pl_rt < 999 else actual_pl_rt_for_diag

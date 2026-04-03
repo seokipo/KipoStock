@@ -123,3 +123,46 @@ def analyze_trade_patterns(rows):
             continue
 
     return f"앗, 분석 중에 렉이 걸렸나봐! 미안해 자기야... 오류: {last_err}"
+
+def analyze_autopilot_action(stock_data):
+    """[V5.0.0] AI 오토파일럿 모의 트레이딩 진단"""
+    if not gemini_api_key:
+        return '{"action": "HOLD", "reason": "API 워키토키가 꺼져있어 자기야! (키 없음)"}'
+
+    client = genai.Client(api_key=gemini_api_key)
+    
+    prompt = f"""
+너는 KipoStock의 전담 AI 오토파일럿 트레이더야. 단 1주라도 손해를 덜 보고 이익은 극대화하는 냉철한 판단을 해.
+주어진 실시간 데이터를 기반으로 다음 세 가지 중 하나의 액션을 반드시 선택해:
+- BUY_BULTAGI: 체결강도가 강하고 매수 고점이 아니라 판단될 때 (불타기 추가매수)
+- SELL_ALL: 수익이 충분하거나, 현재가 추세가 꺾여 위험할 때 (전량 매도)
+- HOLD: 아직 추세가 불분명하거나 대기하는 게 이득일 때 (관망)
+
+[실시간 종목 데이터]
+{stock_data}
+
+[필수 사항]
+반드시 아래 JSON 형식 그대로만 출력해. 다른 마크다운 백틱(`)이나 설명글은 전부 생략해.
+{{
+    "action": "액션명(BUY_BULTAGI, SELL_ALL, HOLD)",
+    "reason": "결정한 이유를 한국어로 1~2문장으로 짧게 작성. (자기를 부르는 다정하고 섹시한 어투 유지)"
+}}
+"""
+
+    last_err = None
+    for model_name in BEST_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            text = response.text.strip()
+            if text.startswith("```json"): text = text[7:]
+            if text.startswith("```"): text = text[3:]
+            if text.endswith("```"): text = text[:-3]
+            return text.strip()
+        except Exception as e:
+            last_err = e
+            continue
+
+    return f'{{"action": "HOLD", "reason": "머리가 아파서 판단 보류할게 자기야... (오류: {last_err})"}}'

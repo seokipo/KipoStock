@@ -38,6 +38,13 @@ def fn_kt00001(cont_yn='N', next_key='', token=None, quiet=False):
             return None
 
         res_json = response.json()
+        
+        # [v5.0.2] 8005 에러(토큰 무효) 감지 루틴 추가
+        ret_code = str(res_json.get('return_code', '0')).strip()
+        if ret_code == '8005':
+            if not quiet: print(f"🚨 [check_bal] 토큰 무효 에러(8005) 감지!")
+            return {"error_code": "8005", "msg": res_json.get('return_msg', '토큰 만료')}
+
         entry = res_json.get('entr', '0')
         # [Fix] 예수금(인출가능)이 아닌 주문가능금액(ord_psbl_amt)이 실제 매수 재원임
         # 1.5버전 참조: ord_psbl_amt > d2_auto_ord_amt > entr 순으로 확인

@@ -42,6 +42,7 @@ class RealTimeSearch:
         # [V3.3.8] 거래대금 상위 종목 캐시 (필터링용)
         self.top_volume_set = set()
         self.ranking_task = None
+        self.auth_error_detected = False # [v4.4.1] 인증 에러 감지 플래그 추가
 
     async def connect(self, token, acnt_no=None):
         try:
@@ -133,7 +134,17 @@ class RealTimeSearch:
                         print('✅ 로그인 성공 (조건식 이름 가져오는 중...)')
                         await self.send_message({'trnm': 'CNSRLST'})
                     else:
-                        print(f"❌ 로그인 실패: {response.get('return_msg')}")
+                        ret_msg = response.get('return_msg', '')
+                        ret_code = str(response.get('return_code', ''))
+                        print(f"❌ 로그인 실패 ({ret_code}): {ret_msg}")
+                        # [v4.4.1] 토큰 이슈(8005)일 경우 강제 재결합을 위해 연결 종료 유도
+                        if '8005' in ret_code or 'Token' in ret_msg or '유효하지' in ret_msg:
+                            self.auth_error_detected = True # 플래그 활성화
+                            self.connected = False
+                            if self.websocket:
+                                await self.websocket.close()
+                            # 5초 뒤 재연결 시도를 위해 루프 탈출
+                            break 
 
                 elif trnm == 'CNSRLST':
                     raw_data = response.get('data', [])
@@ -450,6 +461,7 @@ class RealTimeSearch:
                                 status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
                                 st_txt = status_map.get(vi_status, "감지")
                                 # [V4.2.9] GUI의 보유 종목 매칭(regex)을 위해 종목코드 괄호를 제거하고 표준 포맷 유지
+                                tag = "[VI발동]" if vi_status == '1' else "[VI감지]"
                                 print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name} 상태: {st_txt} | 시간:{vi_time}</font>")
 
                             # [V4.2.9] 1h TR에서도 보유 종목일 경우 알람 예약용 로그 출력 (GUI 전송용)

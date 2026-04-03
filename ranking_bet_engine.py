@@ -177,6 +177,20 @@ class RankingBetEngine:
 
     def execute_bet(self, code, name, reason, tag='RANK_SCOUT'):
         """1주 정찰병 매수를 주문합니다. (V2.2.0 정식 버전 ❤️)"""
+        # [v5.0.4] 지수 급락 자동 매매 정지 체크 (로그 혼란 방지를 위해 최상단으로 이동)
+        try:
+            from check_n_buy import is_market_index_ok
+            is_ok, index_reason = is_market_index_ok()
+            if not is_ok:
+                stop_msg = f"🛡️ [지수급락 정지] {index_reason} 도달로 인해 {name}({code}) 정찰병 투입을 생략합니다. ✨"
+                # 상세 로그창에만 출력 (텔레그램은 너무 잦을 수 있어 제외)
+                if hasattr(self.api, 'append_log'):
+                    self.api.append_log(f"<font color='#ff6b6b'><b>{stop_msg}</b></font>")
+                # print(stop_msg)
+                return
+        except Exception as e:
+            print(f"⚠️ [RankScout-IndexCheck] 오류: {e}")
+
         # 당일 중복 매수 체크
         if code in self.bet_history:
             return
@@ -191,13 +205,14 @@ class RankingBetEngine:
         log_msg = f"[{tag}] {itv_str} {reason} {name}({code}) 정찰병 1주 투입! 🚩"
         
         # UI 및 로그 전송 (자기의 소중한 기포 로그창으로! ❤️)
-        self.api.append_log(f"<font color='#00e5ff'><b>{log_msg}</b></font>")
+        if hasattr(self.api, 'append_log'):
+            self.api.append_log(f"<font color='#00e5ff'><b>{log_msg}</b></font>")
         
         # 실제 주문 호출 (Parent의 check_n_buy.add_buy 유틸리티 사용)
         if hasattr(self.api, 'check_n_buy'):
             self.api.check_n_buy.add_buy(
                 stk_cd=code,
-                # stk_nm=name, # add_buy 시그니처 확인 결과 stk_nm은 없고 stk_cd, token, seq_name 등을 가짐
+                # stk_nm=name, 
                 token=self.api.token if hasattr(self.api, 'token') else None,
                 seq_name=f"{itv_str} {reason}",
                 qty=qty,

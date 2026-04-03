@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import (Qt, QThread, pyqtSignal, QObject, QTimer, QEvent, 
                           QSharedMemory, QSize, QUrl, QPoint, QRect)
 from PyQt6.QtGui import (QFont, QIcon, QColor, QPalette, QPainter, QPolygon, 
-                         QBrush, QPen, QRegion, QKeySequence, QShortcut)
+                         QBrush, QPen, QRegion, QKeySequence, QShortcut, QAction)
 import winsound
 import re
 import matplotlib
@@ -227,6 +227,7 @@ class WorkerSignals(QObject):
     perspective_signal = pyqtSignal(list) # [신규 v6.1.17] KipoStock 관점 종목 리스트
     open_config_signal = pyqtSignal() # [신규 v6.1.21] 메인 설정창 팝업 시그널
     open_ai_settings_signal = pyqtSignal() # [신규 v6.1.21] AI 음성 설정창 팝업 시그널
+    index_signal = pyqtSignal(dict)    # [신규 v4.4.4] 지수 정보 업데이트용
 
 class NewsWorker(QThread):
     """[신규 v4.2.5] 종목 뉴스 검색 및 AI 분석을 위한 비동기 워커"""
@@ -449,6 +450,45 @@ class AsyncWorker(QThread):
                     self.signals.log_signal.emit("🔔 장이 시작되었습니다. 감시를 자동으로 시작합니다!")
                     self.schedule_command('start', getattr(self, 'pending_profile_info', None))
                 
+                # [v4.4.4] 지수 갱신 로직 (5초 주기)
+                if not hasattr(self, '_index_counter'): self._index_counter = 0
+                self._index_counter += 1
+                if self._index_counter >= 5:
+                    self._index_counter = 0
+                    from stock_info import get_market_index_data
+                    # login에서 토큰 발급 (캐시된 토큰 사용)
+                    from login import fn_au10001
+                    idx_token = fn_au10001()
+                    # 비동기 루프 차단 방지 (네트워크 I/O를 별도 스레드에서 실행)
+                    idx_data = await asyncio.to_thread(get_market_index_data, token=idx_token)
+                    if idx_data:
+                        # [v5.0.3 Fix] check_n_buy 전역 캐시 업데이트 (구조적 키 매칭 버그 수정)
+                        try:
+                            from check_n_buy import GLOBAL_MARKET_STATUS
+                            # [v4.4.0 구조 대응] KOSPI/KOSDAQ 키 내부에 rate와 price를 각각 업데이트
+                            if 'kospi_rate' in idx_data:
+                                GLOBAL_MARKET_STATUS['KOSPI']['rate'] = idx_data['kospi_rate']
+                                GLOBAL_MARKET_STATUS['KOSPI']['price'] = idx_data.get('kospi', 0.0)
+                            if 'kosdaq_rate' in idx_data:
+                                GLOBAL_MARKET_STATUS['KOSDAQ']['rate'] = idx_data['kosdaq_rate']
+                                GLOBAL_MARKET_STATUS['KOSDAQ']['price'] = idx_data.get('kosdaq', 0.0)
+                            
+                            GLOBAL_MARKET_STATUS['last_update'] = now
+                        except Exception as e:
+                            print(f"⚠️ [IndexUpdate] 캐시 업데이트 오류: {e}")
+                        # UI 갱신 시그널
+                        self.signals.index_signal.emit(idx_data)
+
+                        # [v5.0.4] 지수 급락 상태 실시간 안내 (3분 주기)
+                        if not hasattr(self, '_index_msg_timer'): self._index_msg_timer = 0
+                        from check_n_buy import is_market_index_ok
+                        is_ok, reason = is_market_index_ok()
+                        if not is_ok:
+                            if time.time() - self._index_msg_timer >= 180: # 3분마다 한 번씩 리마인드
+                                self._index_msg_timer = time.time()
+                                msg = f"🛡️ [시장감시] 현재 {reason} 급락 상태로, 모든 자동 매수 및 정찰병 투입이 '일시 정지' 중입니다. ✨"
+                                self.signals.log_signal.emit(f"<font color='#ff6b6b'><b>{msg}</b></font>")
+
                 await asyncio.sleep(1.0) # 체크 주기 조정
                 
         except Exception as e:
@@ -977,17 +1017,28 @@ class BultagiSettingsDialog(QDialog):
             btn_shortcut_cfg.clicked.connect(parent.open_shortcut_settings)
         btn_layout_etc.addWidget(btn_shortcut_cfg)
 
-        # 2. 항상 위에 고정 (핀) 토글 체크박스
-        self.chk_always_top = QCheckBox(" 📌 항상 위에 고정 (Window Pin)")
-        self.chk_always_top.setStyleSheet("font-size: 14px; font-weight: bold; color: #f1c40f; padding: 5px;")
-        if parent:
-            # 메인 윈도우의 btn_top(또는 관련 변수) 상태와 동기화
-            if hasattr(parent, 'btn_top'):
-                self.chk_always_top.setChecked(parent.btn_top.isChecked())
-                self.chk_always_top.toggled.connect(parent.btn_top.setChecked)
-            if hasattr(parent, 'toggle_always_on_top'):
-                self.chk_always_top.toggled.connect(parent.toggle_always_on_top)
-        btn_layout_etc.addWidget(self.chk_always_top)
+        # 3. 🛡️ 지수 급락 자동 매매 정지 (Global) [V4.4.0 신설]
+        group_idx = QGroupBox("🛡️ 지수 급락 자동 매도/매수 정지 (Global)")
+        group_idx.setStyleSheet("QGroupBox { font-weight: bold; color: #ff4757; border: 1px solid #444; border-radius: 8px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
+        idx_layout = QFormLayout()
+        self.chk_idx_stop = QCheckBox(" 지수 급락 시 모든 자동 매수/불타기 즉시 정지")
+        self.chk_idx_stop.setStyleSheet("font-weight: bold; color: #ff4757;")
+        
+        self.spin_kospi_threshold = QDoubleSpinBox()
+        self.spin_kospi_threshold.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.spin_kospi_threshold.setRange(-30.0, 0.0); self.spin_kospi_threshold.setSingleStep(0.1); self.spin_kospi_threshold.setDecimals(1); self.spin_kospi_threshold.setFixedWidth(80)
+        self.spin_kosdaq_threshold = QDoubleSpinBox()
+        self.spin_kosdaq_threshold.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self.spin_kosdaq_threshold.setRange(-30.0, 0.0); self.spin_kosdaq_threshold.setSingleStep(0.1); self.spin_kosdaq_threshold.setDecimals(1); self.spin_kosdaq_threshold.setFixedWidth(80)
+        
+        h_kospi = QHBoxLayout(); h_kospi.addWidget(self.spin_kospi_threshold); h_kospi.addWidget(QLabel("% 이하 시")); h_kospi.addStretch()
+        h_kosdaq = QHBoxLayout(); h_kosdaq.addWidget(self.spin_kosdaq_threshold); h_kosdaq.addWidget(QLabel("% 이하 시")); h_kosdaq.addStretch()
+        
+        idx_layout.addRow(self.chk_idx_stop)
+        idx_layout.addRow("📉 KOSPI 임계값:", h_kospi)
+        idx_layout.addRow("📉 KOSDAQ 임계값:", h_kosdaq)
+        group_idx.setLayout(idx_layout)
+        etc_vbox.addWidget(group_idx)
 
         etc_vbox.addLayout(btn_layout_etc)
         etc_vbox.addStretch()
@@ -1153,6 +1204,11 @@ class BultagiSettingsDialog(QDialog):
             self.chk_orderbook.setChecked(target.get('bultagi_orderbook_enabled', False))
             self.input_orderbook.setText(str(target.get('bultagi_orderbook_val', 2.0)))
 
+            # [신규 v4.4.0] 지수 정지 설정 로드 (Root 우선)
+            self.chk_idx_stop.setChecked(root.get('global_idx_stop_enabled', False))
+            self.spin_kospi_threshold.setValue(float(root.get('kospi_stop_threshold', -1.5)))
+            self.spin_kosdaq_threshold.setValue(float(root.get('kosdaq_stop_threshold', -2.0)))
+
             # [신규 v6.9.5] Turbo VI 로드
             self.chk_turbo_vi.setChecked(target.get('bultagi_turbo_vi', False))
             turbo_type = target.get('bultagi_turbo_vi_type', 'current') # 기본 현재가
@@ -1283,6 +1339,10 @@ class BultagiSettingsDialog(QDialog):
                 'bultagi_slope_enabled': self.chk_slope.isChecked(),
                 'bultagi_orderbook_enabled': self.chk_orderbook.isChecked(),
                 'bultagi_orderbook_val': float(self.input_orderbook.text().strip() or 2.0),
+                # [신규 v4.4.4] 지수 정지 설정 저장
+                'global_idx_stop_enabled': self.chk_idx_stop.isChecked(),
+                'kospi_stop_threshold': self.spin_kospi_threshold.value(),
+                'kosdaq_stop_threshold': self.spin_kosdaq_threshold.value(),
                 'bultagi_turbo_vi': self.chk_turbo_vi.isChecked(),
                 'bultagi_turbo_vi_type': 'market' if self.combo_turbo_vi_type.currentIndex() == 0 else 'current',
                 'bultagi_turbo_vi_min_price': str(self.input_turbo_min_price.value()),
@@ -1434,7 +1494,7 @@ class KipoFilterListDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("KipoStock AI V4.3.4")
+        self.setWindowTitle("KipoStock AI V5.0.7")
         self.setMinimumSize(480, 520)
         self.resize(520, 580)
         self._apply_style()
@@ -2645,6 +2705,10 @@ class PortfolioTableWidget(QTableWidget):
             }
             if strat_nm in strat_colors:
                 item_strat.setForeground(QColor(strat_colors[strat_nm]))
+                if strat_nm == '종가베팅':
+                    font = item_strat.font()
+                    font.setBold(True)
+                    item_strat.setFont(font)
             self.setItem(row, 0, item_strat)
 
             # 1. 종목명
@@ -3104,6 +3168,11 @@ class KipoWindow(QMainWindow):
         self.rank_engine = RankingBetEngine(self) 
         self.rank_engine.load_parameters() # [신규 v2.2.0] 초기 설정 로드
         
+        # [신규 V5.0.0] AI 오토파일럿 모의 트레이딩 엔진 연결
+        from ai_autopilot_engine import AiAutopilotEngine
+        self.ai_autopilot_engine = AiAutopilotEngine(self)
+        self.ai_autopilot_engine.start() # 프로그램 시작과 동시에 백그라운드 타이머 작동
+        
         # [최우선] 타이머 전체 초기화 (AttributeError 원천 차단)
         self.alarm_timer = QTimer(self)
         self.alarm_timer.setInterval(1000)
@@ -3149,7 +3218,7 @@ class KipoWindow(QMainWindow):
         self.disabled_auto_stocks = set() # [V4.3.4] 개별 종목 자동매매 일시 정지 목록
         
         # [v2.5.1] 성능 최적화 및 음성 토글 기능 통합 빌드
-        self.setWindowTitle("KipoStock Professional Trader AI - V4.3.4")
+        self.setWindowTitle("KipoStock Professional Trader AI - V5.0.8 (Gemini Hybrid)")
         self.is_closing = False # [v3.0.1] 종료 플래그 초기화
 
         # [NEW v6.5.1] 로그 버퍼링 타이머 가동 (0.25초 주기로 뭉쳐서 출력)
@@ -3827,8 +3896,15 @@ class KipoWindow(QMainWindow):
         
         clock_layout.addWidget(self.lbl_clock)
         
+        # [v4.4.0] 지수 표시 영역 (KOSPI / KOSDAQ)
+        self.lbl_index = QLabel("⏳ 지수 로딩 중...")
+        self.lbl_index.setFont(QFont("Arial", 11, QFont.Weight.Bold))
+        self.lbl_index.setStyleSheet("color: #aaaaaa;")
+        self.lbl_index.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
         info_bar.addLayout(timer_box)
         info_bar.addWidget(self.lbl_status)
+        info_bar.addWidget(self.lbl_index) # [v4.4.0] 중앙에 배치
         info_bar.addLayout(clock_layout)
         
         center_vbox.addLayout(info_bar)
@@ -4440,6 +4516,11 @@ class KipoWindow(QMainWindow):
         self.bultagi_status_board.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.bultagi_status_board.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.bultagi_status_board.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        
+        # [V5.0.0] AI 오토파일럿 설정 컨텍스트 메뉴 허용
+        self.ai_autopilot_stocks = {} # 에이전틱 AI 오토파일럿 대상 종목 저장소 { "stk_cd": { "stk_nm": "...", "enabled": True } }
+        self.bultagi_status_board.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.bultagi_status_board.customContextMenuRequested.connect(self.show_bultagi_context_menu)
         self.bultagi_status_board.setStyleSheet("""
             QTableWidget {
                 background-color: #1a1a1a; color: #e0e0e0; gridline-color: #333; border: none;
@@ -4492,6 +4573,7 @@ class KipoWindow(QMainWindow):
         self.worker = AsyncWorker(self)
         self.worker.signals.log_signal.connect(self.append_log)
         self.worker.signals.status_signal.connect(self.update_status_ui)
+        self.worker.signals.index_signal.connect(self.update_index_ui) # [v4.4.0] 지수 업데이트 연결
         self.worker.signals.clr_signal.connect(self.log_display.clear)
         self.worker.signals.request_log_signal.connect(self.save_logs_to_file)
         self.worker.signals.auto_seq_signal.connect(self.on_remote_auto_sequence)
@@ -5044,6 +5126,59 @@ class KipoWindow(QMainWindow):
             self.append_log(f"⚠️ 뉴스 뷰어 생성 실패: {e}")
 
     # -------------------------------------------------------------------------
+    # 🤖 [AI V5.0.0] 에이전틱 오토파일럿 컨텍스트 메뉴
+    # -------------------------------------------------------------------------
+    def show_bultagi_context_menu(self, pos):
+        item = self.bultagi_status_board.itemAt(pos)
+        if not item: return
+        row = item.row()
+        stk_nm_item = self.bultagi_status_board.item(row, 1) # 종목명 (Index 1)
+        if not stk_nm_item: return
+        
+        # UI에서 종목명 추출 (🤖 마크 제거)
+        stk_nm_raw = stk_nm_item.text().replace("🤖 ", "").strip()
+        if not stk_nm_raw: return
+        
+        # 종목 코드 찾기 (ACCOUNT_CACHE에서 확인)
+        stk_cd = None
+        from check_n_buy import ACCOUNT_CACHE
+        for code, name in ACCOUNT_CACHE.get('names', {}).items():
+            if name == stk_nm_raw:
+                stk_cd = code
+                break
+                
+        if not stk_cd:
+            self.append_log(f"<font color='#ff9900'>⚠️ [AI] '{stk_nm_raw}' 현재 보유 종목이 아니므로 오토파일럿 마크를 부여할 수 없습니다.</font>")
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("QMenu { background-color: #2c3e50; color: #fff; padding: 5px; font-family: 'Malgun Gothic'; } QMenu::item:selected { background-color: #1abc9c; color: #111; }")
+        
+        is_active = stk_cd in self.ai_autopilot_stocks
+        action_text = "❌ AI 오토파일럿 해제" if is_active else "🤖 AI 오토파일럿 전담 마크 활성화 (모의)"
+        action = QAction(action_text, self)
+        
+        def _toggle_ai():
+            if is_active:
+                del self.ai_autopilot_stocks[stk_cd]
+                self.append_log(f"<font color='#ff9900'>📉 [AI 오토파일럿] '{stk_nm_raw}' 종목의 전담 마크가 해제되었습니다.</font>")
+                try:
+                    stk_nm_item.setText(stk_nm_raw)
+                    stk_nm_item.setForeground(QColor("#e0e0e0"))
+                except RuntimeError: pass
+            else:
+                self.ai_autopilot_stocks[stk_cd] = {"stk_nm": stk_nm_raw, "enabled": True}
+                self.append_log(f"<font color='#1abc9c'>🚀 [AI 오토파일럿] '{stk_nm_raw}' 단독전담 AI 모드 활성화 완료! 60초마다 모의 진단을 시작합니다.</font>")
+                try:
+                    stk_nm_item.setText(f"🤖 {stk_nm_raw}")
+                    stk_nm_item.setForeground(QColor("#00ff00")) # 녹색으로 하이라이트
+                except RuntimeError: pass
+
+        action.triggered.connect(_toggle_ai)
+        menu.addAction(action)
+        menu.exec(self.bultagi_status_board.mapToGlobal(pos))
+
+    # -------------------------------------------------------------------------
     # 📋 [Gate 4] 불타기 현황 보드 관리 (V1.9.0)
     # -------------------------------------------------------------------------
     def update_bultagi_status_board(self, payload):
@@ -5058,10 +5193,14 @@ class KipoWindow(QMainWindow):
             # [V4.3.4] 종목명 컬럼이 1번(index)으로 이동
             for i in range(self.bultagi_status_board.rowCount()):
                 item = self.bultagi_status_board.item(i, 1)
-                if item and item.text() == stk_nm:
+                if item and item.text().replace("🤖 ", "").strip() == stk_nm:
                     row = i
                     break
             
+            # [V5.0.0] AI 오토파일럿 활성 확인 (종목명 기반)
+            ai_stocks = getattr(self, 'ai_autopilot_stocks', {})
+            is_ai_active = any(info.get('stk_nm') == stk_nm.strip() for info in ai_stocks.values())
+
             if row == -1:
                 row = self.bultagi_status_board.rowCount()
                 self.bultagi_status_board.insertRow(row)
@@ -5078,10 +5217,20 @@ class KipoWindow(QMainWindow):
                 chk_layout.addWidget(chk)
                 self.bultagi_status_board.setCellWidget(row, 0, chk_widget)
                 
-                # col 1: 종목명
-                name_item = QTableWidgetItem(stk_nm)
+                # col 1: 종목명 (AI 활성 시 🤖 부착)
+                display_name = f"🤖 {stk_nm}" if is_ai_active else stk_nm
+                name_item = QTableWidgetItem(display_name)
                 name_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if is_ai_active:
+                    name_item.setForeground(QColor("#00ff00"))
                 self.bultagi_status_board.setItem(row, 1, name_item)
+            else:
+                # 이미 존재하는 행이라도 AI 상태에 따라 강제 업데이트
+                display_name = f"🤖 {stk_nm}" if is_ai_active else stk_nm
+                name_item = self.bultagi_status_board.item(row, 1)
+                if name_item:
+                    name_item.setText(display_name)
+                    name_item.setForeground(QColor("#00ff00") if is_ai_active else QColor("#e0e0e0"))
             
             # [V4.3.4] 데이터 컬럼은 2번부터 시작 (기존 1번->2번 시프트)
             for col, val in enumerate(parts[1:], 2):
@@ -5092,6 +5241,11 @@ class KipoWindow(QMainWindow):
                 if col == 2: # 진행
                     if "완료" in val: item.setForeground(QColor("#2ecc71"))
                     elif "관문" in val: item.setForeground(QColor("#f1c40f"))
+                    elif "종가" in val: # [신규] 종가 베팅 종목 노란색 강조
+                         item.setForeground(QColor("#f1c40f"))
+                         font = item.font()
+                         font.setBold(True)
+                         item.setFont(font)
                 
                 elif col == 3: # 거래대금 (하늘색)
                     item.setForeground(QColor("#00e5ff"))
@@ -5139,10 +5293,18 @@ class KipoWindow(QMainWindow):
             for i in range(self.bultagi_status_board.rowCount() - 1, -1, -1):
                 item = self.bultagi_status_board.item(i, 1) # [V4.3.4] col 0->1로 이동
                 if item:
-                    current_nm = item.text().strip()
+                    current_nm = item.text().replace("🤖 ", "").strip()
                     if current_nm == target_nm or target_nm in current_nm:
                         self.bultagi_status_board.removeRow(i)
                         self.disabled_auto_stocks.discard(current_nm) # 정지 목록에서도 제거
+                        
+                        # [V5.0.0] 매도/리스트 제거 시 AI 오토파일럿 활성 상태 자동 해제
+                        ai_stocks = getattr(self, 'ai_autopilot_stocks', {})
+                        keys_to_del = [k for k, v in ai_stocks.items() if v.get('stk_nm') == current_nm]
+                        for k in keys_to_del:
+                            del self.ai_autopilot_stocks[k]
+                            self.append_log(f"<font color='#ff9900'>📉 [AI 오토파일럿] 미보유 전환으로 '{current_nm}' 전담 마크 자동 해제</font>")
+                            
                         # [v3.0.9] 동기화 가시성 확보를 위한 로그 추가
                         self.append_log(f"🧹 [동기화] 불타기 보드에서 종목 제거: {target_nm}")
         except Exception as e:
@@ -5158,10 +5320,18 @@ class KipoWindow(QMainWindow):
             for i in range(self.bultagi_status_board.rowCount() - 1, -1, -1):
                 item = self.bultagi_status_board.item(i, 1) # [V4.3.4] col 0->1로 이동
                 if item:
-                    current_stk_nm = item.text().strip()
+                    current_stk_nm = item.text().replace("🤖 ", "").strip()
                     # 만약 보유 종목 리스트에 없다면 삭제 (주의: "종목명" 컬럼 기준)
                     if current_stk_nm and current_stk_nm not in held_names:
                         self.bultagi_status_board.removeRow(i)
+                        
+                        # [V5.0.0] 매도/무보유 판정 시 AI 오토파일럿 활성 상태 자동 해제
+                        ai_stocks = getattr(self, 'ai_autopilot_stocks', {})
+                        keys_to_del = [k for k, v in ai_stocks.items() if v.get('stk_nm') == current_stk_nm]
+                        for k in keys_to_del:
+                            del self.ai_autopilot_stocks[k]
+                            self.append_log(f"<font color='#ff9900'>📉 [AI 오토파일럿] 동기화 제거로 '{current_stk_nm}' 전담 마크 자동 해제</font>")
+
                         # [v3.0.9] 동기화 가시성 확보를 위한 로그 추가
                         self.append_log(f"🧹 [동기화] 미보유 종목 제거: {current_stk_nm}")
         except Exception as e:
@@ -5225,6 +5395,7 @@ class KipoWindow(QMainWindow):
             "[시스템락]", "[불타기차단]", "[불타기대기]", "[LASER]", "[진단]", "[발송]", "[오류]", "[디버그]",            "[VI감지]", "[VI발동]", "[VI해제임박]", "[Turbo VI 감지]", "[VI감지-1h]", "[VI-DEBUG]", 
             "💓 [RT-SEARCH]", "📡 [REG응답]", "[BULTAGI-DEBUG]", "RAW_DATA", "[필터]", "[스킵]",
             "[RANK_SCOUT]", "[Ranking Scout]", "[RankingData]", "[Rank Raw]", "[Ranking-DEBUG]", # [v3.3.3/v4.0.4] 상단 상세 로그창으로 보내기 위해 필터
+            "[AI", # [V5.0.0] AI 분석 및 로깅 상단으로 격리
             "pygame", "Hello from the pygame", # [v3.3.3] 라이브러리 시작 로그 상단 이동
             "🧹", "[동기화]", # [v3.3.3] 동기화 로그 상단 이동
             "🕵️‍♂️" # [v3.3.4] 시간 경과 보정 로그 등 기술 메시지 상단 이동
@@ -7060,13 +7231,12 @@ class KipoWindow(QMainWindow):
             # [v4.0.1] 보유 종목 여부 추가 레이어 확인 (불필요한 알람 차단)
             is_holding = False
             try:
-                if hasattr(self, 'worker') and hasattr(self.worker, 'chat_command'):
-                    from check_n_buy import ACCOUNT_CACHE
-                    if stk_name in [h.get('name') for h in ACCOUNT_CACHE.get('holdings', {}).values() if h.get('name')]:
-                        is_holding = True
-                    # 코드로도 체크 (종목명으로 안 올 때 대비)
-                    elif any(stk_name in str(v) for v in ACCOUNT_CACHE.get('holdings', {}).keys()):
-                        is_holding = True
+                from check_n_buy import ACCOUNT_CACHE
+                if stk_name in [h.get('name') for h in ACCOUNT_CACHE.get('holdings', {}).values() if h.get('name')]:
+                    is_holding = True
+                # 코드로도 체크 (종목명으로 안 올 때 대비)
+                elif any(stk_name in str(v) for v in ACCOUNT_CACHE.get('holdings', {}).keys()):
+                    is_holding = True
             except: pass
             
             if not is_holding: return
@@ -7109,6 +7279,38 @@ class KipoWindow(QMainWindow):
             winsound.Beep(1000, 400)
         except: pass
 
+    def update_index_ui(self, idx_data):
+        """[v4.4.0] 지수 데이터를 받아 화면 상단 라벨(lbl_index)을 실시간으로 업데이트합니다."""
+        try:
+            kospi_val = idx_data.get('kospi', '0.0')
+            kospi_rate = float(idx_data.get('kospi_rate', '0.0'))
+            kosdaq_val = idx_data.get('kosdaq', '0.0')
+            kosdaq_rate = float(idx_data.get('kosdaq_rate', '0.0'))
+            
+            # 색상 결정 (상승: 빨강, 하락: 파랑, 보합: 회색)
+            def get_rate_color(rate):
+                if rate > 0: return "#e74c3c"
+                elif rate < 0: return "#3498db"
+                else: return "#aaaaaa"
+                
+            kospi_color = get_rate_color(kospi_rate)
+            kosdaq_color = get_rate_color(kosdaq_rate)
+            
+            # HTML 포맷팅 (KOSPI 0,000.00 (±0.00%) | KOSDAQ 000.00 (±0.00%))
+            idx_html = (
+                f"<span style='color:#eee; font-size:10pt;'>KOSPI</span> "
+                f"<span style='color:{kospi_color}; font-weight:bold;'>{kospi_val} ({kospi_rate:+.2f}%)</span> "
+                f" <span style='color:#555;'>|</span> "
+                f"<span style='color:#eee; font-size:10pt;'>KOSDAQ</span> "
+                f"<span style='color:{kosdaq_color}; font-weight:bold;'>{kosdaq_val} ({kosdaq_rate:+.2f}%)</span>"
+            )
+            self.lbl_index.setText(idx_html)
+            self.lbl_index.setStyleSheet("background-color: rgba(0,0,0,0.1); border-radius: 4px; padding: 2px;")
+            
+        except Exception as e:
+            # UI 업데이트 중 오류 발생 시 조용히 처리 (로그 노이즈 방지)
+            print(f"⚠️ 지수 UI 업데이트 오류: {e}")
+
     def closeEvent(self, event):
         """[신규 v6.3.1] 프로그램 종료 시 설정을 강제 저장하고 워커를 안전하게 종료합니다."""
         try:
@@ -7123,6 +7325,9 @@ class KipoWindow(QMainWindow):
             self.append_log("💾 종료 전 모든 설정이 안전하게 저장되었습니다.")
             
             # 3. 워커 중단 시도 (비동기 루프 종료)
+            if hasattr(self, 'ai_autopilot_engine') and self.ai_autopilot_engine.isRunning():
+                self.ai_autopilot_engine.stop()
+            
             if hasattr(self, 'worker') and self.worker:
                 self.worker.keep_running = False
                 self.worker.schedule_command('stop')
@@ -7194,12 +7399,12 @@ if __name__ == '__main__':
     faulthandler.dump_traceback_later(300, repeat=True, file=f_fault)
 
     try:
-        log_step("--- START V4.3.4 ---")
+        log_step("--- START V4.4.4 ---")
         
         # [추가] Windows 작업표시줄 아이콘 고동
         if sys.platform == 'win32':
             import ctypes
-            myappid = 'kipo.buy.auto.4.3.4'
+            myappid = 'kipo.buy.auto.4.4.0'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
             log_step("OS ID Set")
 

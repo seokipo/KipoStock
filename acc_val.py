@@ -33,6 +33,12 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 		ret_code = str(data.get('return_code', '0')).strip()
 		if ret_code not in ['0', '0000', '00000']:
 			msg = data.get('return_msg', '알 수 없는 에러')
+			
+			# [v5.0.2] 8005 에러(토큰 무효) 발생 시 구조화된 에러 반환
+			if ret_code == '8005':
+				print(f"🚨 [acc_val] 토큰 무효 에러(8005) 감지!")
+				return {'error_code': '8005', 'msg': msg}
+
 			# [v3.0.5] 성공 메시지는 실패로 보지 않음
 			if "조회가 완료되었습니다" in msg or "성공" in msg:
 				pass 
@@ -43,7 +49,6 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 		stk_acnt_evlt_prst = data.get('stk_acnt_evlt_prst', [])
 		acnt_no = data.get('acnt_no', '')
 		
-		# [신규] 반환 형식을 딕셔너리로 확장 (계좌번호 포함)
 		return {
 			'stocks': stk_acnt_evlt_prst,
 			'acnt_no': acnt_no
@@ -51,7 +56,7 @@ def fn_kt00004(print_df=False, cont_yn='N', next_key='', token=None):
 			
 	except Exception as e:
 		print(f"⚠️ [acc_val] Exception: {e}")
-		return None # 예외 발생 시에도 None 반환
+		return None
 
 	if print_df:
 		df = pd.DataFrame(stk_acnt_evlt_prst)[['stk_cd', 'stk_nm', 'pl_rt', 'rmnd_qty']]

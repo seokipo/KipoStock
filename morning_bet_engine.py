@@ -165,13 +165,14 @@ class MorningBetEngine:
                         oprc = data.get('open', 0)
                         
                         if oprc > 0 and price > 0:
-                            # [V4.2.7] 눌림 기준 완화: -1.0% -> -0.5% (사용자 요청: "여러 종목 되더라도")
-                            if price <= oprc * 0.995: 
+                            # [VTEST] 테스트를 위해 눌림 기준 대폭 완화: -0.5% -> -0.1%
+                            if price <= oprc * 0.999: 
                                 if not self.stocks_data.get(code, {}).get('dipped'):
-                                    print(f"🎯 [B전략-눌림감지] {code} 눌림 확인 (-0.5% 하회)")
+                                    print(f"🎯 [B전략-눌림감지] {code} 눌림 확인 (-0.1% 하회)")
                                 self.stocks_data.setdefault(code, {})['dipped'] = True
                             
-                            if self.stocks_data.get(code, {}).get('dipped') and price >= oprc * 1.003:
+                            # [VTEST] 돌파 기준 완화: +0.3% -> +0.1%
+                            if self.stocks_data.get(code, {}).get('dipped') and price >= oprc * 1.001:
                                 self.execute_bet(code, "B_OpenReBreak", tag='MORNING_B')
                                 processed_b.add(code)
                 
@@ -228,17 +229,16 @@ class MorningBetEngine:
                         if code in self.bet_history or code in processed_d: continue
                         
                         vol_rate = data.get('vol_rate', 0) 
-                        # [V4.3.4] 거래량 폭증 기준 완화 (사용자 요청: 10.0 -> 5.0배)
-                        # 단, 3.0배 이상 포착 시 로그를 출력하여 자기가 진행 상황을 볼 수 있게 함
-                        if vol_rate >= 5.0:
+                        # [VTEST] 거래량 폭증 기준 대폭 완화 (테스트용): 5.0배 -> 1.5배
+                        if vol_rate >= 1.5:
                             s_name = data.get('name', code)
-                            print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 5배 폭증! 타격 개시")
+                            print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 1.5배 폭증! 타격 개시")
                             self.execute_bet(code, "D_VolSurge", tag='MORNING_D')
                             processed_d.add(code)
-                        elif vol_rate >= 3.0:
+                        elif vol_rate >= 1.1:
                             s_name = data.get('name', code)
                             if code not in getattr(self, '_logged_vol', set()):
-                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 5배)")
+                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 1.5배)")
                                 if not hasattr(self, '_logged_vol'): self._logged_vol = set()
                                 self._logged_vol.add(code)
                 
@@ -250,16 +250,25 @@ class MorningBetEngine:
 
     def on_realtime_data(self, data):
         """rt_search에서 실시간 체결(REAL) 데이터를 넘겨줄 때 호출"""
-        jmcode = data.get('stk_cd') or data.get('code')
-        if not jmcode: return
-        jmcode = jmcode.replace('A', '')
-        
-        # 데이터 정규화 및 저장
+        if not self.is_running:
+            return
+            
         try:
-            # [v2.1.0] 데이터 추출 시 안전하게 형변환 (값이 없을 때를 대비한 0/1.0 세팅)
-            curr_p = data.get('now_prc', data.get('clpr', data.get('price', 0)))
-            open_p = data.get('oprc', data.get('stck_oprc', data.get('open', 0)))
-            v_rate = data.get('prdy_vol_rv_rate', data.get('vol_rate', 1.0))
+            # [Fix] 종목코드 추출 로직 보강 (9001 필드 및 다양한 키 대응)
+            jmcode = data.get('stk_cd') or data.get('code') or str(data.get('9001', '')).replace('A', '')
+            if not jmcode or len(jmcode) < 6:
+                return
+            
+            # [DEBUG] 데이터 수신 확인용 (GUI 로그창에 출력하여 자기야 안심시켜주기! ❤️)
+            # if hasattr(self.api, 'append_log') and time.time() % 30 < 0.5:
+            #     self.api.append_log(f"<font color='#555555'>[Morning-RT] {jmcode} 데이터 수신 중...</font>")
+
+            # 현재가(10), 시가(13) 추출 (Kiwom 규격 및 다양한 필드 대응)
+            curr_p = data.get('10') or data.get('now_prc') or data.get('clpr') or data.get('price', 0)
+            open_p = data.get('13') or data.get('oprc') or data.get('stck_oprc') or data.get('open', 0)
+            
+            if curr_p: curr_p = abs(int(float(curr_p)))
+            if open_p: open_p = abs(int(float(open_p)))
             
             norm_data = {
                 'code': jmcode,
@@ -270,9 +279,9 @@ class MorningBetEngine:
             }
             self.last_rt_data[jmcode] = norm_data
             
-            # [Debug] 엔진 유입 확인 (매우 빈번할 수 있으므로 주석 처리 또는 전략 가동시에만 출력 권장)
-            # if self.is_running and jmcode in self.stocks_data:
-            #     print(f"📥 [Morning Data] {jmcode} 유입: {norm_data['price']}원")
+            # [Debug] 엔진 유입 확인 (테스트 시 주석 해제하여 데이터 흐름 확인 가능)
+            if self.is_running and jmcode in self.stocks_data:
+                 print(f"📥 [Morning Data] {jmcode} 유입: {norm_data['price']}원 (거래량비: {norm_data['vol_rate']:.2f})")
         except Exception as e:
             # print(f"⚠️ [MorningBet] 데이터 정규화 오류: {e} (Data: {data})")
             pass
@@ -281,6 +290,15 @@ class MorningBetEngine:
         """최종 매수 실행 (리스크 최소화: 1주 고정)"""
         now = datetime.now()
         
+        # [v4.4.0] 지수 급락 자동 매매 정지 체크 (Global Stop)
+        try:
+            from check_n_buy import is_market_index_ok, get_stock_name_safe, add_buy
+            is_ok, reason = is_market_index_ok()
+            if not is_ok:
+                print(f"🛡️ <font color='#ff6b6b'><b>[지수급락 정지]</b> MorningBet({strategy_name}) 차단 ({reason})</font>")
+                return
+        except: pass
+
         if "A_Scan" in strategy_name:
             if not self.is_within_time_limit(): return
         else:

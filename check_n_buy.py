@@ -135,6 +135,50 @@ def save_detected_stock(code):
 
 RECENT_ORDER_CACHE = {}
 PROCESSING_FLAGS = set() # [신규] 중복 처리 동시 진입 방지 락
+# [v4.4.0] 전역 지수 상태 캐시 (AsyncWorker에서 주기적으로 업데이트)
+GLOBAL_MARKET_STATUS = {
+    'KOSPI': {'rate': 0.0, 'price': 0.0},
+    'KOSDAQ': {'rate': 0.0, 'price': 0.0},
+    'last_update': None
+}
+
+def is_market_index_ok():
+    """[v4.4.0] 지수 급락 자동 매매 정지 설정 및 현재 지수 상태를 비교하여 매매 가능 여부 반환"""
+    try:
+        # [v4.4.0] 지수 급락 정지 설정 로드
+        enabled = get_setting('global_idx_stop_enabled', False)
+        if not enabled: return True, ""
+        
+        kospi_thresh = float(get_setting('kospi_stop_threshold', '-2.0'))
+        kosdaq_thresh = float(get_setting('kosdaq_stop_threshold', '-3.0'))
+        
+        # [v5.0.3] 구조적 안정성 확보: KOSPI/KOSDAQ 키 내부의 rate 참조
+        kospi_obj = GLOBAL_MARKET_STATUS.get('KOSPI', {})
+        kosdaq_obj = GLOBAL_MARKET_STATUS.get('KOSDAQ', {})
+        
+        cur_kospi_rate = float(kospi_obj.get('rate', 0.0))
+        cur_kosdaq_rate = float(kosdaq_obj.get('rate', 0.0))
+        
+        # 만약 명시적 'KOSPI' 키가 비어있다면 평면(Flat) 구조('kospi_rate')까지 추가로 확인 (더블 체크)
+        if cur_kospi_rate == 0.0:
+            cur_kospi_rate = float(GLOBAL_MARKET_STATUS.get('kospi_rate', 0.0))
+        if cur_kosdaq_rate == 0.0:
+            cur_kosdaq_rate = float(GLOBAL_MARKET_STATUS.get('kosdaq_rate', 0.0))
+
+        # 임계값보다 지수가 더 낮으면 (더 많이 떨어졌으면) 정지
+        if cur_kospi_rate <= kospi_thresh:
+            return False, f"KOSPI {cur_kospi_rate}% (임계값: {kospi_thresh}%)"
+        if cur_kosdaq_rate <= kosdaq_thresh:
+            return False, f"KOSDAQ {cur_kosdaq_rate}% (임계값: {kosdaq_thresh}%)"
+            
+        return True, ""
+    except Exception as e:
+        if time.time() % 60 < 1.0: # 로그 폭발 방지
+             print(f"⚠️ [지수체크] 오류 발생 (매매 허용): {e}")
+        return True, ""
+
+# 계좌 캐시 테이블 (불타기/매도 시 활용)
+account_cache = {} 
 
 def update_account_cache(token):
     global _ORDER_SEMAPHORE
@@ -147,7 +191,12 @@ def update_account_cache(token):
             except: pass
 
         balance_data = get_balance(token=token, quiet=True)
-        if balance_data and isinstance(balance_data, dict):
+        # [v5.0.2] 8005 에러 감지 시 강제 재로그인 후 재시도 (Auto-Auth Recovery)
+        if isinstance(balance_data, dict) and balance_data.get('error_code') == '8005':
+            print("🔄 [check_n_buy] 잔고조회 8005 감지 → 토큰 강제 갱신 후 재시도 중...")
+            token = get_token(force=True)
+            balance_data = get_balance(token=token, quiet=True)
+        if balance_data and isinstance(balance_data, dict) and 'error_code' not in balance_data:
             ACCOUNT_CACHE['balance'] = int(str(balance_data.get('balance', '0')).replace(',', ''))
             ACCOUNT_CACHE['acnt_no'] = balance_data.get('acnt_no', '')
         
@@ -158,6 +207,11 @@ def update_account_cache(token):
         names = {}
         
         my_stocks_data = get_my_stocks(token=token)
+        # [v5.0.2] 8005 에러 감지 시 강제 재로그인 후 재시도 (Auto-Auth Recovery)
+        if isinstance(my_stocks_data, dict) and my_stocks_data.get('error_code') == '8005':
+            print("🔄 [check_n_buy] 계좌조회 8005 감지 → 토큰 강제 갱신 후 재시도 중...")
+            token = get_token(force=True)
+            my_stocks_data = get_my_stocks(token=token)
         if my_stocks_data is None:
             # [Fix v3.0.3] API 통신 실패 및 토큰 만료 시 기존 데이터를 날리지 않고 유지하여 UI 증발 방지
             # [v3.0.4] 혹시 모를 토큰 만료 대응: 즉시 1회 자동 토큰 갱신 시도
@@ -245,27 +299,44 @@ def update_account_cache(token):
                             except: pass
                             
                             from trade_logger import session_logger # [v5.5.1 fix]
-                            update_stock_condition(code, name='직접매매', strat='HTS')
+                            # [v5.0.7] HTS 매수 시 불타기 보드 즉시 노출을 위해 bultagi_done=True 추가
+                            update_stock_condition(code, name='직접매매', strat='HTS', bultagi_done=True)
                             session_logger.record_buy(code, s_name, diff, hts_price, strat_mode='HTS')
                         except Exception as e:
                             print(f"⚠️ [HTS저장] 메타데이터 저장 실패: {e}")
 
-                # [v6.2.8] 매핑 누락 자동 복구 로직
+                # [v6.2.8 / v5.0.6] 매핑 누락 자동 복구 로직
                 # stock_conditions.json(mapping)에 없지만 보유 중인 종목을 daily_buy_times.json 기반으로 구제
                 try:
                     base_path = get_base_path()
                     mapping_file = os.path.join(base_path, 'stock_conditions.json')
                     buy_times_file = os.path.join(base_path, 'daily_buy_times.json')
                     
-                    # 매 루프마다 파일을 읽는 것은 비효율적이므로 ACCOUNT_CACHE에 매핑 상태 체크
-                    if code not in load_json_safe(mapping_file):
+                    current_mapping = load_json_safe(mapping_file)
+                    if code not in current_mapping:
+                        # 1단계: 오늘 매수한 이력이 있는지 체크
                         bt_data = load_json_safe(buy_times_file)
                         if code in bt_data:
                             b_entry = bt_data[code]
                             b_time = b_entry.get('time') if isinstance(b_entry, dict) else b_entry
                             if b_time and b_time != "99:99:99":
                                 print(f"🛠️ [매핑복구] {names.get(code, code)} ({code}): 매핑 누수 감지 -> {b_time} 기반 자동 복구")
-                                update_stock_condition(code, name='HTS매매', strat='HTS', time_val=b_time)
+                                # [v5.0.7] 복구 시에도 불타기 보드 노출을 위해 bultagi_done=True 추가
+                                update_stock_condition(code, name=names.get(code, 'HTS매매'), strat='HTS', time_val=b_time, bultagi_done=True)
+                        
+                        # [신규 v5.0.6] 2단계: 어제 종가 베팅 종목인지 DB에서 확인 (전략 보존)
+                        else:
+                            from kipodb import kipo_db
+                            last_trade = kipo_db.get_last_trade_by_code(code)
+                            if last_trade and last_trade.get('strat_mode') == 'CLOSING_BET':
+                                print(f"🌙 [전략복구] {names.get(code, code)} ({code}): 종가 베팅 전략 복원 완료")
+                                # [v5.0.7] 종가베팅 복원 시 불타기 보드 노출을 위해 bultagi_done=True 추가
+                                update_stock_condition(code, name=names.get(code, '종가베팅'), strat='CLOSING_BET', time_val='[전일]', bultagi_done=True)
+                            
+                            # [신규 v5.0.7] 3단계: 최종적으로 아무 정보도 없으면 무조건 HTS로 등록하여 '매수 전략' -- 방지 및 불타기 보드 강제 이동
+                            else:
+                                print(f"🕵️ [최종구제] {names.get(code, code)} ({code}): 정보 없음 -> HTS 전략 강제 할당 (불타기 보드 이동)")
+                                update_stock_condition(code, name=names.get(code, 'HTS매매'), strat='HTS', time_val='[미상]', bultagi_done=True)
                 except: pass
             
             # 2. 종목 삭제 / 수량 감소 (매도)
@@ -422,8 +493,13 @@ def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
 def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None, vi_type=None):
     stk_cd = stk_cd.replace('A', '') 
     
-    # [Debug] 매수 진입로깅 (v1.2.3 제거)
-    # print(f"🔍 [진입] chk_n_buy: {stk_cd}, seq={seq}, name={seq_name}")
+    # [v4.4.0] 지수 급락 자동 매매 정지 체크 (Global Stop)
+    is_ok, reason = is_market_index_ok()
+    if not is_ok:
+        # [Lite V1.0] 다이어트 로그 적용 (지수 급락 안내)
+        s_name = get_stock_name_safe(stk_cd, token if token else get_token())
+        print(f"🛡️ <font color='#ff6b6b'><b>[지수급락 정지]</b> {s_name}({stk_cd}) 매수 차단 ({reason})</font>")
+        return
 
     # 0. 메모리 락 (동시 처리 방지)
     if stk_cd in PROCESSING_FLAGS:
@@ -765,6 +841,13 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
     """[수정 v4.5.1] 가속도 또는 불타기 조건 만족 시 시장가/현재가 추가 매수"""
     stk_cd = stk_cd.replace('A', '')
 
+    # [v4.4.0] 지수 급락 자동 매매 정지 체크 (Global Stop) - 불타기도 포함
+    is_ok, reason = is_market_index_ok()
+    if not is_ok:
+        s_name = get_stock_name_safe(stk_cd, token if token else get_token())
+        print(f"🛡️ <font color='#ff6b6b'><b>[지수급락 정지]</b> {s_name}({stk_cd}) 추가 매수(불타기) 차단 ({reason})</font>")
+        return False
+
     # 0. 메모리 락
     if stk_cd in PROCESSING_FLAGS:
         return False
@@ -906,6 +989,11 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
         if strat == 'RankScout':
             spec_tp = 20.0 # 정찰병은 크게 본다
             spec_sl = -3.0
+            
+        # [신규 v5.0.6] CLOSING_BET 전용 기본값 (종가 베팅은 익절을 넉넉히)
+        if strat == 'CLOSING_BET':
+            spec_tp = max(spec_tp, 15.0) 
+            spec_sl = min(spec_sl, -2.0)
         
         # 새 데이터 구성 (기존 데이터 위에 덮어쓰기)
         new_info = existing_info.copy()

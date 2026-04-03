@@ -167,5 +167,20 @@ class KipoDB:
             print(f"⚠️ [KipoDB] 날짜별 내역 조회 실패: {e}")
             return []
 
+    def get_last_trade_by_code(self, code):
+        """[신규 v5.0.6] 특정 종목의 가장 최근 매매 내역 1건 반환"""
+        try:
+            code = code.replace('A', '')
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                # 가장 최근 ID 순으로 1건 조회
+                cursor.execute('SELECT * FROM trades WHERE code = ? ORDER BY id DESC LIMIT 1', (code,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            print(f"⚠️ [KipoDB] 종목별 최근 내역 조회 실패: {e}")
+            return None
+
 # 싱글톤 인스턴스
 kipo_db = KipoDB()

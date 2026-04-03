@@ -347,13 +347,17 @@ def buy_stock_qty1(stk_cd, token=None, seq_name="종베직접매수"):
             cur_qty = holdings.get(stk_cd, 0)
             holdings[stk_cd] = cur_qty + 1
             
-            from check_n_buy import RECENT_ORDER_CACHE
+            from check_n_buy import RECENT_ORDER_CACHE, update_stock_condition
             import time
             RECENT_ORDER_CACHE[stk_cd] = time.time()
 
             try:
                 s_name = ACCOUNT_CACHE.get('names', {}).get(stk_cd, stk_cd)
                 from trade_logger import session_logger
+                
+                # [v5.0.6] 매핑 파일(stock_conditions.json)에도 즉시 기록하여 GUI 표시 및 불타기 연동 보장
+                update_stock_condition(stk_cd, name=s_name, strat='CLOSING_BET')
+                
                 session_logger.record_buy(stk_cd, s_name, 1, cur_price, strat_mode='CLOSING_BET')
             except Exception:
                 pass

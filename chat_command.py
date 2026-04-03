@@ -431,7 +431,19 @@ class ChatCommand:
             print("🔄 [안내] 엔진 재시작 중으로 자동 재연결을 건너뜁니다.")
             return
 
+        # [v4.4.1] 인증 에러로 인한 끊김인지 확인
+        force_refresh = False
+        if hasattr(self.rt_search, 'auth_error_detected') and self.rt_search.auth_error_detected:
+            print("⚠️ [재연결] 인증 실패(8005) 감지: 토큰 강제 갱신을 준비합니다.")
+            force_refresh = True
+            self.rt_search.auth_error_detected = False # 플래그 초기화
+
         await self.stop(set_auto_start_false=False)
+        
+        if force_refresh:
+            print("🔐 [재연결] 새 토큰 발급 중...")
+            self.get_token(force=True)
+            await asyncio.sleep(2.0)
         
         # 지수 백오프 대기 시간 계산: 2^attempts + random jitter (jitter는 일단 생략)
         self.reconnect_attempts += 1
@@ -460,6 +472,11 @@ class ChatCommand:
             loop = asyncio.get_event_loop()
             
             balance_res = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
+            # [v5.0.2] 8005 에러 감지 시 강제 재로그인 후 재시도 (Auto-Auth Recovery)
+            if isinstance(balance_res, dict) and balance_res.get('error_code') == '8005':
+                print("🔄 [report] 8005 감지 → 토큰 강제 갱신 후 재시도 중...")
+                self.token = await loop.run_in_executor(None, fn_au10001, True)
+                balance_res = await loop.run_in_executor(None, get_balance, 'N', '', self.token, True)
             if balance_res and isinstance(balance_res, dict):
                  balance_raw = balance_res.get('balance', 0)
             else:
@@ -467,6 +484,11 @@ class ChatCommand:
             balance_str = f"{int(balance_raw):,}원" if balance_raw else "조회 실패"
             
             account_data_raw = await loop.run_in_executor(None, fn_kt00004, False, 'N', '', self.token)
+            # [v5.0.2] 8005 에러 감지 시 강제 재로그인 후 재시도 (Auto-Auth Recovery)
+            if isinstance(account_data_raw, dict) and account_data_raw.get('error_code') == '8005':
+                print("🔄 [report] 계좌조회 8005 감지 → 토큰 강제 갱신 후 재시도 중...")
+                self.token = await loop.run_in_executor(None, fn_au10001, True)
+                account_data_raw = await loop.run_in_executor(None, fn_kt00004, False, 'N', '', self.token)
             if isinstance(account_data_raw, dict):
                 account_data = account_data_raw.get('stocks', [])
             else:
@@ -622,6 +644,31 @@ class ChatCommand:
                 
                 log_and_tel(f"<font color='#28a745'>💾 <b>종합 리포트 파일 저장 완료:</b> {filename}</font>", parse_mode='HTML', msg_type='report')
                 print(f"✅ 리포트 파일 저장 완료: {save_path}")
+                
+                # 5. 엑셀 백업본 생성 (사용자 특별 요청)
+                try:
+                    processed_data = stats.get('processed_data', []) if stats else []
+                    if processed_data:
+                        df = pd.DataFrame(processed_data)
+                        rename_cols = {
+                            'code': '종목코드', 'name': '종목명', 'type': '구분',
+                            'buy_time': '체결시간', 'buy_avg': '매수단가', 'buy_qty': '매수량',
+                            'buy_amt': '매수금액', 'sel_avg': '매도단가', 'sel_qty': '매도량',
+                            'sel_amt': '매도금액', 'tax': '제세금', 'pnl': '수익금',
+                            'pnl_rt': '수익률(%)', 'strat_nm': '적용전략'
+                        }
+                        available_cols = [c for c in rename_cols.keys() if c in df.columns]
+                        df_report = df[available_cols].rename(columns=rename_cols)
+                        
+                        excel_filename = f"FullReport_{ts_file}.xlsx"
+                        excel_path = os.path.join(log_dir, excel_filename)
+                        df_report.to_excel(excel_path, index=False)
+                        
+                        print(f"✅ 리포트 엑셀 파일 저장 완료: {excel_path}")
+                        log_and_tel(f"<font color='#00c851'>📊 <b>엑셀 리포트 백업 완료:</b> {excel_filename}</font>", parse_mode='HTML', msg_type='report')
+                except Exception as ex_err:
+                    print(f"❌ 리포트 엑셀 전환 중 오류: {ex_err}")
+
             except Exception as fe:
                 print(f"❌ 리포트 파일 저장 중 오류: {fe}")
 
@@ -992,7 +1039,8 @@ class ChatCommand:
                 'peak_pnl': peak_pnl,
                 'peak_pnl_time': peak_pnl_time,
                 'cond_stats': cond_stats, # [신규] 조건식 통계 추가
-                'strat_stats': strat_stats # [복구] 매수 전략별 통계 추가
+                'strat_stats': strat_stats, # [복구] 매수 전략별 통계 추가
+                'processed_data': processed_data # [신규] 엑셀 리포트용 원본 데이터
             }
 
             if sync_only:
