@@ -219,12 +219,12 @@ def chk_n_sell(token=None, disabled_stocks=None):
                         
                         # [v3.1.9 Hotfix-2] 매도 설정 로드 (모든 종목 진단에 공통 사용 - 조건문 외부 배치)
                         b_ts_en = cached_setting('bultagi_trailing_enabled', False)
-                        b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2)))
+                        b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2) or 1.2))
                         b_pres_en = cached_setting('bultagi_preservation_enabled', False)
-                        b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3))
-                        b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8))
+                        b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3) or 5.3)
+                        b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8) or 4.8)
                         b_tp_en = cached_setting('bultagi_tp_enabled', True)
-                        b_tp = float(cached_setting('bultagi_tp', 5.0))
+                        b_tp = float(cached_setting('bultagi_tp', 5.0) or 5.0)
                         
                         try:
                             from datetime import datetime
@@ -383,12 +383,12 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             
                             # 불타기 매도 설정 로드
                             b_ts_en = cached_setting('bultagi_trailing_enabled', False)
-                            b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2)))
+                            b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2) or 1.2))
                             b_pres_en = cached_setting('bultagi_preservation_enabled', False)
-                            b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3))
-                            b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8))
+                            b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3) or 5.3)
+                            b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8) or 4.8)
                             b_tp_en = cached_setting('bultagi_tp_enabled', True)
-                            b_tp = float(cached_setting('bultagi_tp', 5.0))
+                            b_tp = float(cached_setting('bultagi_tp', 5.0) or 5.0)
                             
                             # [v5.0.8] 매도 조건 표시 이원화 ([기본] vs [불타기])
                             conds = []

@@ -64,26 +64,34 @@ class TradeLogger:
                 self.trades = data.get('trades', [])
                 self.cumulative_pnl = data.get('cumulative_pnl', 0)
                 
-                # [v5.4.1] pnl_history 데이터 형식 정규화 (호환성 보장)
+                # [v5.1.4] pnl_history 데이터 형식 정규화 및 08:59:00 시작점 보장
                 raw_pnl_history = data.get('pnl_history', [])
                 self.pnl_history = []
                 
+                temp_early_pnl = 0
                 for item in raw_pnl_history:
+                    t = ""
+                    p = 0
                     if isinstance(item, dict) and 'time' in item and 'pnl' in item:
-                        self.pnl_history.append(item)
+                        t = item['time']
+                        p = item['pnl']
                     elif isinstance(item, (int, float)):
-                        # 레거시 데이터 형식([0, 100, ...]) 대응
-                        self.pnl_history.append({'time': datetime.now().strftime("%H:%M:%S"), 'pnl': item})
+                        t = datetime.now().strftime("%H:%M:%S")
+                        p = item
+                    
+                    if t and t < "08:59:00":
+                        temp_early_pnl = p # 08:59 이전 마지막 수치를 초기값으로 사용
+                        continue
+                    
+                    if not self.pnl_history and t > "08:59:00":
+                        # 08:59:00 점이 없으면 생성
+                        self.pnl_history.append({'time': "08:59:00", 'pnl': temp_early_pnl})
+                    
+                    self.pnl_history.append({'time': t, 'pnl': p})
                 
-                # 데이터가 비어있으면 초기값 설정
-                if not self.pnl_history:
-                    # [v3.0.9] 장전(09:00 이전) 기동 시에는 08:59:00으로 시작점 고정
-                    now_t = datetime.now()
-                    if now_t.hour < 9:
-                        start_t = "08:59:00"
-                    else:
-                        start_t = now_t.strftime("%H:%M:%S")
-                    self.pnl_history = [{'time': start_t, 'pnl': 0}]
+                # 데이터가 비어있거나 시작점이 08:59:00이 아니면 강제 설정
+                if not self.pnl_history or self.pnl_history[0]['time'] > "08:59:00":
+                    self.pnl_history.insert(0, {'time': "08:59:00", 'pnl': temp_early_pnl})
                 
                 self.returns_history = data.get('returns_history', [])
                 print(f"✅ [TradeLogger] 이전 세션 복원 완료 ({len(self.trades)}건의 거래, 그래프 데이터 {len(self.pnl_history)}건)")
@@ -137,7 +145,14 @@ class TradeLogger:
         })
         # 퀀트 분석용 데이터 업데이트
         self.cumulative_pnl += pnl_amt
-        self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
+        # [v5.1.4] 08:59:00 이전의 타점은 시작점(08:59:00)의 값으로 병합하여 X축 고정 보장
+        if current_time_str < "08:59:00":
+            if self.pnl_history and self.pnl_history[0]['time'] == "08:59:00":
+                self.pnl_history[0]['pnl'] = self.cumulative_pnl
+            else:
+                self.pnl_history.insert(0, {'time': "08:59:00", 'pnl': self.cumulative_pnl})
+        else:
+            self.pnl_history.append({'time': current_time_str, 'pnl': self.cumulative_pnl})
         self.returns_history.append(pl_rt)
         self.sync_required = True # [v5.5] API 싱크 시그널 활성화
         self.save_session() # [신규] 실시간 백업

@@ -163,6 +163,11 @@ class RealTimeSearch:
                     raw_seq = header.get('seq') or header.get('index') or header.get('condition_seq') or response.get('seq')
                     seq = str(raw_seq) if raw_seq is not None else ''
 
+                    # [V5.1.6 핵심 보강] 현재 활성 상태가 아닌 유령 조건식 신호는 즉시 차단 🚫
+                    if seq and seq not in self.active_conditions:
+                        # print(f"👻 [유령차단] 비활성 조건식({seq}) 신호 무시됨")
+                        continue
+
                     if data and isinstance(data, dict): data = [data]
                     
                     if not seq:
@@ -362,12 +367,15 @@ class RealTimeSearch:
                                     # [신규 v1.5.4] VI 발동(1) 시 보유 종목일 경우 1분 50초 알람 타이머 가동
                                     if vi_status == '1':
                                         from check_n_buy import ACCOUNT_CACHE
-                                        if jmcode in ACCOUNT_CACHE['holdings']:
-                                            s_name = values.get('302', jmcode)
-                                            # [v2.2.9] 로그에서도 코드 제거
-                                            # [v4.0.1] GUI의 append_log에서 [VI발동] 태그를 감지하여 110초 후 알람을 통합 관리하므로
-                                            # 엔진 내부의 중복 타이머는 제거하고 로그만 출력합니다.
-                                            print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! (1분 50초 후 알람 예약됨)</font>")
+                                        # [v5.1.6] 보유 종목 무결성 체크 강화 (공백 제거 및 코드 대조)
+                                        target_code = str(jmcode).strip()
+                                        if target_code in ACCOUNT_CACHE['holdings']:
+                                            # [v4.0.1] [VI인식] 태그 추가 및 가시성 개선 (v5.1.6)
+                                            print(f"📡 <font color='#f1c40f'><b>[VI인식]</b> {s_name} ({target_code}) 보유 확인! (110초 후 알람 예약)</font>")
+                                        else:
+                                            # [v5.1.6] 보유 종목이 아닐 경우 명시적 스킵 로그 출력
+                                            if not get_setting('simple_log', False):
+                                                print(f"📡 <font color='#888888'>[VI스킵] {s_name} ({target_code}) 보유 종목 아님</font>")
 
                                     # [핵심] 해제(2) 또는 재개(4) 시 즉시 매수 트리거
                                     elif vi_status in ['2', '4']:
@@ -464,12 +472,16 @@ class RealTimeSearch:
                                 tag = "[VI발동]" if vi_status == '1' else "[VI감지]"
                                 print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name} 상태: {st_txt} | 시간:{vi_time}</font>")
 
-                            # [V4.2.9] 1h TR에서도 보유 종목일 경우 알람 예약용 로그 출력 (GUI 전송용)
+                            # [V5.1.6] 1h TR 보유 종목 매칭 및 로깅 고도화
                             if get_setting('bultagi_turbo_vi', False) and vi_status == '1':
                                 try:
                                     from check_n_buy import ACCOUNT_CACHE
-                                    if jmcode in ACCOUNT_CACHE['holdings']:
-                                        print(f"📡 <font color='#f1c40f'><b>[VI발동]</b> {s_name} 보유 종목 VI 진입! (1분 50초 후 알람 예약됨)</font>")
+                                    target_code = str(jmcode).strip()
+                                    if target_code in ACCOUNT_CACHE['holdings']:
+                                        print(f"📡 <font color='#f1c40f'><b>[VI인식]</b> {s_name} ({target_code}) 보유 확인! (110초 후 알람 예약)</font>")
+                                    else:
+                                        if not get_setting('simple_log', False):
+                                            print(f"📡 <font color='#888888'>[VI스킵] {s_name} ({target_code}) 보유 종목 아님</font>")
                                 except: pass
 
                             if get_setting('bultagi_turbo_vi', False) and vi_status in ['2', '4']:
@@ -486,7 +498,35 @@ class RealTimeSearch:
                 if not self.keep_running: break
                 await asyncio.sleep(1)
 
+    async def add_realtime_codes(self, codes):
+        """[신규 v1.1.7] 시초가 후보 종목 등 특정 리스트를 실시간 감시(Grp 3)에 등록"""
+        if not self.websocket or not self.connected: return False
+        try:
+            if not codes: return False
+            # 중복 제거 및 형식 보정 (최대 100개로 제한하여 서버 부하 방지)
+            unique_codes = list(set([str(c).replace('A', '') for c in codes if c]))[:100]
+            
+            print(f"📡 [실시간감시] {len(unique_codes)}종목 동적 등록 요청 (Morning Strategy)...")
+            
+            reg_items = []
+            for code in unique_codes:
+                # '00' 타입은 주식 실시간 체결 데이터 (Tick)
+                reg_items.append({'item': [code], 'type': ['00']})
+            
+            # Grp 3번으로 등록 (기존 Grp 1, 2와 별도 관리)
+            await self.send_message({
+                'trnm': 'REG',
+                'grp_no': '3',
+                'refresh': '1', # Grp 3 내역 초기화 후 새 리스트 등록
+                'data': reg_items
+            })
+            return True
+        except Exception as e:
+            print(f"⚠️ [rt_search] 종목 등록 실패: {e}")
+            return False
+
     async def refresh_conditions(self, token):
+
         """실시간 조건식 재등록 (동적 반영)"""
         if not self.websocket: return False
         try:
@@ -641,9 +681,27 @@ class RealTimeSearch:
             print(f'❌ 시작 오류: {e}')
             return False
 
+    async def stop_all_monitoring(self):
+        """[V5.1.6] 현재 서버에 등록된 모든 조건식 감시를 명시적으로 해제합니다."""
+        if not self.websocket or not self.connected: return
+        try:
+            # 복사본을 만들어 루프 중 set 변경 방지
+            active_list = list(self.active_conditions)
+            if not active_list: return
+            
+            print(f"🧹 [일괄해제] {len(active_list)}개의 유령 조건식을 정지합니다...")
+            for seq in active_list:
+                # search_type='2' 가 정지(StopCondition) 명령입니다.
+                await self.send_message({'trnm': 'CNSRREQ', 'seq': str(seq), 'search_type': '2', 'stex_tp': 'K'})
+                await asyncio.sleep(0.05)
+            self.active_conditions.clear()
+        except Exception as e:
+            print(f"⚠️ [일괄해제 실패] {e}")
+
     async def disconnect(self):
         self.keep_running = False
         self.connected = False
+        await self.stop_all_monitoring() # [V5.1.6] 종료 전 서버 감시 해제 추가
         self.active_conditions.clear()
         if self.on_condition_loaded: self.on_condition_loaded()
         if self.websocket: await self.websocket.close()
@@ -652,3 +710,4 @@ class RealTimeSearch:
         if self.receive_task: self.receive_task.cancel()
         await self.disconnect()
         return True
+

@@ -338,6 +338,8 @@ def get_morning_scan_data(token=None):
             items = data.get('pwr_st_list') or data.get('data_list') or data.get('output', [])
             
         if not items:
+            # [v1.2.1] 스캔 실패 시 상세 원인 파악을 위한 로그 강화
+            print(f"⚠️ [MorningScan] 데이터가 비어있습니다. 응답: {res_json}")
             return []
             
         scan_results = []
@@ -355,7 +357,7 @@ def get_morning_scan_data(token=None):
             
         return scan_results
     except Exception as e:
-        print(f"⚠️ [MorningScan] API 호출 실패: {e}")
+        print(f"❌ [MorningScan] API 호출 중 예외 발생: {e}")
         return []
 
 def get_realtime_ranking_data(token=None, qry_tp='5'):

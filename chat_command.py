@@ -1056,16 +1056,23 @@ class ChatCommand:
                     
                     if abs(session_logger.cumulative_pnl - run_pnl) > 1:
                         if len(session_logger.pnl_history) <= 1:
-                            # 앱 초기 기동 시점에는 과거 흐름을 대략적으로 복원 (08:59:00 시작)
+                            # 앱 초기 기동 시점에는 과거 흐름을 대략적으로 복원 (08:59:00 시작 고정)
                             sync_history = [{'time': '08:59:00', 'pnl': 0}]
                             temp_pnl = 0
                             for r in time_sorted_data:
                                 temp_pnl += r['pnl']
-                                time_str = r['buy_time'].replace('[', '').replace(']', '').replace('전일 ', '').strip()
-                                if len(time_str) >= 8 and ':' in time_str:
-                                    sync_history.append({'time': time_str[-8:], 'pnl': temp_pnl})
-                                else:
-                                    sync_history.append({'time': time_str, 'pnl': temp_pnl})
+                                # [v5.1.4] 08:59:00 이전 데이터는 차트 시작점(08:59)으로 수렴시켜 X축 하단 고정
+                                raw_time = r['buy_time'].replace('[', '').replace(']', '').replace('전일 ', '').strip()
+                                if ':' in raw_time:
+                                    t_str = raw_time[-8:] if len(raw_time) >= 8 else raw_time
+                                    if len(t_str) == 5: t_str += ":00" # HH:MM 대응
+                                    
+                                    if t_str < "08:59:00":
+                                        # 08:59 이전의 모든 수익/손실은 차트의 첫 번째 점(08:59)의 기초 자산으로 합산
+                                        sync_history[0]['pnl'] = temp_pnl
+                                        continue
+                                    
+                                    sync_history.append({'time': t_str, 'pnl': temp_pnl})
                             session_logger.pnl_history = sync_history
                         elif total_sell_qty != last_sell_qty:
                             # [v3.3.5] 중복 타점(수직선) 방지 고도화

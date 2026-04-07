@@ -1494,7 +1494,7 @@ class KipoFilterListDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("KipoStock AI V5.1.2")
+        self.setWindowTitle("KipoStock AI V5.1.7")
         self.setMinimumSize(480, 520)
         self.resize(520, 580)
         self._apply_style()
@@ -3223,7 +3223,7 @@ class KipoWindow(QMainWindow):
         self.disabled_auto_stocks = set() # [V4.3.4] 개별 종목 자동매매 일시 정지 목록
         
         # [v2.5.1] 성능 최적화 및 음성 토글 기능 통합 빌드
-        self.setWindowTitle("KipoStock Professional Trader AI - V5.1.2 (Gemini Hybrid)")
+        self.setWindowTitle("KipoStock Professional Trader AI - V5.1.7 (Gemini Hybrid)")
         self.is_closing = False # [v3.0.1] 종료 플래그 초기화
 
         # [NEW v6.5.1] 로그 버퍼링 타이머 가동 (0.25초 주기로 뭉쳐서 출력)

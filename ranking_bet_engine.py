@@ -138,9 +138,9 @@ class RankingBetEngine:
                         rank_st = stock.get('rank_st', '') # N:신규, 1:상승...
                         rank_gap = stock.get('rank_gap', 0)
                         
-                        # 1. 신규 진입 감지 (사용자 요청: 키움 'N' 신호 또는 첫 포착 종목)
-                        # 이전 리스트에는 없으면서(신규 등장) 설정된 순위 내일 때
-                        is_new_entry = (rank_st == 'N') or (code not in self.previous_ranking and not is_first_sync)
+                        # 1. 신규 진입 감지 (사용자 요청: 키움 'N' 신호만 철저하게 필터링! ❤️)
+                        # 오직 'N'으로 찍힌 신규 종목만 진입하며, 단순 순위권 재진입은 제외합니다.
+                        is_new_entry = (rank_st == 'N')
                         
                         if is_new_entry and rank <= self.new_entry_threshold:
                                 # 중복 방지: N으로 찍혀도 이미 이전 루프에서 샀으면 패스

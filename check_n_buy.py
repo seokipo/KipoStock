@@ -165,6 +165,12 @@ def is_market_index_ok():
         if cur_kosdaq_rate == 0.0:
             cur_kosdaq_rate = float(GLOBAL_MARKET_STATUS.get('kosdaq_rate', 0.0))
 
+        # [v1.1.7] 장 초반(09:00~09:01) 지수 데이터가 아직 0.0일 경우 매수 차단 방지 (Safe Pass)
+        now_dt = datetime.now()
+        if now_dt.hour == 9 and now_dt.minute <= 1:
+            if cur_kospi_rate == 0.0 and cur_kosdaq_rate == 0.0:
+                return True, ""
+
         # 임계값보다 지수가 더 낮으면 (더 많이 떨어졌으면) 정지
         if cur_kospi_rate <= kospi_thresh:
             return False, f"KOSPI {cur_kospi_rate}% (임계값: {kospi_thresh}%)"
@@ -491,6 +497,14 @@ def pretty_log(status_icon, status_msg, stock_name, code, is_error=False):
     print(log_line)
 
 def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_news_cb=None, vi_type=None):
+    # [V5.1.6 2중 철벽 방어] 현재 비활성화된 조건식(유령) 신호는 즉시 차단 🚫
+    if seq and str(seq).isdigit():
+        active_seqs = cached_setting('search_seq', [])
+        if isinstance(active_seqs, str): active_seqs = [active_seqs]
+        if str(seq) not in map(str, active_seqs):
+            # print(f"👻 [유령차단-2] 비활성 조건식({seq}: {seq_name}) 매수 요청 거부됨")
+            return
+            
     stk_cd = stk_cd.replace('A', '') 
     
     # [v4.4.0] 지수 급락 자동 매매 정지 체크 (Global Stop)
@@ -1086,3 +1100,4 @@ def remove_stock_condition(code):
             
     except Exception as e:
         print(f"⚠️ 매핑 삭제 실패: {e}")
+
