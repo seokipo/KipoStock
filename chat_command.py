@@ -265,6 +265,7 @@ class ChatCommand:
         """매도 체크 루프"""
         failure_count = 0
         while self.rt_search.keep_running:
+            loop_start = time.time() # [v5.1.14] 적응형 주기를 위한 시작 시각 기록
             try:
                 if MarketHour.is_waiting_period():
                     await asyncio.sleep(0.5)
@@ -294,15 +295,18 @@ class ChatCommand:
                     print("⚠️ 매도 루프 연속 실패로 재시작 시도")
                     break 
                 
-                # [v4.2.2] 매매 감시 주기 0.5초 최적화 (0.5s -> 0.35s sleep)
-                await asyncio.sleep(0.35) 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"⚠️ 매도 루프 에러: {e}")
                 await asyncio.sleep(1) # 에러 시 잠시 대기
                 failure_count += 1
-            await asyncio.sleep(0.05)
+            
+            # [v5.1.14] 지능형 적응형 슬립 (Adaptive Heartbeat)
+            # 목표 주기(0.25초)에서 실행 시간을 뺀 만큼만 대기하여 포트폴리오 크기에 대응함
+            elapsed = time.time() - loop_start
+            wait_time = max(0.01, 0.25 - elapsed)
+            await asyncio.sleep(wait_time)
 
     async def start(self, profile_info=None, manual=False):
         """시스템 시작"""

@@ -19,6 +19,9 @@ class RankingBetEngine:
         # 이전 순위 데이터 기록 (종목코드: 순위)
         self.previous_ranking = {}
         
+        # [신규 v5.2.0] 순위 이력 기록 (종목코드: [rank1, rank2, ...])
+        self.rank_history = {}
+        
         # 실행 중인 태스크 관리
         self.tasks = []
 
@@ -26,6 +29,7 @@ class RankingBetEngine:
         self.enabled = False
         self.new_entry_threshold = 10 # N위 내 신규 진입
         self.jump_threshold = 10      # N단계 이상 급상승
+        self.consecutive_count = 0    # N회 연속 상승 (0: 사용안함)
         self.interval = 30            # 감지 간격(초)
 
     def load_parameters(self):
@@ -38,6 +42,7 @@ class RankingBetEngine:
         self.enabled = get_setting('rank_scout_enabled', False)
         self.new_entry_threshold = int(get_setting('rank_scout_new_threshold', 10))
         self.jump_threshold = int(get_setting('rank_scout_jump_threshold', 10))
+        self.consecutive_count = int(get_setting('rank_scout_consecutive_count', 0))
         self.interval = int(get_setting('rank_scout_interval', 60))
         self.qry_tp = str(get_setting('rank_scout_qry_tp', '1'))
 
@@ -59,6 +64,7 @@ class RankingBetEngine:
                         self.enabled = target.get('rank_scout_enabled', self.enabled)
                         self.new_entry_threshold = int(target.get('rank_scout_new_threshold', self.new_entry_threshold))
                         self.jump_threshold = int(target.get('rank_scout_jump_threshold', self.jump_threshold))
+                        self.consecutive_count = int(target.get('rank_scout_consecutive_count', self.consecutive_count))
                         self.interval = int(target.get('rank_scout_interval', self.interval))
                         self.qry_tp = str(target.get('rank_scout_qry_tp', self.qry_tp))
                         # print(f"✅ [Ranking Scout] 프로필({profile_idx}) 설정 로드 완료")
@@ -67,7 +73,7 @@ class RankingBetEngine:
 
         if self.interval <= 0: self.interval = 60
         if self.is_running:
-            print(f"🔄 [Ranking Scout] 설정 실시간 반영 완료 (진입:{self.new_entry_threshold}위, 급등:{self.jump_threshold}단계, 간격:{self.interval}초)")
+            print(f"🔄 [Ranking Scout] 설정 실시간 반영 완료 (진입:{self.new_entry_threshold}위, 급등:{self.jump_threshold}단계, 연속:{self.consecutive_count}회, 간격:{self.interval}초)")
 
     def reload_parameters(self):
         """외부에서 설정 변경 시 호출하여 실시간 반영"""
@@ -148,13 +154,53 @@ class RankingBetEngine:
                                     print(f"✨ [Ranking Scout] 신규 진입(N) 포착! {name}({code}) {rank}위 등장!")
                                     self.execute_bet(code, name, f"NewEntry({rank}위)", tag='RANK_SCOUT')
                         
-                        # 2. 순위 급상승 감지 (이전 순위 대비 설정된 단계 이상 상승)
-                        elif code in self.previous_ranking:
-                            prev_rank = self.previous_ranking[code]
-                            jump = prev_rank - rank
-                            if jump >= self.jump_threshold:
-                                print(f"🚀 [Ranking Scout] 순위 급상승 포착! {name}({code}) {prev_rank}위 -> {rank}위 ({jump}단계 점프!)")
-                                self.execute_bet(code, name, f"RankJump({jump}↑)", tag='RANK_SCOUT')
+                        # 2. 순위 급상승 감지 (이전 순위 대비 설정된 단계 혹은 API 피드 기준 급상승)
+                        jump = 0
+                        is_from_cache = False
+                        
+                        if code in self.previous_ranking:
+                            jump = self.previous_ranking[code] - rank
+                            is_from_cache = True
+                        else:
+                            # [v5.2.3] 사각지대 제거: 내 기억(캐시)에 없더라도 API가 준 상승폭(rank_gap)을 신뢰함
+                            # 단, 상승 신호(1)일 때만 적용하며 설정된 타겟 순위(N위 내)일 때만 발동
+                            if rank_st == '1' and rank <= self.new_entry_threshold:
+                                jump = rank_gap
+                        
+                        if jump >= self.jump_threshold:
+                            jump_msg = f"{jump}단계 점프!" if is_from_cache else f"API 피드 기준 {jump}단계 급상승!"
+                            print(f"🚀 [Ranking Scout] 순위 급상승 포착! {name}({code}) {jump_msg} (현재 {rank}위)")
+                            self.execute_bet(code, name, f"RankJump({jump}↑)", tag='RANK_SCOUT')
+
+                        # 3. [신규 v5.2.0] 연속 상승 감지 (자기 요청 반영 ❤️)
+                        if self.consecutive_count > 0:
+                            if code not in self.rank_history:
+                                self.rank_history[code] = []
+                            
+                            # 현재 순위 추가 (최대 N+1개까지만 유지)
+                            self.rank_history[code].append(rank)
+                            if len(self.rank_history[code]) > self.consecutive_count + 1:
+                                self.rank_history[code].pop(0)
+                            
+                            # 연속 상승 여부 판단 (데이터가 충분할 때)
+                            history = self.rank_history[code]
+                            if len(history) >= self.consecutive_count + 1:
+                                is_consecutive_inc = True
+                                for i in range(len(history) - 1):
+                                    if history[i+1] >= history[i]: # 숫자가 작아지지 않으면(상승이 아니면) 실격
+                                        is_consecutive_inc = False
+                                        break
+                                
+                                if is_consecutive_inc:
+                                    inc_str = " -> ".join(map(str, history))
+                                    print(f"📈 [Ranking Scout] 연속 상승 포착! {name}({code}) [{inc_str}] ({self.consecutive_count}회 연속!)")
+                                    self.execute_bet(code, name, f"RankConsec({self.consecutive_count}↑)", tag='RANK_SCOUT')
+                                    # 매수 후에는 이력을 비워 중복 매수 방지 (bet_history가 이미 막아주지만 이중 안전장치)
+                                    self.rank_history[code] = [rank] 
+                        
+                        else:
+                            # 연속 상승 비활성화 시 이력 초기화
+                            if code in self.rank_history: del self.rank_history[code]
                     
                     # 현재 랭킹을 이전 데이터로 저장
                     self.previous_ranking = new_ranking_map
@@ -239,7 +285,7 @@ class RankingBetEngine:
         self.tasks = valid_tasks
 
         if not self.tasks:
-            msg = f"🔎 [Ranking Scout Engine] 가동 시작 (진입:{self.new_entry_threshold}위, 급등:{self.jump_threshold}단계, 간격:{self.interval}초)"
+            msg = f"🔎 [Ranking Scout Engine] 가동 시작 (진입:{self.new_entry_threshold}위, 급등:{self.jump_threshold}단계, 연속:{self.consecutive_count}회, 간격:{self.interval}초)"
             print(msg)
             self.tasks.append(asyncio.create_task(self.monitoring_routine()))
         else:
@@ -255,4 +301,5 @@ class RankingBetEngine:
         
         self.bet_history.clear()
         self.previous_ranking.clear()
+        self.rank_history.clear() # [v5.2.0]
         print("⏹ [Ranking Scout Engine] 정지됨.")

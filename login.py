@@ -76,6 +76,23 @@ def fn_au10001(force=False):
 			print(f"❌ [login] 네트워크 오류: {e}")
 			return None
 
+# [v5.1.18] 안전한 숫자 변환 유틸리티 (NoneType 방어용)
+def safe_float(val, default=0.0):
+	try:
+		if val is None or str(val).strip() == '' or str(val).lower() == 'none':
+			return default
+		return float(val)
+	except (ValueError, TypeError):
+		return default
+
+def safe_int(val, default=0):
+	try:
+		if val is None or str(val).strip() == '' or str(val).lower() == 'none':
+			return default
+		return int(float(val))
+	except (ValueError, TypeError):
+		return default
+
 # 실행 구간
 if __name__ == '__main__':
 	token = fn_au10001()

@@ -1,5 +1,11 @@
 # morning_bet_engine.py
-# 자기야! 시초가의 폭발적인 에너지를 다채롭게 컨트롤할 수 있는 '라이브 하트' 엔진이야! 🚀🌅
+# Kipo_Stock_Now Morning Bet Engine (V5.1.31)
+# -------------------------------------------------------------
+# - 2026-04-13: [V5.1.31] 매도 반응 속도 최적화 패치 (Throttling 1s -> 0.5s)
+# - 2026-04-13: [V5.1.30] 아침 정밀 타격 데이터 교정 및 UI 가속화 패치
+#   1. [Fix] KIS API 가격부호 필드(843, 907) 매핑 오류 수정 (4.5M% 방지)
+#   2. [Standard] MorningBet(X) 태그 표준화 (매도 엔진 연동 무결성)
+#   3. [UI] 수익률 None% 표시 오류 방어 로직 연계
 # [v1.2.0] 전면 진단 로그 패치 - 원인 추적용 상세 로그 심기 완료
 
 import asyncio
@@ -7,11 +13,13 @@ from get_setting import get_setting
 from market_hour import MarketHour
 import time
 from datetime import datetime
+from login import safe_float, safe_int
 
-# ─── 상세로그 출력 헬퍼 (DEBUG_HTML_LOG 접두사 → 상세 로그창으로 라우팅) ─────────────
+# [v5.1.10] DEBUG_HTML_LOG 접두사 포함 → GUI 상세 로그창으로 직접 라우팅
 def _dlog(msg):
     """상세 로그창(Detailed Log)으로 진단 메시지를 전송"""
-    print(f"[Morning-DIAG] {msg}")
+    # DEBUG_HTML_LOG: 접두사로 출력하면 GUI StreamRedirector가 상세 로그창으로 라우팅함
+    print(f"DEBUG_HTML_LOG: <font color='#aaaaaa'>[Morning-DIAG] {msg}</font>")
 
 class MorningBetEngine:
     def __init__(self, api_core, news_sniper):
@@ -83,16 +91,18 @@ class MorningBetEngine:
             self.stop()
 
     def is_within_time_limit(self):
-        """현재 시간이 설정된 morning_time_limit(예: 09:10) 이내인지 확인"""
+        """현재 시간이 설정된 morning_time_limit(예: 09:10 또는 12:00) 이내인지 확인"""
         now = datetime.now()
+        cur_min = now.hour * 60 + now.minute
+        start_min = 8 * 60 + 50 # 08:50 (장전 스캔 시작 대지)
+        
         try:
             limit_h, limit_m = map(int, self.morning_time_limit.split(':'))
-            if (now.hour == 8 and now.minute >= 50) or (now.hour == 9 and now.minute <= limit_m):
-                return True
+            end_min = limit_h * 60 + limit_m
         except:
-            if now.hour == 9 and now.minute <= 10:
-                return True
-        return False
+            end_min = 9 * 60 + 10 # 기본값 09:10
+            
+        return start_min <= cur_min <= end_min
 
     async def strategy_a_routine(self):
         """[A전략] 예상 체결량 상위 스캔 및 9시 정각 선점"""
@@ -102,7 +112,9 @@ class MorningBetEngine:
         from login import fn_au10001 as get_token
         
         scanned_today = False
+        synced_last_min = False # [V5.1.29]
         bet_fired = False
+        readiness_reported = False # [V5.1.32]
         
         while self.is_running:
             try:
@@ -112,8 +124,36 @@ class MorningBetEngine:
                     
                 now = datetime.now()
                 
-                # 1. 08:58:00 ~ 08:59:55 사이에 스캔 수행
-                if now.hour == 8 and 58 <= now.minute <= 59 and not scanned_today:
+                # 0. [V5.1.29] 08:59:50 최종 정밀 동기화 및 재스캔 (타격 10초 전)
+                if now.hour == 8 and now.minute == 59 and now.second == 50 and not synced_last_min:
+                    _dlog("⚡ <b style='color:#f1c40f;'>[Morning-Precision]</b> 08:59:50 최종 정밀 동기화 가동!")
+                    
+                    # A. 실시간 거래대금 랭킹 캐시 강제 갱신
+                    if hasattr(self.api, 'rt_search'):
+                        _dlog("[A전략] 거래대금 랭킹 캐시 동기화 요청 중...")
+                        await self.api.rt_search.sync_ranking_cache()
+                    
+                    # B. 최종 예상체결 데이터 재스캔 (최신 갭 데이터 확보)
+                    def _fetch_final_scan():
+                        token = get_token()
+                        return get_morning_scan_data(token=token)
+                    
+                    self.candidate_stocks = await asyncio.to_thread(_fetch_final_scan)
+                    if self.candidate_stocks:
+                        _dlog(f"[A전략] 최종 재스캔 완료: {len(self.candidate_stocks)}종목 확보")
+                    
+                    synced_last_min = True
+
+                # 0-1. [V5.1.32] 08:50:00 출격 준비 완료 리포트 (Pre-flight Check)
+                if now.hour == 8 and now.minute == 50 and now.second <= 5 and not readiness_reported:
+                    _dlog("🚀 <b style='color:#00e5ff;'>[Morning-Readiness]</b> 시초가 엔진 출격 준비 완료!")
+                    q_mode = get_setting('global_strategy_mode', 'qty')
+                    q_val = get_setting('qty_val' if q_mode == 'qty' else 'amt_val', '1')
+                    _dlog(f"📋 <b style='color:#aaaaaa;'>설정 요약:</b> GAP {self.gap_min}~{self.gap_max}% | 매수기준: {q_mode}({q_val}) | 최대 {self.max_morning_stocks}종목")
+                    readiness_reported = True
+
+                # 1. [v5.1.10] 스캔 타임슬롯 확장: 08:55 ~ 08:59 사이에 스캔 수행
+                if now.hour == 8 and 55 <= now.minute <= 58 and not scanned_today:
                     print("🔍 [A전략] 장전 상위 종목 스캔 중...")
                     _dlog(f"[A전략] 스캔 시작 (현재시각: {now.strftime('%H:%M:%S')})")
                     
@@ -130,32 +170,55 @@ class MorningBetEngine:
                         scanned_today = True
                         print(f"✅ [A전략] 후보 {len(self.candidate_stocks)}종목 포착 완료!")
                         
+                        # [V5.1.27] 장전 정밀 진단 요약 정보 출력
+                        _dlog(f"🌅 <b style='color:#f1c40f;'>[장전 정밀 진단]</b> {now.strftime('%Y-%m-%d')} 매매 준비 완료!")
+                        can_names = [s.get('name', s.get('code')) for s in self.candidate_stocks[:5]]
+                        _dlog(f"📋 <b style='color:#00e5ff;'>감시 대상(Top5):</b> {', '.join(can_names)} 등 총 {len(self.candidate_stocks)}종목")
+                        
                         # [진단] 후보 종목 전체 목록과 갭 수치 출력
                         _dlog(f"[A전략] ▼ 전체 후보 종목 목록 (GAP 필터: {self.gap_min}%~{self.gap_max}%)")
                         gap_pass = []
-                        for s in self.candidate_stocks[:20]: # 최대 20개까지만 표시
+                        for s in self.candidate_stocks[:30]: # 최대 30개까지 확장 표시
                             code = s.get('code', '')
                             name = s.get('name', '')
                             rt = s.get('expect_rt', 0)
+                            # [V5.1.17] 로데이터 샘플링 (사용자 요청 'Raw Data')
+                            raw_sample = f" [Raw: {str(s)[:60]}...]" if rt > 0 else ""
                             passed = "✅통과" if self.gap_min <= rt <= self.gap_max else f"❌필터({rt:.1f}%)"
-                            _dlog(f"  └ {name}({code}) 예상등락={rt:.1f}% → {passed}")
+                            _dlog(f"  └ {name}({code}) 예상등락={rt:.1f}% → {passed}{raw_sample}")
                             if self.gap_min <= rt <= self.gap_max:
                                 gap_pass.append(s)
                         _dlog(f"[A전략] GAP 필터 통과 종목: {len(gap_pass)}개")
+
                         
-                        # [신규 v1.1.7] 후보 종목 실시간 감시(REG) 등록 요청
+                        # [신규 v5.1.10] 후보 종목 rt_search 등록 후 등록 성공 여부 확인
                         if hasattr(self.api, 'rt_search'):
                             _dlog("[A전략] rt_search 감지 → 실시간 감시 등록 요청")
                             codes = [s['code'] for s in self.candidate_stocks]
-                            asyncio.create_task(self.api.rt_search.add_realtime_codes(codes))
+                            task = asyncio.create_task(self.api.rt_search.add_realtime_codes(codes))
+                            # 등록 완료 후 확인 로그 (v5.1.10 신규)
+                            async def _log_reg_result(t, code_list):
+                                try:
+                                    await t
+                                    _dlog(f"<font color='#00e5ff'>[A전략] ✅ 실시간 등록 요청 완료: {len(code_list)}종목 ({', '.join(code_list[:5])}...)</font>")
+                                except Exception as re:
+                                    _dlog(f"❌ [A전략] 실시간 등록 실패: {re}")
+                            asyncio.create_task(_log_reg_result(task, codes))
                         else:
                             _dlog("⚠️ [A전략] self.api에 rt_search 속성이 없음! 실시간 등록 불가!")
                     else:
-                        _dlog("⚠️ [A전략] 스캔 결과 0건 - API 응답이 비어있음! (네트워크 또는 API 파라미터 문제)")
-                        await asyncio.sleep(4)
+                        # [V5.1.17] 스캔 결과 0건 시 API 원시 응답 로깅 (Raw Data)
+                        from stock_info import get_morning_scan_data_raw
+                        _dlog("⚠️ [A전략] 스캔 결과 0건 - API 응답이 비어있음! 재시도 중...")
+                        try:
+                            token = get_token()
+                            raw_res = get_morning_scan_data_raw(token=token)
+                            _dlog(f"🔍 [A-Raw] API 원문 샘플: {str(raw_res)[:200]}...")
+                        except: pass
+                        await asyncio.sleep(2) # 재시도 주기 단축 (4s -> 2s)
                 
-                # 2. 09:00:00 정각에 후보 종목들 시장가 타격
-                if now.hour == 9 and now.minute == 0 and now.second <= 5 and not bet_fired:
+                # 2. 09:00:00 정각에 후보 종목들 시장가 타격 (30초 윈도우로 확대 [V5.1.32])
+                if now.hour == 9 and now.minute == 0 and now.second <= 30 and not bet_fired:
                     _dlog(f"[A전략] ⏰ 09:00 타격 트리거! 후보={len(self.candidate_stocks)}종목 / bet_history={len(self.bet_history)}건 / max={self.max_morning_stocks}")
                     
                     if not self.candidate_stocks:
@@ -172,23 +235,24 @@ class MorningBetEngine:
                         
                         if self.gap_min <= expect_rt <= self.gap_max:
                             if len(self.bet_history) >= self.max_morning_stocks:
-                                _dlog(f"⚠️ [A전략] 최대 매수 종목 수 도달({self.max_morning_stocks}개) - {name} 스킵")
+                                _dlog(f"⚠️ [A-Reason] 최대 매수 종목 수 도달({self.max_morning_stocks}개) - {name} 차단")
                                 break
                             if code in self.bet_history:
-                                _dlog(f"  └ {name}({code}) 이미 매수 이력 있음 - 스킵")
+                                _dlog(f"⚠️ [A-Reason] {name}({code}) 이미 매수 이력 있음 - 차단")
                                 continue
-                            _dlog(f"  └ {name}({code}) 타격! (예상등락={expect_rt:.1f}%)")
-                            self.execute_bet(code, "A_Scan", tag='MORNING_A')
+                            _dlog(f"🚀 [A-Strike] {name}({code}) 타격! (예상등락={expect_rt:.1f}%)")
+                            # [V5.1.30] chk_n_sell 인식을 위해 전용 이름표(MorningBet)로 매수
+                            self.execute_bet(code, "A_Scan", tag=f"MorningBet(A)")
                             fired_count += 1
                         else:
-                            _dlog(f"  └ {name}({code}) GAP 조건 미달 ({expect_rt:.1f}%, 기준: {self.gap_min}~{self.gap_max}%) - 스킵")
+                            _dlog(f"❌ [A-Reason] {name}({code}) GAP 범위 밖 ({expect_rt:.1f}%, 기준:{self.gap_min}~{self.gap_max}%) - 차단")
                             
                     _dlog(f"[A전략] 타격 완료: 총 {fired_count}개 주문 발송")
                     bet_fired = True
                 
-                # 09:00:05 초과 시 bet_fired 미발동 방지
-                if now.hour == 9 and now.minute == 0 and now.second > 5 and not bet_fired:
-                    _dlog(f"⚠️ [A전략] 09:00:05 타임슬롯 놓침! (second={now.second})")
+                # 09:00:30 초과 시 bet_fired 미발동 방지 [V5.1.32]
+                if now.hour == 9 and now.minute == 0 and now.second > 30 and not bet_fired:
+                    _dlog(f"⚠️ [A전략] 09:00:30 타임슬롯 놓침! (second={now.second})")  
                     bet_fired = True
                 
                 # 매일 리셋
@@ -196,6 +260,7 @@ class MorningBetEngine:
                     if scanned_today or bet_fired:
                         _dlog(f"[A전략] 09:10 이후 → 일일 리셋 (오늘 매수이력: {len(self.bet_history)}건)")
                     scanned_today = False
+                    synced_last_min = False
                     bet_fired = False
                     self.candidate_stocks = []
                     
@@ -217,7 +282,7 @@ class MorningBetEngine:
                     await asyncio.sleep(1); continue
                     
                 now = datetime.now()
-                if now.hour == 9 and now.minute < 30:
+                if self.is_within_time_limit():
                     
                     # [진단] 30초마다 B전략 감시 현황 상세 로그
                     if time.time() - _last_log_time > 30:
@@ -241,17 +306,29 @@ class MorningBetEngine:
                         
                         price = data.get('price', 0)
                         oprc = data.get('open', 0)
+                        s_name = data.get('name', code)
                         
                         if oprc > 0 and price > 0:
+                            # [V5.1.11] 개별 종목 정밀 추적 로그 (5초 간격)
+                            s_data = self.stocks_data.setdefault(code, {})
+                            last_log = s_data.get('last_b_log', 0)
+                            if time.time() - last_log > 5:
+                                rate = (price/oprc - 1)*100
+                                if not s_data.get('dipped'):
+                                    _dlog(f"[B-Trace] {s_name}: 현재 {rate:+.2f}% (눌림목 기준:-0.5%) - 대기 중")
+                                else:
+                                    _dlog(f"[B-Trace] {s_name}: 현재 {rate:+.2f}% (재돌파 기준:+0.3%) - 추적 중")
+                                s_data['last_b_log'] = time.time()
+
                             if price <= oprc * 0.995:
-                                if not self.stocks_data.get(code, {}).get('dipped'):
-                                    _dlog(f"[B전략] {code} 눌림 감지! price={price:,} / open={oprc:,} ({(price/oprc-1)*100:.2f}%)")
-                                    print(f"🎯 [B전략-눌림감지] {code} 눌림 확인 (-0.5% 하회)")
-                                self.stocks_data.setdefault(code, {})['dipped'] = True
+                                if not s_data.get('dipped'):
+                                    _dlog(f"<font color='#f1c40f'><b>[B-Step1] {s_name} 눌림 확인! (-0.5% 돌파)</b></font>")
+                                    print(f"🎯 [B전략-눌림] {s_name} 재돌파 감시 모드 진입")
+                                s_data['dipped'] = True
                             
-                            if self.stocks_data.get(code, {}).get('dipped') and price >= oprc * 1.003:
-                                _dlog(f"[B전략] {code} 재돌파 확인! price={price:,} / open={oprc:,} → 타격!")
-                                self.execute_bet(code, "B_OpenReBreak", tag='MORNING_B')
+                            if s_data.get('dipped') and price >= oprc * 1.003:
+                                _dlog(f"<font color='#00e5ff'><b>[B-Step2] {s_name} 시가 재돌파 타격! (Price:{price:,})</b></font>")
+                                self.execute_bet(code, "B_OpenReBreak", tag=f"MorningBet(B)")
                                 processed_b.add(code)
                 
                 if now.hour == 9 and now.minute >= 30:
@@ -282,7 +359,7 @@ class MorningBetEngine:
                          price = data.get('price', 0)
                          minute_highs[code] = max(minute_highs.get(code, 0), price)
                          
-                elif now.hour == 9 and 1 <= now.minute < 30:
+                elif self.is_within_time_limit():
                     
                     # [진단] 30초마다 C전략 감시 현황 상세 로그
                     if time.time() - _last_log_time > 30:
@@ -304,10 +381,21 @@ class MorningBetEngine:
                         if code in self.bet_history or code in processed_c: continue
                         target_high = minute_highs.get(code, 0)
                         price = data.get('price', 0)
-                        if target_high > 0 and price >= target_high * 1.003:
-                            _dlog(f"[C전략] {code} 1분봉 고가 돌파! price={price:,} / 1분고가={target_high:,} → 타격!")
-                            self.execute_bet(code, "C_1MinHigh", tag='MORNING_C')
-                            processed_c.add(code)
+                        s_name = data.get('name', code)
+                        
+                        if target_high > 0:
+                            # [V5.1.11] 정밀 추적 로그
+                            s_data = self.stocks_data.setdefault(code, {})
+                            last_log = s_data.get('last_c_log', 0)
+                            if time.time() - last_log > 5:
+                                reach = (price / (target_high * 1.003)) * 100
+                                _dlog(f"[C-Trace] {s_name}: 현재가 {price:,} / 1분고가 {target_high:,} (도달률:{reach:.1f}%)")
+                                s_data['last_c_log'] = time.time()
+
+                            if price >= target_high * 1.003:
+                                _dlog(f"<font color='#00e5ff'><b>[C-Strike] {s_name} 1분봉 고가 돌파 타격! (Price:{price:,})</b></font>")
+                                self.execute_bet(code, "C_1MinHigh", tag=f"MorningBet(C)")
+                                processed_c.add(code)
                 
                 if now.hour == 9 and now.minute >= 30:
                     if processed_c: _dlog(f"[C전략] 09:30 리셋 (처리={len(processed_c)}건)")
@@ -329,24 +417,27 @@ class MorningBetEngine:
                     await asyncio.sleep(1); continue
                     
                 now = datetime.now()
-                if now.hour == 9 and now.minute < 10:
+                if self.is_within_time_limit():
                     for code, data in list(self.last_rt_data.items()):
                         if code in self.bet_history or code in processed_d: continue
                         
                         vol_rate = data.get('vol_rate', 0)
+                        s_name = data.get('name', code)
+                        
                         if vol_rate >= 1.5:
-                            s_name = data.get('name', code)
-                            _dlog(f"[D전략] {s_name}({code}) 거래량 폭증! {vol_rate:.1f}배 → 타격!")
+                            _dlog(f"<font color='#ff6b6b'><b>[D-Strike] {s_name} 거래량 폭증! ({vol_rate:.2f}배) → 타격!</b></font>")
                             print(f"🔥 [D전략-타격] {s_name}({code}) 거래량 1.5배 폭증! 타격 개시")
-                            self.execute_bet(code, "D_VolSurge", tag='MORNING_D')
+                            self.execute_bet(code, "D_VolSurge", tag=f"MorningBet(D)")
                             processed_d.add(code)
-                        elif vol_rate >= 1.1:
-                            s_name = data.get('name', code)
-                            if code not in getattr(self, '_logged_vol', set()):
-                                _dlog(f"[D전략] {s_name}({code}) 수급 유입 관찰중 ({vol_rate:.1f}배)")
-                                print(f"🔍 [D전략-관찰] {s_name}({code}) 수급 유입 중.. (Rate: {vol_rate:.1f}배 / 목표: 1.5배)")
-                                if not hasattr(self, '_logged_vol'): self._logged_vol = set()
-                                self._logged_vol.add(code)
+                        elif vol_rate >= 0.8:
+                            # [V5.1.11] 수급 유입 실시간 추적
+                            s_data = self.stocks_data.setdefault(code, {})
+                            last_log = s_data.get('last_d_log', 0)
+                            if time.time() - last_log > 10: # D전략은 10초 간격
+                                _dlog(f"[D-Trace] {s_name}: 거래량 비율 {vol_rate:.2f}배 (목표:1.5배) - 수집 중")
+                                s_data['last_d_log'] = time.time()
+                                if vol_rate >= 1.1:
+                                    print(f"🔍 [D전략-관찰] {s_name} 수급 유입 중.. ({vol_rate:.2f}배)")
                 
                 if now.hour == 9 and now.minute >= 10: processed_d.clear()
                 
@@ -360,7 +451,19 @@ class MorningBetEngine:
         while self.is_running:
             try:
                 now = datetime.now()
-                if 8 <= now.hour <= 9:
+                is_premarket = (7 <= now.hour < 9)
+                is_market    = (now.hour == 9 and now.minute < 30)
+
+                # [v5.1.10] 장전 하트비트: 07:00~08:59 매 1분 엄닸가 살아있는지 확인
+                if is_premarket:
+                    _dlog(
+                        f"<font color='#00e5ff'><b>[HB] ♥ 엔진 대기 중 (시간: {now.strftime('%H:%M:%S')}) | "
+                        f"후보종목={len(self.candidate_stocks)}개 | 매수이력={len(self.bet_history)}건</b></font>"
+                    )
+                    await asyncio.sleep(60)  # 장전에는 1분 하트비트
+                    continue
+
+                if is_market:
                     _dlog(f"[RT-Monitor] 실시간 데이터 수신 현황: "
                           f"last_rt_data={len(self.last_rt_data)}종목 / "
                           f"총수신={self._rt_recv_count}회 / "
@@ -386,42 +489,88 @@ class MorningBetEngine:
         try:
             # [Fix] 종목코드 추출 로직 보강 (9001 필드 및 다양한 키 대응)
             jmcode = data.get('stk_cd') or data.get('code') or str(data.get('9001', '')).replace('A', '')
-            if not jmcode or len(jmcode) < 6:
+            if not jmcode or len(str(jmcode).strip()) < 6:
+                if self._rt_recv_count < 10:
+                    _dlog(f"[RT 코드추출실패] 키목록: {list(data.keys())[:10]} | stk_cd={data.get('stk_cd')}, code={data.get('code')}, 9001={data.get('9001')}")
                 return
+            jmcode = str(jmcode).strip()
             
-            # 현재가(10), 시가(13) 추출 (Kiwom 규격 및 다양한 필드 대응)
-            curr_p = data.get('10') or data.get('now_prc') or data.get('clpr') or data.get('price', 0)
-            open_p = data.get('13') or data.get('oprc') or data.get('stck_oprc') or data.get('open', 0)
+            # 현재가(10), 시가(13) 추출 (Kiwom, KIS 실시간검색 등 다양한 필드 대응)
+            # [V5.1.30] KIS 실시간검색 전용 필드 매핑 정규화 (부호 필드 843, 907 제거하여 4.5M% 튐 현상 원천 차단)
+            curr_p = data.get('10') or data.get('20') or data.get('now_prc') or data.get('clpr') or data.get('cur_prc') or data.get('price')
+            open_p = data.get('13') or data.get('oprc') or data.get('stck_oprc') or data.get('base_pric') or data.get('open')
             
-            if curr_p: curr_p = abs(int(float(curr_p)))
-            if open_p: open_p = abs(int(float(open_p)))
+            curr_p = safe_int(curr_p)
+            open_p = safe_int(open_p)
             
+            # [V5.1.21] 매핑 결과 상세 진단 (최초 20회는 매핑 성공 여부 로깅)
+            if self._rt_recv_count < 20 and (curr_p or open_p):
+                used_keys = [k for k in ['10','20','843','13','907'] if data.get(k)]
+                _dlog(f"[RT-Map] 매핑 시도 ({jmcode}): curr={curr_p}, open={open_p} | Raw Keys={used_keys}")
+
+            # [V5.1.18] 파싱 후에도 0인 경우 원본 데이터 기록 (추적용)
+            if (not curr_p or not open_p) and self._rt_recv_count % 10 == 0:
+                 _dlog(f"⚠️ [RT-Zero] 가격 누락 감지 ({jmcode}): curr={curr_p}, open={open_p} | Raw Keys: {list(data.keys())[:10]}")
+
+            # [V5.1.12 / 5.1.21 패치] 누락된 데이터는 이전 데이터로 보존 (패킷 간헐성 대응)
+            # [V5.1.21] 새로 들어온 데이터가 0일 때만 캐시를 활용하고, 캐시에 유효 데이터가 있으면 0으로 덮어쓰지 않음
+            if jmcode in self.last_rt_data:
+                cached = self.last_rt_data[jmcode]
+                if not curr_p: curr_p = cached.get('price', 0)
+                if not open_p: open_p = cached.get('open', 0)
+            
+            # [V5.1.21/V5.1.26] 시가가 0이거나 비정상적으로 낮은 경우(예: 2원) 후보 데이터에서 복구
+            if not open_p or (open_p < 50 and curr_p > 1000):
+                for s in self.candidate_stocks:
+                    if s.get('code') == jmcode:
+                        open_p = safe_int(s.get('open') or s.get('expect_prc'))
+                        if open_p: _dlog(f"[RT-Recovery] {jmcode} 시가 누락 → 후보 데이터에서 복구 ({open_p:,})")
+                        break
+
             # [BUG FIX v1.2.0] v_rate 미정의 버그 수정 - 거래량 비율 올바르게 추출
-            raw_vol = data.get('15') or data.get('vol') or data.get('volume', 0)  # 현재 거래량
-            raw_yvol = data.get('16') or data.get('yvol') or data.get('prev_volume', 0)  # 전일 거래량
+            # [V5.1.21] 거래량 필드(841) 추가 대응
+            raw_vol = data.get('15') or data.get('841') or data.get('vol') or data.get('trde_qty') or data.get('volume')  # 현재 거래량
+            raw_yvol = data.get('16') or data.get('yvol') or data.get('prev_volume')  # 전일 거래량
             try:
-                v_now = abs(int(float(raw_vol))) if raw_vol else 0
-                v_prev = abs(int(float(raw_yvol))) if raw_yvol else 0
+                v_now = safe_int(raw_vol)
+                v_prev = safe_int(raw_yvol)
                 v_rate = (v_now / v_prev) if v_prev > 0 else 1.0
             except:
                 v_rate = 1.0
             
+            s_name = data.get('302') or data.get('name')
+            if not s_name:
+                if jmcode in self.last_rt_data:
+                    s_name = self.last_rt_data[jmcode].get('name')
+                
+                if not s_name:
+                    # [V5.1.26] 실시간 데이터에 명칭 없을 시 후보 리스트에서 수혈
+                    for s in self.candidate_stocks:
+                        if s.get('code') == jmcode:
+                            s_name = s.get('name')
+                            if s_name: _dlog(f"[RT-Recovery] {jmcode} 종목명 누락 → 후보 데이터에서 복구 ({s_name})")
+                            break
+            if not s_name: s_name = "알수없음"
+            
             norm_data = {
                 'code': jmcode,
-                'name': data.get('302', data.get('name', '알수없음')),
-                'price': abs(int(float(curr_p))) if curr_p else 0,
-                'open': abs(int(float(open_p))) if open_p else 0,
+                'name': s_name or '알수없음',
+                'price': curr_p,
+                'open': open_p,
                 'vol_rate': v_rate
             }
             self.last_rt_data[jmcode] = norm_data
             self._rt_recv_count += 1
             
-            # [진단] 처음 데이터가 수신되면 로그에 알림
+            # [v5.1.10] 후보 종목 여부 확인 (A전략 스캔 리스트 대조)
+            is_candidate = jmcode in {s.get('code','') for s in self.candidate_stocks}
+            
+            # [진단] 첫 데이터 수신 알림 / 후보 종목은 항상 로그
             if self._rt_recv_count == 1:
-                _dlog(f"🎉 [RT] 첫 실시간 데이터 수신 성공! 종목={jmcode}, 데이터키목록={list(data.keys())[:10]}")
-            elif self._rt_recv_count <= 5:
-                _dlog(f"[RT] #{self._rt_recv_count} 수신: {jmcode} price={norm_data['price']:,} open={norm_data['open']:,} vol_rate={v_rate:.2f} (키 샘플: {list(data.keys())[:8]})")
-                
+                _dlog(f"[RT] 첫 실시간 데이터 수신! 종목={jmcode}, 키목록={list(data.keys())[:10]}")
+            elif self._rt_recv_count <= 5 or is_candidate:
+                cmark = "[후보]" if is_candidate else ""
+                _dlog(f"[RT] #{self._rt_recv_count} 수신{cmark}: {jmcode} price={norm_data['price']:,} open={norm_data['open']:,} vol_rate={v_rate:.2f}")
         except Exception as e:
             # 최초 5회는 에러도 보여줌 (조용히 묻지 않음)
             if self._rt_recv_count < 5:
@@ -449,9 +598,8 @@ class MorningBetEngine:
             if not in_limit: 
                 _dlog(f"⚠️ [execute_bet] A전략 시간 초과로 차단!")
                 return
-        else:
-            if now.hour != 9 or now.minute >= 30:
-                _dlog(f"⚠️ [execute_bet] B/C/D전략 시간 범위 밖: {now.strftime('%H:%M:%S')}")
+            if not self.is_within_time_limit():
+                _dlog(f"⚠️ [execute_bet] B/C/D전략 시간 범위 밖: {now.strftime('%H:%M:%S')} (제한:{self.morning_time_limit})")
                 return
         
         if len(self.bet_history) >= self.max_morning_stocks:
@@ -460,6 +608,20 @@ class MorningBetEngine:
         if jmcode in self.bet_history:
             _dlog(f"⚠️ [execute_bet] {jmcode} 이미 매수 이력 있음 - 중복 차단!")
             return
+
+        # [V5.1.17] 거래대금 순위 필터링 및 구체적 사유 로깅 (사용자 요청)
+        try:
+            from check_n_buy import TOP_VOLUME_RANK_CACHE, get_stock_name_safe
+            rank_limit_enabled = get_setting('morning_bet_rank_filter_enabled', True)
+            if rank_limit_enabled and TOP_VOLUME_RANK_CACHE:
+                if jmcode not in TOP_VOLUME_RANK_CACHE:
+                    _dlog(f"❌ <b style='color:#ff6b6b;'>[A-Reason]</b> {jmcode} 거래대금 순위 밖 필터링 (현재 순위 데이터 {len(TOP_VOLUME_RANK_CACHE)}개 내 없음)")
+                    return
+                else:
+                    rank_idx = TOP_VOLUME_RANK_CACHE.index(jmcode) + 1
+                    _dlog(f"✅ [A-Rank] {jmcode} 거래대금 순위 확인: {rank_idx}위 (통과)")
+        except Exception as re:
+            _dlog(f"⚠️ [execute_bet] 순위 체크 예외: {re}")
             
         from check_n_buy import get_stock_name_safe, add_buy
         from login import fn_au10001 as get_token
@@ -467,12 +629,17 @@ class MorningBetEngine:
         token = get_token()
         name = get_stock_name_safe(jmcode, token)
         
-        print(f"🔥 <font color='#ff6b6b'><b>[Morning Bet 발동]</b> {name}({jmcode}) - [{strategy_name}] 1주 매수!</font>")
-        _dlog(f"✅ [execute_bet] {name}({jmcode}) 매수 주문 발송 시작!")
+        print(f"🔥 <font color='#ff6b6b'><b>[Morning Bet 발동]</b> {name}({jmcode}) - [{strategy_name}] 매수 시도!</font>")
+        _dlog(f"✅ [execute_bet] {name}({jmcode}) 매수 주문 프로세스 시작 (전략:{strategy_name})")
+        
+        # [V5.1.32] 하드코딩된 1주 제거 -> 사용자 설정 연동 (chk_n_buy 방식 계승)
+        q_mode = get_setting('global_strategy_mode', 'qty')
+        q_val = get_setting('qty_val' if q_mode == 'qty' else ('amt_val' if q_mode == 'amount' else 'pct_val'), '1')
+        
         self.bet_history.add(jmcode)
         
-        result = add_buy(jmcode, token=token, seq_name=f'MorningBet({strategy_name})', qty=1, source=tag, price_type='market')
-        _dlog(f"[execute_bet] add_buy 결과: {result}")
+        result = add_buy(jmcode, token=token, seq_name=f'MorningBet({strategy_name})', qty=q_val, source=tag, price_type='market')
+        _dlog(f"[execute_bet] add_buy 호출 결과: {result}")
 
     def start(self):
         """엔진 기동 (중복 실행 방지 기능 탑재)"""

@@ -9,7 +9,7 @@ from stock_info import fn_ka10001 as stock_info, get_current_price
 from acc_val import fn_kt00004 as get_my_stocks
 from tel_send import tel_send
 from get_setting import cached_setting, get_base_path
-from login import fn_au10001 as get_token
+from login import fn_au10001 as get_token, safe_float, safe_int
 import asyncio
 import subprocess
 import queue
@@ -142,6 +142,17 @@ GLOBAL_MARKET_STATUS = {
     'last_update': None
 }
 
+# [v5.1.33] 전역 VI 상태 캐시 (rt_search.py에서 실시간 업데이트)
+# '1': 발동, '2': 해제, '3': 중지, '4': 재개
+GLOBAL_VI_CACHE = {}
+
+def update_vi_cache(stk_cd, vi_status):
+    """실시간 수신된 VI 상태를 캐시에 업데이트합니다."""
+    try:
+        stk_cd = stk_cd.replace('A', '')
+        GLOBAL_VI_CACHE[stk_cd] = str(vi_status)
+    except: pass
+
 def is_market_index_ok():
     """[v4.4.0] 지수 급락 자동 매매 정지 설정 및 현재 지수 상태를 비교하여 매매 가능 여부 반환"""
     try:
@@ -149,21 +160,21 @@ def is_market_index_ok():
         enabled = get_setting('global_idx_stop_enabled', False)
         if not enabled: return True, ""
         
-        kospi_thresh = float(get_setting('kospi_stop_threshold', '-2.0'))
-        kosdaq_thresh = float(get_setting('kosdaq_stop_threshold', '-3.0'))
+        kospi_thresh = safe_float(get_setting('kospi_stop_threshold', '-2.0'), -2.0)
+        kosdaq_thresh = safe_float(get_setting('kosdaq_stop_threshold', '-3.0'), -3.0)
         
         # [v5.0.3] 구조적 안정성 확보: KOSPI/KOSDAQ 키 내부의 rate 참조
         kospi_obj = GLOBAL_MARKET_STATUS.get('KOSPI', {})
         kosdaq_obj = GLOBAL_MARKET_STATUS.get('KOSDAQ', {})
         
-        cur_kospi_rate = float(kospi_obj.get('rate', 0.0))
-        cur_kosdaq_rate = float(kosdaq_obj.get('rate', 0.0))
+        cur_kospi_rate = safe_float(kospi_obj.get('rate', 0.0), 0.0)
+        cur_kosdaq_rate = safe_float(kosdaq_obj.get('rate', 0.0), 0.0)
         
         # 만약 명시적 'KOSPI' 키가 비어있다면 평면(Flat) 구조('kospi_rate')까지 추가로 확인 (더블 체크)
         if cur_kospi_rate == 0.0:
-            cur_kospi_rate = float(GLOBAL_MARKET_STATUS.get('kospi_rate', 0.0))
+            cur_kospi_rate = safe_float(GLOBAL_MARKET_STATUS.get('kospi_rate', 0.0), 0.0)
         if cur_kosdaq_rate == 0.0:
-            cur_kosdaq_rate = float(GLOBAL_MARKET_STATUS.get('kosdaq_rate', 0.0))
+            cur_kosdaq_rate = safe_float(GLOBAL_MARKET_STATUS.get('kosdaq_rate', 0.0), 0.0)
 
         # [v1.1.7] 장 초반(09:00~09:01) 지수 데이터가 아직 0.0일 경우 매수 차단 방지 (Safe Pass)
         now_dt = datetime.now()
@@ -250,25 +261,20 @@ def update_account_cache(token):
         for stock in my_stocks:
             code = stock['stk_cd'].replace('A', '')
             name = stock['stk_nm']
-            try: qty = int(stock.get('hldg_qty', stock.get('rmnd_qty', 0))) # [v6.1.12 수정] 필드명 유연성 확보
-            except: qty = 0
+            qty = safe_int(stock.get('hldg_qty', stock.get('rmnd_qty', 0))) # [v6.1.12 수정] 필드명 유연성 확보
             
             new_holdings[code] = qty
             names[code] = name
 
             # [v6.1.12 수정] 실제 API 필드명에 맞춰 정밀 매핑 (0패딩 문자열 대응)
             try:
-                def _parse(k, default=0.0):
-                    val = stock.get(k, default)
-                    return float(str(val).replace(',', '')) if val else default
-
                 realtime_holdings[code] = {
                     'name': name,
-                    'buy_price': _parse('avg_prc'),
-                    'cur_price': _parse('cur_prc'),
-                    'pl_rt': _parse('pl_rt'),
-                    'qty': int(_parse('rmnd_qty')),
-                    'pnl': int(_parse('pl_amt'))
+                    'buy_price': safe_float(stock.get('avg_prc')),
+                    'cur_price': safe_float(stock.get('cur_prc')),
+                    'pl_rt': safe_float(stock.get('pl_rt')),
+                    'qty': safe_int(stock.get('rmnd_qty')),
+                    'pnl': safe_int(stock.get('pl_amt'))
                 }
             except Exception as e:
                 print(f"⚠️ [realtime_holdings] 가공 중 예외: {e}")
@@ -510,10 +516,20 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
     # [v4.4.0] 지수 급락 자동 매매 정지 체크 (Global Stop)
     is_ok, reason = is_market_index_ok()
     if not is_ok:
-        # [Lite V1.0] 다이어트 로그 적용 (지수 급락 안내)
         s_name = get_stock_name_safe(stk_cd, token if token else get_token())
+        # [V5.1.17] 지수 수치 포함 상세 진단 로그 (Detailed Log)
+        print(f"DEBUG_HTML_LOG: <font color='#ff6b6b'>[Market-STOP] {s_name}({stk_cd}) 차단 사유: {reason}</font>")
         print(f"🛡️ <font color='#ff6b6b'><b>[지수급락 정지]</b> {s_name}({stk_cd}) 매수 차단 ({reason})</font>")
         return
+
+    # [v5.1.33] VI 발동 중 매수 금지 체크 (Global Filter)
+    # Turbo VI(SYSTEM_VI)는 해제 시점에 들어가는 로직이므로 제외
+    if seq != 'SYSTEM_VI' and get_setting('block_buy_during_vi', False):
+        vi_status = GLOBAL_VI_CACHE.get(stk_cd)
+        if vi_status == '1': # '1'은 VI 발동(Active) 상태
+            s_name = get_stock_name_safe(stk_cd, token if token else get_token())
+            print(f"🛡️ <font color='#ff6b6b'><b>[VI차단]</b> {s_name}({stk_cd}) 현재 VI 발동 중으로 매수 차단됨</font>")
+            return
 
     # 0. 메모리 락 (동시 처리 방지)
     if stk_cd in PROCESSING_FLAGS:
@@ -537,22 +553,24 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         if seq == 'SYSTEM_VI':
             s_name = get_stock_name_safe(stk_cd, token)
             
-            # [V3.3.8] 0단계: 거래대금 상위 필터링
+            # [V3.3.8 / V5.1.17 고도화] 0단계: 거래대금 상위 필터링
             if cached_setting('bultagi_turbo_vi_volume_enabled', False):
                 if TOP_VOLUME_RANK_CACHE and stk_cd not in TOP_VOLUME_RANK_CACHE:
                     msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 거래대금 순위 밖 스킵</font>"
                     print(msg)
+                    # [V5.1.17] 상세 로그 라우팅
+                    print(f"DEBUG_HTML_LOG: <font color='#aaaaaa'>[VI-DEBUG] {s_name}({stk_cd}) 매수 스킵: 거래대금 순위({len(TOP_VOLUME_RANK_CACHE)}위) 밖</font>")
                     return
 
             # 1단계: 가격대 필터링
-            min_p = int(cached_setting('bultagi_turbo_vi_min_price', '0').replace(',', ''))
-            max_p = int(cached_setting('bultagi_turbo_vi_max_price', '99999999').replace(',', ''))
+            min_p = safe_int(str(cached_setting('bultagi_turbo_vi_min_price', '0')).replace(',', ''))
+            max_p = safe_int(str(cached_setting('bultagi_turbo_vi_max_price', '99999999')).replace(',', ''))
             
             # 현재가 확인 (trade_price가 없으면 API 호출)
-            if not trade_price or int(trade_price) == 0:
+            if not trade_price or safe_int(trade_price) == 0:
                 _, trade_price = get_current_price(stk_cd, token=token)
             
-            cur_p = int(trade_price) if trade_price else 0
+            cur_p = safe_int(trade_price)
             
             if cur_p < min_p:
                 msg = f"📡 <font color='#888888'>[Turbo 스킵] {s_name}({stk_cd}) 현재가({cur_p:,}원) < 최소설정({min_p:,}원)</font>"
@@ -713,7 +731,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
                         qty = target_amt // current_price
                         pretty_log("💰", f"금액({target_amt:,})", f"{qty}주", stk_cd)
                     elif mode == 'percent':
-                        pct = float(val_str)
+                        pct = safe_float(val_str, 0.0)
                         current_balance = ACCOUNT_CACHE['balance']
                         target_amt = current_balance * (pct / 100)
                         qty = int(target_amt // current_price)
@@ -873,6 +891,16 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
         print(f"🛡️ <font color='#ff6b6b'><b>[지수급락 정지]</b> {s_name}({stk_cd}) 추가 매수(불타기) 차단 ({reason})</font>")
         return False
 
+    # [v5.1.34] VI 발동 중 매수 금지 체크 (Global Filter)
+    # Turbo VI(VI_TURBO)는 해제 시점에 들어가는 로직이므로 제외
+    if source != 'VI_TURBO' and get_setting('block_buy_during_vi', False):
+        vi_status = GLOBAL_VI_CACHE.get(stk_cd)
+        if vi_status == '1': # '1'은 VI 발동(Active) 상태
+            s_name = get_stock_name_safe(stk_cd, token if token else get_token())
+            # [사용자 요청] 이유를 로그창에 명시적으로 표시 ❤️
+            print(f"🛡️ <font color='#ff6b6b'><b>[VI차단]</b> {s_name}({stk_cd}) 현재 VI 발동 중으로 추가 매수(정찰병 포함) 건너뜀</font>")
+            return False
+
     # 0. 메모리 락
     if stk_cd in PROCESSING_FLAGS:
         return False
@@ -918,10 +946,13 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
         result = buy_stock(stk_cd, qty, ord_uv, trde_tp=trde_tp, token=token)
         
         is_success = False
+        ret_code, ret_msg = ("", "")
         if isinstance(result, (tuple, list)):
             is_success = str(result[0]) == '0'
+            if len(result) >= 2: ret_code, ret_msg = result[0], result[1]
         else:
             is_success = str(result) == '0'
+            ret_code = str(result)
 
         if is_success:
             # 계좌 캐시 업데이트
@@ -968,7 +999,15 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             elif source == 'RankScout':
                 log_msg = f"<font color='#ffbb33'>🚩<b>[정찰병 투입]</b> {s_name} ({final_price:,}원/{qty}주)</font>"
                 tel_msg = f"🚩 [정찰병 완료] {s_name} {qty}주 즉시 매수!"
-                voice_msg = f"{s_name} 정찰병 투입"
+                
+                # [v5.2.1] 정찰병 세부 유형별 보이스 알림 강화 (자기야, 이제 눈 감고도 들을 수 있어! ❤️)
+                v_type = "순위 정찰병"
+                if seq_name:
+                    if "NewEntry" in seq_name: v_type = "순위 신규 정찰병"
+                    elif "RankJump" in seq_name: v_type = "순위 급등 정찰병"
+                    elif "RankConsec" in seq_name: v_type = "연속 상승 정찰병"
+                
+                voice_msg = f"{v_type}, {s_name}"
             else:
                 log_msg = f"<font color='#ff00ff'>🔥<b>[추가매수 성공]</b> {s_name} ({final_price:,}원/{qty}주) [수급폭발]</font>"
                 tel_msg = f"🔥 [추가매수 완료] {s_name} {qty}주 추가 체결! (수급폭발)"
@@ -978,9 +1017,20 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             tel_send(tel_msg, msg_type='log')
             say_text(voice_msg) # 음성 알림
             
+        else:
+            # [V5.1.17] 주문 실패 시 상세 로그 전송
+            s_name = get_stock_name_safe(stk_cd, token)
+            _err_log = f"❌ [Order-FAIL] {s_name}({stk_cd}) 주문 실패: [{ret_code}] {ret_msg}"
+            print(f"DEBUG_HTML_LOG: <font color='#ff6b6b'>{_err_log}</font>")
+            print(_err_log)
+            # 수동 매수 등의 재시도를 위해 실패 시 주문 캐시에서 제거
+            RECENT_ORDER_CACHE.pop(stk_cd, None)
+            
         return is_success
 
     except Exception as e:
+        # [V5.1.17] 에러 발생 시 상세 로그 전송
+        print(f"DEBUG_HTML_LOG: <font color='#ff6b6b'>[Order-ERROR] {stk_cd} 주문 실행 중 예외: {e}</font>")
         print(f"⚠️ [add_buy] 추가 매수 오류: {e}")
         return False
     finally:
@@ -1008,8 +1058,8 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
         st_data = get_setting('strategy_tp_sl', {})
         specific_setting = st_data.get(strat, {})
         
-        spec_tp = float(specific_setting.get('tp', default_tp))
-        spec_sl = float(specific_setting.get('sl', default_sl))
+        spec_tp = safe_float(specific_setting.get('tp', default_tp), default_tp)
+        spec_sl = safe_float(specific_setting.get('sl', default_sl), default_sl)
 
         if spec_tp == 0: spec_tp = 12.0
         if spec_sl == 0: spec_sl = -1.5

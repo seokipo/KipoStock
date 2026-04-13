@@ -426,8 +426,9 @@ class AsyncWorker(QThread):
                     
                     # 1. 중지 (STOP)
                     await self.chat_command.stop(set_auto_start_false=False)
-                    # 2. 통합 리포트 생성 (Trade Diary + CSV/TXT + Balance)
-                    await self.chat_command.report()
+                    # [V5.1.9 수정] 중복 리포트 방지 (워커 루프의 직접 호출 제거)
+                    # 5~7초 뒤 시퀀스 종료부에서 통합 리포트 1회만 출력하도록 일원화
+                    # await self.chat_command.report() 
 
                 # [v6.4.8] 종가 분석 시간 자동 팝업 (설정된 kipostock_perspective_time 시각)
                 p_time = get_setting('kipostock_perspective_time', '15:10')
@@ -854,6 +855,14 @@ class BultagiSettingsDialog(QDialog):
         self.input_trailing = QLineEdit(); self.input_trailing.setFixedWidth(80); self.input_trailing.setPlaceholderText("1.0")
         h_trailing = QHBoxLayout(); h_trailing.addWidget(self.chk_trailing); h_trailing.addStretch(); h_trailing.addWidget(self.input_trailing); h_trailing.addWidget(QLabel("% 하락 시"))
         str_layout.addLayout(h_trailing)
+
+        # [V5.1.15] 트레일링 스톱 감시 시작 기준 (하드코딩 0.5% 탈출)
+        h_ts_start = QHBoxLayout()
+        h_ts_start.addWidget(QLabel("   ┗ 감시 시작 수익률:"))
+        self.input_ts_start = QLineEdit(); self.input_ts_start.setFixedWidth(60); self.input_ts_start.setPlaceholderText("0.5")
+        h_ts_start.addStretch()
+        h_ts_start.addWidget(self.input_ts_start); h_ts_start.addWidget(QLabel("% 이상 시"))
+        str_layout.addLayout(h_ts_start)
         
         str_group.setLayout(str_layout)
         fire_form.addRow(str_group)
@@ -875,6 +884,7 @@ class BultagiSettingsDialog(QDialog):
         self.input_p_limit.textChanged.connect(lambda t: self.format_percent(self.input_p_limit, t, is_profit=True))
         self.input_sl.textChanged.connect(lambda t: self.format_percent(self.input_sl, t, is_profit=False))
         self.input_trailing.textChanged.connect(lambda t: self.format_percent(self.input_trailing, t, is_profit=False))
+        self.input_ts_start.textChanged.connect(lambda t: self.format_percent(self.input_ts_start, t, is_profit=True))
 
         line_mid = QFrame(); line_mid.setFrameShape(QFrame.Shape.HLine); line_mid.setStyleSheet("background-color: #444;")
         fire_form.addRow(line_mid)
@@ -917,10 +927,13 @@ class BultagiSettingsDialog(QDialog):
         self.chk_rank_scout.setStyleSheet("font-weight: bold; font-size: 13px; color: #f1c40f;")
         self.spin_rank_new = QComboBox(); self.spin_rank_new.addItems(["5 위 내 신규 진입 시", "10 위 내 신규 진입 시", "15 위 내 신규 진입 시", "20 위 내 신규 진입 시"]); self.spin_rank_new.setFixedHeight(28)
         self.spin_rank_jump = QComboBox(); self.spin_rank_jump.addItems(["5 단계 이상 급상승 시", "10 단계 이상 급상승 시", "15 단계 이상 급상승 시", "20 단계 이상 급상승 시"]); self.spin_rank_jump.setFixedHeight(28)
+        # [신규 v5.2.0] 연속 순위 상승 조건 추가 (자기 요청 반영 ❤️)
+        self.spin_rank_consecutive = QComboBox(); self.spin_rank_consecutive.addItems(["사용 안 함", "3 회 연속 상승 시", "4 회 연속 상승 시", "5 회 연속 상승 시"]); self.spin_rank_consecutive.setFixedHeight(28)
         self.spin_rank_interval = QComboBox(); self.spin_rank_interval.addItems(["30 초 간격 감시", "1 분 간격 감시", "10 분 간격 감시", "1 시간 감시", "당일 누적 감시"]); self.spin_rank_interval.setFixedHeight(28)
         rank_layout.addRow(self.chk_rank_scout)
         rank_layout.addRow("✨ 신규 진입:", self.spin_rank_new)
         rank_layout.addRow("🚀 순위 점프:", self.spin_rank_jump)
+        rank_layout.addRow("📈 연속 상승:", self.spin_rank_consecutive)
         rank_layout.addRow("⏳ 감지 간격:", self.spin_rank_interval)
         group_rank.setLayout(rank_layout)
         extra_vbox.addWidget(group_rank)
@@ -1039,6 +1052,16 @@ class BultagiSettingsDialog(QDialog):
         idx_layout.addRow("📉 KOSDAQ 임계값:", h_kosdaq)
         group_idx.setLayout(idx_layout)
         etc_vbox.addWidget(group_idx)
+
+        # 4. 🛡️ VI 발동 중 매수 금지 (Global) [V5.1.33 신설]
+        group_vi_block = QGroupBox("🛡️ VI 상태 매수 보호 (Global)")
+        group_vi_block.setStyleSheet("QGroupBox { font-weight: bold; color: #f1c40f; border: 1px solid #444; border-radius: 8px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
+        vi_block_layout = QVBoxLayout()
+        self.chk_block_buy_vi = QCheckBox(" VI 발동 종목 모든 자동 매수 금지 (Turbo VI 제외)")
+        self.chk_block_buy_vi.setStyleSheet("font-weight: bold; color: #f1c40f;")
+        vi_block_layout.addWidget(self.chk_block_buy_vi)
+        group_vi_block.setLayout(vi_block_layout)
+        etc_vbox.addWidget(group_vi_block)
 
         etc_vbox.addLayout(btn_layout_etc)
         etc_vbox.addStretch()
@@ -1197,6 +1220,7 @@ class BultagiSettingsDialog(QDialog):
             
             self.chk_trailing.setChecked(target.get('bultagi_trailing_enabled', False))
             self.input_trailing.setText(str(target.get('bultagi_trailing_val', 1.0)))
+            self.input_ts_start.setText(str(target.get('bultagi_trailing_start_rate', 0.5)))
             
             self.chk_power.setChecked(target.get('bultagi_power_enabled', False))
             self.input_power.setText(str(target.get('bultagi_power_val', 120)))
@@ -1208,6 +1232,9 @@ class BultagiSettingsDialog(QDialog):
             self.chk_idx_stop.setChecked(root.get('global_idx_stop_enabled', False))
             self.spin_kospi_threshold.setValue(float(root.get('kospi_stop_threshold', -1.5)))
             self.spin_kosdaq_threshold.setValue(float(root.get('kosdaq_stop_threshold', -2.0)))
+            
+            # [신규 v5.1.33] VI 발동 중 매수 금지 설정 로드
+            self.chk_block_buy_vi.setChecked(root.get('block_buy_during_vi', False))
 
             # [신규 v6.9.5] Turbo VI 로드
             self.chk_turbo_vi.setChecked(target.get('bultagi_turbo_vi', False))
@@ -1263,6 +1290,11 @@ class BultagiSettingsDialog(QDialog):
                 jump_val = int(target.get('rank_scout_jump_threshold', 10))
                 idx_jump = {5: 0, 10: 1, 15: 2, 20: 3}.get(jump_val, 1)
                 self.spin_rank_jump.setCurrentIndex(idx_jump)
+
+                # [v5.2.0] 연속 상승 로드 (0: 사용안함, 3, 4, 5)
+                consec_val = int(target.get('rank_scout_consecutive_count', 0))
+                idx_consec = {0: 0, 3: 1, 4: 2, 5: 3}.get(consec_val, 0)
+                self.spin_rank_consecutive.setCurrentIndex(idx_consec)
 
                 int_val = int(target.get('rank_scout_interval', 30))
                 # API 코드(qry_tp): 5:30s, 1:1m, 2:10m, 3:1h, 4:day
@@ -1330,10 +1362,10 @@ class BultagiSettingsDialog(QDialog):
                 'bultagi_preservation_enabled': p_en,
                 'bultagi_preservation_trigger': p_trigger,
                 'bultagi_preservation_limit': p_limit,
-                'bultagi_sl_enabled': sl_en,
                 'bultagi_sl': sl_val,
                 'bultagi_trailing_enabled': self.chk_trailing.isChecked(),
                 'bultagi_trailing_val': _get_float(self.input_trailing, 1.0),
+                'bultagi_trailing_start_rate': _get_float(self.input_ts_start, 0.5),
                 'bultagi_power_enabled': self.chk_power.isChecked(),
                 'bultagi_power_val': int(self.input_power.text().strip() or 120), # [v2.5.0] AI 뉴스 브리핑 음성 토글 기능 추가 및 무한 루프 버그 수정
                 'bultagi_slope_enabled': self.chk_slope.isChecked(),
@@ -1343,6 +1375,8 @@ class BultagiSettingsDialog(QDialog):
                 'global_idx_stop_enabled': self.chk_idx_stop.isChecked(),
                 'kospi_stop_threshold': self.spin_kospi_threshold.value(),
                 'kosdaq_stop_threshold': self.spin_kosdaq_threshold.value(),
+                # [신규 v5.1.33] VI 발동 중 매수 금지 설정 저장 (Root 레벨)
+                'block_buy_during_vi': self.chk_block_buy_vi.isChecked(),
                 'bultagi_turbo_vi': self.chk_turbo_vi.isChecked(),
                 'bultagi_turbo_vi_type': 'market' if self.combo_turbo_vi_type.currentIndex() == 0 else 'current',
                 'bultagi_turbo_vi_min_price': str(self.input_turbo_min_price.value()),
@@ -1376,6 +1410,7 @@ class BultagiSettingsDialog(QDialog):
                 'rank_scout_enabled': self.chk_rank_scout.isChecked(),
                 'rank_scout_new_threshold': [5, 10, 15, 20][self.spin_rank_new.currentIndex()],
                 'rank_scout_jump_threshold': [5, 10, 15, 20][self.spin_rank_jump.currentIndex()],
+                'rank_scout_consecutive_count': [0, 3, 4, 5][self.spin_rank_consecutive.currentIndex()],
                 'rank_scout_interval': [30, 60, 600, 3600, 0][self.spin_rank_interval.currentIndex()],
                 'rank_scout_qry_tp': ['5', '1', '2', '3', '4'][self.spin_rank_interval.currentIndex()]
             }
@@ -1494,7 +1529,7 @@ class KipoFilterListDialog(QDialog):
 
     def __init__(self, parent=None):
         super().__init__(parent, Qt.WindowType.Window)
-        self.setWindowTitle("KipoStock AI V5.1.7")
+        self.setWindowTitle("KipoStock 필터 종목 리스트")
         self.setMinimumSize(480, 520)
         self.resize(520, 580)
         self._apply_style()
@@ -2346,7 +2381,6 @@ class ShortcutSettingsDialog(QDialog):
         self.setWindowTitle("⌨️ 단축키 커스터마이징")
         self.setFixedWidth(400)
         self.shortcuts = current_shortcuts
-        
         # 테마 적용
         is_light = (getattr(parent, 'ui_theme', 'dark') == 'light')
         self.bg_color = "#f8f9fa" if is_light else "#1a1a1a"
@@ -3144,6 +3178,8 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.version = "V5.2.3" # [V5.2.3] Ranking Scout 순위 급상승 감지 사각지대 해결 및 지능 고도화 🚑🔎🚀
+        self.setWindowTitle(f"KipoStock AI Dashboard [{self.version}] - Advanced Fortress")
         self.is_closing = False # [신규] 프로그램 종료 중임을 나타내는 플래그
         self.is_initialized = False # [Fix v4.3.0] 초기 설정 로드 완료 전 자동 저장 차단 플래그 🚀
         # [최우선] 로그 및 상태 변수 초기화 (UI/Worker 호출 전 반드시 선행되어야 함)
@@ -3221,9 +3257,9 @@ class KipoWindow(QMainWindow):
         self.bultagi_dialog = None # [신규] 모달리스 인스턴스 유지 변수
         self.advanced_visible = False # [Fix v6.2.5] AttributeError: 'KipoWindow' object has no attribute 'advanced_visible' 긴급 복구
         self.disabled_auto_stocks = set() # [V4.3.4] 개별 종목 자동매매 일시 정지 목록
+        self.load_disabled_stocks()      # [v5.1.25] 정지 목록 파일에서 복원 💾
         
         # [v2.5.1] 성능 최적화 및 음성 토글 기능 통합 빌드
-        self.setWindowTitle("KipoStock Professional Trader AI - V5.1.7 (Gemini Hybrid)")
         self.is_closing = False # [v3.0.1] 종료 플래그 초기화
 
         # [NEW v6.5.1] 로그 버퍼링 타이머 가동 (0.25초 주기로 뭉쳐서 출력)
@@ -5293,6 +5329,32 @@ class KipoWindow(QMainWindow):
                 self.append_log(f"▶️ <b>[재개]</b> <font color='#2ecc71'>{stk_nm}</font> 자동매매가 재개되었습니다.")
         except Exception as e:
             print(f"⚠️ [on_auto_trade_toggle] 에러: {e}")
+        
+        # [v5.1.25] 정지 처리 후 파일에 즉시 저장
+        self.save_disabled_stocks()
+
+    def save_disabled_stocks(self):
+        """[v5.1.25] 불타기 정지 종목 목록을 파일에 저장합니다."""
+        try:
+            file_path = os.path.join(self.data_dir, "disabled_stocks.json")
+            with open(file_path, 'w', encoding='utf-8') as f:
+                json.dump(list(self.disabled_auto_stocks), f, ensure_ascii=False, indent=4)
+            # print(f"💾 [Persistence] 정지 목록 저장 완료: {len(self.disabled_auto_stocks)}종목")
+        except Exception as e:
+            print(f"⚠️ [save_disabled_stocks] 에러: {e}")
+
+    def load_disabled_stocks(self):
+        """[v5.1.25] 파일에서 불타기 정지 종목 목록을 불러옵니다."""
+        try:
+            file_path = os.path.join(self.data_dir, "disabled_stocks.json")
+            if os.path.exists(file_path):
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if isinstance(data, list):
+                        self.disabled_auto_stocks = set(data)
+                        self.append_log(f"📥 <b>[복원]</b> 기존 정지 종목 <font color='#f1c40f'>{len(self.disabled_auto_stocks)}개</font>를 불러왔습니다. ❤️")
+        except Exception as e:
+            print(f"⚠️ [load_disabled_stocks] 에러: {e}")
 
     def remove_from_bultagi_status_board(self, stk_nm):
         """특정 종목을 불타기 보드에서 제거합니다."""
@@ -6942,9 +7004,10 @@ class KipoWindow(QMainWindow):
             self.start_alarm() # 마지막 종료 알람
             self.worker.schedule_command('stop') # 매매 중단
             
-            # [수정] 중단 후 마지막 시퀀스 리포트 및 최종 종합 리포트 전송
-            QTimer.singleShot(2000, lambda: self.worker.schedule_command('report', current_idx)) # 마지막 시퀀스
-            QTimer.singleShot(7000, lambda: self.worker.schedule_command('report')) # 전체 종합
+            # [V5.1.9 수정] 중합 리포트 중복 출력 통합 (1회로 축소)
+            # 2초/7초 간격으로 시퀀스/전체 리포트가 중복되던 것을 7초 뒤 최종 1회로 통합합니다.
+            # QTimer.singleShot(2000, lambda: self.worker.schedule_command('report', current_idx)) 
+            QTimer.singleShot(7000, lambda: self.worker.schedule_command('report')) # 최종 종합 리포트 1회만 실행
             return
 
         # [시퀀스 OFF]
@@ -7407,12 +7470,12 @@ if __name__ == '__main__':
     faulthandler.dump_traceback_later(300, repeat=True, file=f_fault)
 
     try:
-        log_step("--- START V4.4.4 ---")
+        log_step("--- START V5.1.28 ---")
         
         # [추가] Windows 작업표시줄 아이콘 고동
         if sys.platform == 'win32':
             import ctypes
-            myappid = 'kipo.buy.auto.4.4.0'
+            myappid = 'kipo.buy.auto.5.1.28'
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
             log_step("OS ID Set")
 

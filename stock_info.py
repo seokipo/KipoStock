@@ -335,7 +335,7 @@ def get_morning_scan_data(token=None):
         if isinstance(data, list):
             items = data
         else:
-            items = data.get('pwr_st_list') or data.get('data_list') or data.get('output', [])
+            items = data.get('pric_jmpflu') or data.get('pwr_st_list') or data.get('data_list') or data.get('output', [])
             
         if not items:
             # [v1.2.1] 스캔 실패 시 상세 원인 파악을 위한 로그 강화
@@ -350,15 +350,23 @@ def get_morning_scan_data(token=None):
             scan_results.append({
                 'code': code.replace('A', ''),
                 'name': item.get('stk_nm') or item.get('name', ''),
-                'expect_prc': abs(int(str(item.get('expect_prc', item.get('clpr', 0))).replace(',', ''))),
-                'expect_rt': float(str(item.get('expect_rt', item.get('cur_rt', 0))).replace(',', '')),
-                'expect_vol': int(str(item.get('expect_vol', 0)).replace(',', ''))
+                'expect_prc': abs(int(str(item.get('expect_prc', item.get('cur_prc', item.get('clpr', 0)))).replace(',', ''))),
+                'expect_rt': float(str(item.get('expect_rt', item.get('flu_rt', item.get('jmp_rt', item.get('cur_rt', 0))))).replace(',', '')),
+                'expect_vol': int(str(item.get('expect_vol', item.get('trde_qty', 0))).replace(',', ''))
             })
             
         return scan_results
     except Exception as e:
         print(f"❌ [MorningScan] API 호출 중 예외 발생: {e}")
         return []
+
+def get_morning_scan_data_raw(token=None):
+    """[V5.1.17] 진단용 원시 응답 반환 (스캔 실패 분석용)"""
+    endpoint = '/api/dostk/stkinfo'; url = host_url + endpoint
+    headers = {'Content-Type': 'application/json;charset=UTF-8', 'authorization': f'Bearer {token}', 'api-id': 'ka10019'}
+    params = {'mrkt_tp': '000', 'vol_tp': '1', 'flu_tp': '1', 'tm_tp': '1', 'tm': '085000', 'trde_qty_tp': '1', 'stk_cnd': '1', 'crd_cnd': '0', 'pric_cnd': '0', 'updown_incls': '0', 'stex_tp': '3'}
+    try: return requests.post(url, headers=headers, json=params, timeout=10).json()
+    except: return {"error": "API Timeout or Exception"}
 
 def get_realtime_ranking_data(token=None, qry_tp='5'):
     """

@@ -5,7 +5,7 @@ from acc_val import fn_kt00004 as get_my_stocks
 from sell_stock import fn_kt10001 as sell_stock
 from tel_send import tel_send
 from get_setting import cached_setting, get_base_path
-from login import fn_au10001 as get_token
+from login import fn_au10001 as get_token, safe_float, safe_int
 from market_hour import MarketHour
 from check_n_buy import load_json_safe, save_json_safe, update_stock_condition # [신규] 안전 함수 가져오기
 from trade_logger import session_logger # [신규] 수익 기록용 세션 로거
@@ -102,17 +102,18 @@ def chk_n_sell(token=None, disabled_stocks=None):
                     seq = info.get('seq')
                     s_name = info.get('name', '')
                     
-                    # [신규 v6.9.7] 시초가 배팅 (Morning Bet) 전용 타이트 컷 (개별 룰 완전 우대)
-                    if s_name.startswith('MorningBet'):
-                        specific_tp = float(cached_setting('morning_tp', 2.0))
-                        specific_sl = float(cached_setting('morning_sl', -1.5))
-                    elif s_name.startswith('MorningBet'):
-                        # (위 조건과 동일하게 유지 - 가독성용)
-                        pass
+                    # [신규 v6.9.7 / v5.1.30] 시초가 배팅 (Morning Bet) 전용 타이트 컷
+                    strat_tag = str(info.get('strat', '') or '')
+                    if s_name.startswith('MorningBet') or strat_tag.startswith('MorningBet'):
+                        specific_tp = float(cached_setting('morning_tp', 2.0) or 2.0)
+                        specific_sl = float(cached_setting('morning_sl', -1.5) or -1.5)
                     else:
-                        if info.get('tp') is not None: specific_tp = float(info['tp'])
-                        if info.get('sl') is not None: specific_sl = float(info['sl'])
+                        tp_val = info.get('tp')
+                        sl_val = info.get('sl')
+                        specific_tp = float(tp_val) if tp_val is not None else TP_RATE
+                        specific_sl = float(sl_val) if sl_val is not None else SL_RATE
 
+                # [V5.1.30] 최종 보정: 여전히 0이라면 기본 설정값으로 강제 복구 (None% 방어 하한선)
                 if specific_tp == 0: specific_tp = TP_RATE if TP_RATE != 0 else 12.0
                 if specific_sl == 0: specific_sl = SL_RATE if SL_RATE != 0 else -1.5
 
@@ -120,31 +121,32 @@ def chk_n_sell(token=None, disabled_stocks=None):
                     info = mapping[stk_cd]
                     # [v2.5.4] HTS 로 일원화: 불타기 완료된 종목이거나 직접 매수(HTS) 매수한 종목일 경우 불타기 매도 룰 적용
                     if info.get('bultagi_done') or info.get('strat', '') == 'HTS':
+                        # [V5.1.34] 불타기 매도 설정 통합 로드 (중복 제거 및 하드코딩 방지)
                         b_tp_en = cached_setting('bultagi_tp_enabled', True)
-                        b_tp = cached_setting('bultagi_tp', 5.0)
-                        b_p_en = cached_setting('bultagi_preservation_enabled', False)
-                        b_p_trigger = cached_setting('bultagi_preservation_trigger', 3.0)
-                        b_p_limit = cached_setting('bultagi_preservation_limit', 2.0)
+                        b_tp = safe_float(cached_setting('bultagi_tp', 5.0), 5.0)
                         b_sl_en = cached_setting('bultagi_sl_enabled', True)
-                        b_sl = cached_setting('bultagi_sl', -2.0)
+                        b_sl = safe_float(cached_setting('bultagi_sl', -2.0), -2.0)
+                        b_pres_en = cached_setting('bultagi_preservation_enabled', False)
+                        b_pres_trig = safe_float(cached_setting('bultagi_preservation_trigger', 3.0), 3.0)
+                        b_pres_lim = safe_float(cached_setting('bultagi_preservation_limit', 2.0), 2.0)
+                        b_ts_en = cached_setting('bultagi_trailing_enabled', False)
+                        b_ts_val = abs(safe_float(cached_setting('bultagi_trailing_val', 1.0), 1.0))
+                        b_ts_start = safe_float(cached_setting('bultagi_trailing_start_rate', 0.5), 0.5)
 
                         peak_rt = info.get('peak_pl_rt', 0.0)
                         if pl_rt > peak_rt:
                             info['peak_pl_rt'] = pl_rt
                             peak_rt = pl_rt
                             update_stock_peak_rt(stk_cd, pl_rt)
-
-                        ts_en = cached_setting('bultagi_trailing_enabled', False)
-                        ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.0)))
                         
                         should_sell = False
                         sell_reason = ""
                         
-                        if ts_en:
+                        if b_ts_en:
                             # TS 모드: 고점 대비 하락 시 매도 (익절/보존 무시)
-                            if peak_rt >= 0.5 and (peak_rt - pl_rt) >= ts_val:
+                            if peak_rt >= b_ts_start and (peak_rt - pl_rt) >= b_ts_val:
                                 should_sell = True
-                                sell_reason = f"트레일링스톱 (고점:{peak_rt:.1f}%, 현재:{pl_rt:.1f}%, 하락:{peak_rt-pl_rt:.1f}% >= {ts_val:.1f}%)"
+                                sell_reason = f"트레일링스톱 (고점:{peak_rt:.1f}%, 현재:{pl_rt:.1f}%, 하락:{peak_rt-pl_rt:.1f}% >= {b_ts_val:.1f}%)"
                             elif b_sl_en and pl_rt <= b_sl:
                                 should_sell = True
                                 sell_reason = "손실제한"
@@ -153,7 +155,7 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             if b_tp_en and pl_rt >= b_tp:
                                 should_sell = True
                                 sell_reason = "이익실현"
-                            elif b_p_en and peak_rt >= b_p_trigger and pl_rt <= b_p_limit:
+                            elif b_pres_en and peak_rt >= b_pres_trig and pl_rt <= b_pres_lim:
                                 should_sell = True
                                 sell_reason = "이익보존"
                             elif b_sl_en and pl_rt <= b_sl:
@@ -217,30 +219,41 @@ def chk_n_sell(token=None, disabled_stocks=None):
                         info = mapping_info 
                         if safe_stk_nm == '알수없음' and info.get('name'): safe_stk_nm = info['name']
                         
-                        # [v3.1.9 Hotfix-2] 매도 설정 로드 (모든 종목 진단에 공통 사용 - 조건문 외부 배치)
-                        b_ts_en = cached_setting('bultagi_trailing_enabled', False)
-                        b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2) or 1.2))
-                        b_pres_en = cached_setting('bultagi_preservation_enabled', False)
-                        b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3) or 5.3)
-                        b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8) or 4.8)
-                        b_tp_en = cached_setting('bultagi_tp_enabled', True)
-                        b_tp = float(cached_setting('bultagi_tp', 5.0) or 5.0)
+                        # [V5.1.34] 불타기 매도 설정 재사용 (위에서 로드한 변수 활용)
+                        # 여기서는 변수만 정의 (루프 내에서 이미 로드됨)
+                        pass 
                         
                         try:
-                            from datetime import datetime
+                            from datetime import datetime, timedelta
                             now = datetime.now()
-                            b_time = datetime.strptime(now.strftime("%Y%m%d") + " " + buy_time_str, "%Y%m%d %H:%M:%S")
                             wait_sec = int(cached_setting('bultagi_wait_sec', 10))
-                            elapsed = (now - b_time).total_seconds()
+                            
+                            # [V5.1.28] 시간 포맷 유효성 검사 및 정제 ([미상] 대응)
+                            clean_time = str(buy_time_str).strip()
+                            b_time = None
+                            
+                            if "[미상]" in clean_time or not clean_time:
+                                # [자율] 대기 시간이 충분히 지난 것으로 간주 (유저 요청: 30초+ 지난 상태로 설정)
+                                b_time = now - timedelta(seconds=max(wait_sec, 30) + 5)
+                            else:
+                                try:
+                                    # 시간만 있는 경우와 날짜가 포함된 경우(HTS 리턴값) 대응
+                                    if len(clean_time) > 8: # 예: "20260410 09:30:00"
+                                        b_time = datetime.strptime(clean_time, "%Y%m%d %H:%M:%S")
+                                    else:
+                                        b_time = datetime.strptime(now.strftime("%Y%m%d") + " " + clean_time, "%Y%m%d %H:%M:%S")
+                                except:
+                                    # 파싱 실패 시에도 대기시간 통과 처리를 위해 과거 시간 할당
+                                    b_time = now - timedelta(seconds=max(wait_sec, 30) + 5)
+                            
+                            elapsed = (now - b_time).total_seconds() if b_time else 999999
                             
                             if -60 < elapsed < 0:
                                 elapsed = 0
                             elif elapsed <= -60:
                                 elapsed = 999999
                             
-                            def safe_float(val):
-                                try: return float(str(val).replace(',', '')) if val else 0.0
-                                except: return 0.0
+
 
                             current_price = safe_float(stock.get('prpr', stock.get('now_prc', stock.get('cur_prc', 0))))
                             buy_price = safe_float(stock.get('avg_prc', stock.get('pchs_avg_pric', 0)))
@@ -253,36 +266,44 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             gate_status = ["⏳", "⏳", "⏳", "⏳", "⏳"] # 상태 아이콘
                             gate_details = ["-", "-", "-", "-", "-"] # 상세 수치
                             
-                            # 데이터 수집 (확장 데이터)
+                            # --- Gate 2: 현재 수익 (수익권 확인) 미리 계산 ---
+                            # [v5.1.14] 확장 데이터 조회를 위한 필터링 지표로 사용하기 위해 계산 순서를 위로 본동함
+                            is_profit = current_price > 0 and buy_price > 0 and current_price >= buy_price
+                            
+                            # --- 데이터 수집 (확장 데이터) ---
+                            # [v5.1.14 / v5.1.31] 지능형 부하 분산: 
+                            # 1. '진입 전'이고 '수익권'일 때만 무거운 확장 데이터를 조회함
+                            # 2. 과도한 API 호출 방지를 위해 종목당 최소 0.5초의 간격을 두고 조회함 (반응 속도 최적화)
                             power_en = cached_setting('bultagi_power_enabled', False)
                             slope_en = cached_setting('bultagi_slope_enabled', False)
                             orderbook_en = cached_setting('bultagi_orderbook_enabled', False)
                             
                             ex_data = None
                             try:
-                                if power_en or slope_en or orderbook_en:
+                                # [v5.1.30] 스로틀링 체크
+                                last_ex_time = info.get('last_ex_update', 0)
+                                should_fetch_ex = (time.time() - last_ex_time >= 0.5) # 최소 0.5초 간격 (사용자 요청: 1.0 -> 0.5)
+
+                                if not bultagi_done and is_profit and (power_en or slope_en or orderbook_en) and should_fetch_ex:
                                     from stock_info import get_extended_stock_data
                                     ex_data = get_extended_stock_data(stk_cd, token=token)
-                                    # [v4.1.0] 체결강도 미갱신 현상 진단을 위한 로데이터 상세 로그창 출력
-                                        # [v4.2.3] 불타기 상세 진단 로그 일시 숨김 (주석 처리로 보존)
-                                        # if ex_data and ex_data.get('raw_log'):
-                                        #     print(f"[BULTAGI-DEBUG] {safe_stk_nm}({stk_cd}) 수급데이터: {ex_data['raw_log']}")
-                                    time.sleep(0.2)
-                            except: pass
+                                    info['last_ex_update'] = time.time()
+                                    # [v5.1.14] 내부 딜레이(time.sleep)를 완전히 제거하여 전수 조사 속도 극대화
+                                elif bultagi_done or not is_profit:
+                                    # 진입 완료 후나 수익권이 아닐 때는 캐시된 데이터만 사용 (조회 생략)
+                                    pass
+                            except Exception as ex_err:
+                                if show_diag: print(f"⚠️ [ExData-Err] {safe_stk_nm}: {ex_err}")
 
-                            # --- Gate 1: 경과 시간 ---
-                            if elapsed >= wait_sec:
-                                gate_status[0] = "✅"
-                                gate_details[0] = f"{int(elapsed)}/{wait_sec}s"
-                                if not bultagi_done and current_gate == 1: current_gate = 2
-                            else:
-                                gate_status[0] = "⏳"
-                                gate_details[0] = f"{int(elapsed)}/{wait_sec}s"
-                                if not bultagi_done: current_gate = 1 
+                            # --- Gate 1: 경과 시간 (타겟 포착 대기) ---
+                            is_time_ok = current_gate > 1 or elapsed >= wait_sec
+                            gate_status[0] = "✅" if is_time_ok else "⏳"
+                            gate_details[0] = f"{int(elapsed)}/{wait_sec}s"
+                            
+                            if not bultagi_done and current_gate == 1 and is_time_ok:
+                                current_gate = 2
 
                             # --- Gate 2: 현재 수익 (수익권 확인) ---
-                            is_profit = current_price > 0 and buy_price > 0 and current_price >= buy_price
-                            
                             if is_profit:
                                 gate_status[1] = "✅"
                                 gate_details[1] = f"{int(current_price):,}/{int(buy_price):,}"
@@ -294,7 +315,7 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             
                             # --- Gate 3: 체결 강도 ---
                             if power_en:
-                                p_limit = float(cached_setting('bultagi_power_val', 120))
+                                p_limit = safe_float(cached_setting('bultagi_power_val', 120), 120.0)
                                 cur_p = ex_data['power'] if ex_data else 0.0
                                 if cur_p >= p_limit:
                                     gate_status[2] = "✅"
@@ -329,7 +350,7 @@ def chk_n_sell(token=None, disabled_stocks=None):
 
                             # --- Gate 5: 호가 잔량비 ---
                             if orderbook_en:
-                                ob_limit = float(cached_setting('bultagi_orderbook_val', 2.0))
+                                ob_limit = safe_float(cached_setting('bultagi_orderbook_val', 2.0), 2.0)
                                 ask_q = ex_data.get('total_ask_qty', 0) if ex_data else 0
                                 bid_q = ex_data.get('total_bid_qty', 1) if ex_data else 1
                                 ob_ratio = ask_q / bid_q if bid_q > 0 else 0
@@ -376,19 +397,8 @@ def chk_n_sell(token=None, disabled_stocks=None):
 
                             # [v3.3.0] 매도 조건 시각적 마킹 (✅) - 전 종목 적용
                             diag_pl_rt = pl_rt if pl_rt < 999 else actual_pl_rt_for_diag
-                            conds = []
                             
-                            # [v3.3.0] 매도 조건 시각적 마킹 (✅) - 전 종목 적용
-                            diag_pl_rt = pl_rt if pl_rt < 999 else actual_pl_rt_for_diag
-                            
-                            # 불타기 매도 설정 로드
-                            b_ts_en = cached_setting('bultagi_trailing_enabled', False)
-                            b_ts_val = abs(float(cached_setting('bultagi_trailing_val', 1.2) or 1.2))
-                            b_pres_en = cached_setting('bultagi_preservation_enabled', False)
-                            b_pres_trig = float(cached_setting('bultagi_preservation_trigger', 5.3) or 5.3)
-                            b_pres_lim = float(cached_setting('bultagi_preservation_limit', 4.8) or 4.8)
-                            b_tp_en = cached_setting('bultagi_tp_enabled', True)
-                            b_tp = float(cached_setting('bultagi_tp', 5.0) or 5.0)
+                            # [V5.1.34] 설정 로드부 통합 삭제 (상단 통합 변수 재사용)
                             
                             # [v5.0.8] 매도 조건 표시 이원화 ([기본] vs [불타기])
                             conds = []
@@ -396,28 +406,30 @@ def chk_n_sell(token=None, disabled_stocks=None):
                                 # [진입 전] 원래 설정된 기본 TP/SL 표시
                                 specific_tp_val = info.get('tp', specific_tp)
                                 specific_sl_val = info.get('sl', specific_sl)
-                                is_tp_met = "✅" if diag_pl_rt >= float(specific_tp_val) else ""
-                                is_sl_met = "✅" if diag_pl_rt <= float(specific_sl_val) else ""
-                                conds.append(f"{is_tp_met}기본TP:{specific_tp_val}%")
-                                conds.append(f"{is_sl_met}기본SL:{specific_sl_val}%")
+                                is_tp_met = "✅" if diag_pl_rt >= safe_float(specific_tp_val) else ""
+                                is_sl_met = "✅" if diag_pl_rt <= safe_float(specific_sl_val) else ""
+                                conds.append(f"{is_tp_met}● TP:{specific_tp_val}%")
+                                conds.append(f"{is_sl_met}● SL:{specific_sl_val}%")
                             else:
-                                # [진입 후] 불타기 전용 매도 룰 표시
-                                # [v5.0.8 Fix] 트레일링 스톱 등 불타기 룰이 활성화된 경우만 표시, 아니면 기본 TP/SL의 불타기 버전 표시
+                                # [진입 후] 불타기 전용 매도 룰 표시 (텍스트 간소화 및 감시 도트 도입)
                                 if b_ts_en:
-                                    drop = info.get('peak_pl_rt', 0.0) - diag_pl_rt
-                                    is_met = "✅" if (info.get('peak_pl_rt', 0.0) >= 0.5 and drop >= b_ts_val) else ""
-                                    conds.append(f"{is_met}불타기TS:{b_ts_val}(▼{drop:.1f})")
+                                    peak_val = safe_float(info.get('peak_pl_rt', 0.0))
+                                    drop = peak_val - diag_pl_rt
+                                    is_mon = "● " if peak_val >= b_ts_start else ""
+                                    is_met = "✅" if (peak_val >= b_ts_start and drop >= b_ts_val) else ""
+                                    conds.append(f"{is_met}{is_mon}TS:{b_ts_val}(▼{drop:.1f})")
                                 if b_pres_en:
+                                    is_mon = "● " if peak_rt >= b_pres_trig else ""
                                     is_met = "✅" if peak_rt >= b_pres_trig and diag_pl_rt <= b_pres_lim else ""
-                                    conds.append(f"{is_met}불타기P:{b_pres_trig}>{b_pres_lim}(C:{diag_pl_rt:.1f})")
+                                    conds.append(f"{is_met}{is_mon}P:{b_pres_trig}>{b_pres_lim}(C:{diag_pl_rt:.1f})")
                                 
                                 # TS나 보존이 꺼져있거나, 켜져있더라도 기본 불타기 TP/SL은 항상 가이드로 표시 (사용자 요청)
                                 if b_tp_en:
                                     is_met = "✅" if diag_pl_rt >= b_tp else ""
-                                    conds.append(f"{is_met}불타기TP:{b_tp}%")
+                                    conds.append(f"{is_met}● TP:{b_tp}%")
                                 if b_sl_en:
                                     is_met = "✅" if diag_pl_rt <= b_sl else ""
-                                    conds.append(f"{is_met}불타기SL:{b_sl}%")
+                                    conds.append(f"{is_met}● SL:{b_sl}%")
 
                             if not conds: conds.append("-")
                             sell_cond_str = " / ".join(conds)
@@ -479,7 +491,7 @@ def chk_n_sell(token=None, disabled_stocks=None):
                             ret_code = sell_result.get('return_code') if isinstance(sell_result, dict) else sell_result
                             if str(ret_code) == '0' or ret_code == 0:
                                 result_type = sell_reason if sell_reason else ("익절" if pl_rt > specific_tp else "손절")
-                                real_pl_rt = float(stock.get('pl_rt', 0)) if pl_rt == 999 else pl_rt
+                                real_pl_rt = safe_float(stock.get('pl_rt', 0)) if pl_rt == 999 else pl_rt
                                 
                                 message = f'🚀 {safe_stk_nm} {qty}주 {result_type} 완료 (수익율: {real_pl_rt:.2f}%)'
                                 print(f"<font color='#ffdf00'>{message}</font>")
@@ -502,8 +514,8 @@ def chk_n_sell(token=None, disabled_stocks=None):
                                     else:
                                         s_mode_db = '불타기' if bultagi_done else '랭크'
 
-                                    pnl_amt = float(stock.get('evlu_pfls_amt', 0))
-                                    tax_amt = float(stock.get('evlu_pftls_tax', 0))
+                                    pnl_amt = safe_float(stock.get('evlu_pfls_amt', 0))
+                                    tax_amt = safe_float(stock.get('evlu_pftls_tax', 0))
                                     session_logger.record_sell(
                                         stk_cd, safe_stk_nm, qty, current_price, 
                                         real_pl_rt, pnl_amt, tax=tax_amt, 
