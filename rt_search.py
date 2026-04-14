@@ -44,6 +44,9 @@ class RealTimeSearch:
         self.top_volume_set = set()
         self.ranking_task = None
         self.auth_error_detected = False # [v4.4.1] 인증 에러 감지 플래그 추가
+        
+        # [V5.3.3] VI 알람 예약 캐시 (중복 방지)
+        self._vi_alarm_keys = set()
 
     async def connect(self, token, acnt_no=None):
         try:
@@ -64,6 +67,37 @@ class RealTimeSearch:
             if not isinstance(message, str):
                 message = json.dumps(message)
             await self.websocket.send(message)
+
+    async def _schedule_vi_alarm(self, jmcode, name, trigger_time):
+        """[V5.3.3] VI 해제 10초 전 알람 예약 및 실행 (110초 대기)"""
+        alarm_key = f"{jmcode}_{trigger_time}"
+        if alarm_key in self._vi_alarm_keys:
+            return
+        
+        self._vi_alarm_keys.add(alarm_key)
+        
+        # [진단] 알람 예약 로그
+        print(f"⏰ <font color='#f1c40f'><b>[알람예약]</b> {name}({jmcode}) VI 해제 10초 전 알람 예약됨 ({trigger_time} 발동)</font>")
+        
+        # 110초 대기 (표준 120초 VI - 10초 버퍼)
+        await asyncio.sleep(110)
+        
+        try:
+            from check_n_buy import ACCOUNT_CACHE, say_text
+            # 알람 시점에 아직 보유 중인지 최종 확인
+            if jmcode in ACCOUNT_CACHE['holdings']:
+                alert_msg = f"{name} VI 해제 10초 전입니다."
+                say_text(alert_msg)
+                print(f"📢 <font color='#f1c40f'><b>[VI알람]</b> {alert_msg}</font>")
+                tel_send(f"🔔 [VI알람] {alert_msg}")
+            else:
+                print(f"ℹ️ <font color='#888888'>[알람취소] {name}({jmcode}) 매도 완료되어 VI 알람을 취소합니다.</font>")
+        except Exception as e:
+            print(f"⚠️ VI 알람 실행 실패: {e}")
+        finally:
+            # 5분 후 캐시에서 제거 (다음 VI를 위해)
+            await asyncio.sleep(300)
+            self._vi_alarm_keys.discard(alarm_key)
 
     async def receive_messages(self):
         """인터럽트형 고속 수신 처리"""
@@ -304,8 +338,6 @@ class RealTimeSearch:
                                 # [v5.1.33] 전역 VI 캐시 업데이트 (매수 차단 필터용)
                                 update_vi_cache(jmcode, vi_status)
 
-                                if not _passes_vi_filter(s_name, vi_price, vi_type, jmcode): continue
-
                                 if vi_status:
                                     status_map = {'1': '발동', '2': '해제', '3': '중지', '4': '재개'}
                                     st_txt = status_map.get(vi_status, vi_status)
@@ -320,13 +352,18 @@ class RealTimeSearch:
                                     raw_sample = f" <font color='#888888'>(9068:{vi_status}{detail_info})</font>"
                                     print(f"📡 <font color='#f1c40f'><b>{tag}</b> {s_name} 상태: {st_txt}</font>{raw_sample}")
 
-                                if get_setting('bultagi_turbo_vi', False):
+                                    # [V5.3.4] 보유 종목 알람은 전략 필터링과 무관하게 최우선 실행 🚀
                                     if vi_status == '1':
                                         from check_n_buy import ACCOUNT_CACHE
                                         target_code = str(jmcode).strip()
                                         if target_code in ACCOUNT_CACHE['holdings']:
-                                            print(f"📡 <font color='#f1c40f'><b>[VI인식]</b> {s_name} ({target_code}) 보유 확인! (110초 후 알람 예약)</font>")
-                                    elif vi_status in ['2', '4']:
+                                            asyncio.create_task(self._schedule_vi_alarm(target_code, s_name, vi_time))
+
+                                if not _passes_vi_filter(s_name, vi_price, vi_type, jmcode): continue
+
+                                # [Turbo VI] 자동 추매 로직 (설정 및 필터 통과 시에만)
+                                if get_setting('bultagi_turbo_vi', False):
+                                    if vi_status in ['2', '4']:
                                         s_name = values.get('302', jmcode)
                                         print(f"🚀 <font color='#00e5ff'><b>[Turbo VI 감지]</b> {s_name} ({jmcode}) {vi_type_txt} VI 해제 신호 발생!</font>")
                                         from check_n_buy import chk_n_buy

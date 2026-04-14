@@ -783,19 +783,44 @@ class BultagiSettingsDialog(QDialog):
         morning_vbox.addSpacing(10); common_form = QFormLayout(); common_form.setSpacing(10)
         self.chk_morning_ai = QCheckBox(" 🤖 AI 뉴스 스나이퍼 호재 판정 시에만 진입 (공통)")
         self.chk_morning_a = QCheckBox(" 🚀 A전략 활성화"); self.chk_morning_b = QCheckBox(" 🎯 B전략 활성화 (시가 재돌파)")
-        self.chk_morning_c = QCheckBox(" ⚡ C전략 활성화 (1분봉 고가 돌파)"); self.chk_morning_d = QCheckBox(" 🔥 D전략 활성화 (초광속 거래량 급증)")
+        self.chk_morning_c = QCheckBox(" ⚡ C전략 활성화 (1분봉 고가 돌파)")
 
         # [v1.7.6] 전략별 상세 로직 툴팁 복구
         self.chk_morning_a.setToolTip("<b>[전략 A: 예상 체결량 상위]</b><br>장 시작 전 예상 체결량이 높은 종목을 스캔하여,<br>설정된 갭(Gap) 범위 내일 때 9시 정각 시장가로 진입합니다.")
         self.chk_morning_b.setToolTip("<b>[전략 B: 시가 재돌파]</b><br>시가 형성 후 일시적으로 하락(-0.5% 이하)했다가,<br>다시 시가(+0.3%)를 돌파하며 회복하는 강한 흐름을 공략합니다.")
         self.chk_morning_c.setToolTip("<b>[전략 C: 1분봉 고가 돌파]</b><br>장 시작 후 첫 1분(09:00~09:01)의 고점을 기록한 뒤,<br>이 고점을 다시 돌파할 때의 탄력을 활용해 진입합니다.")
-        self.chk_morning_d.setToolTip("<b>[전략 D: 거래량 급증 포착]</b><br>장 초반(09:10까지) 거래량이 평소 대비 10배 이상<br>폭발적으로 수급이 쏠리는 종목을 실시간 감지하여 진입합니다.")
+        # [V5.3.1] 전략 D(거래량 급증) 영구 제거 (사용자 요청 ❤️)
 
-        for chk in [self.chk_morning_a, self.chk_morning_b, self.chk_morning_c, self.chk_morning_d, self.chk_morning_ai]:
+        for chk in [self.chk_morning_a, self.chk_morning_b, self.chk_morning_c, self.chk_morning_ai]:
             chk.setStyleSheet("font-weight: bold; font-size: 13px; padding: 2px;")
         
-        common_form.addRow(self.chk_morning_ai); common_form.addRow(self.chk_morning_a); common_form.addRow(self.chk_morning_b); common_form.addRow(self.chk_morning_c); common_form.addRow(self.chk_morning_d)
+        common_form.addRow(self.chk_morning_ai); common_form.addRow(self.chk_morning_a); common_form.addRow(self.chk_morning_b); common_form.addRow(self.chk_morning_c)
         morning_vbox.addLayout(common_form)
+        
+        # 🎯 [🎯 AI Morning Sniper (추천 매수) 상세 설정] [V5.3.0 신설]
+        group_ai = QGroupBox("🎯 AI Morning Sniper (AI 자동 추천 매수)")
+        group_ai.setStyleSheet("QGroupBox { font-weight: bold; color: #f1c40f; border: 1px solid #444; border-radius: 8px; margin-top: 5px; padding-top: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
+        ai_layout = QFormLayout()
+        ai_layout.setContentsMargins(15, 10, 15, 10)
+        
+        self.chk_morning_ai_selection = QCheckBox(" AI 자동 추천 매수 기능 활성화")
+        self.chk_morning_ai_selection.setStyleSheet("font-weight: bold; color: #f1c40f;")
+        
+        self.spin_morning_ai_count = QSpinBox()
+        self.spin_morning_ai_count.setRange(1, 10)
+        self.spin_morning_ai_count.setValue(3)
+        self.spin_morning_ai_count.setFixedWidth(80)
+        self.spin_morning_ai_count.setSuffix(" 종목")
+        
+        self.chk_morning_ai_news = QCheckBox(" AI 뉴스 스나이퍼 분석 데이터 강제 합산")
+        self.chk_morning_ai_news.setStyleSheet("font-size: 11px; color: #aaaaaa;")
+        
+        ai_layout.addRow(self.chk_morning_ai_selection)
+        ai_layout.addRow("🏆 추천 타격 수:", self.spin_morning_ai_count)
+        ai_layout.addRow(self.chk_morning_ai_news)
+        
+        group_ai.setLayout(ai_layout)
+        morning_vbox.addWidget(group_ai)
 
         morning_vbox.addStretch()
 
@@ -904,6 +929,14 @@ class BultagiSettingsDialog(QDialog):
 
         line_turbo = QFrame(); line_turbo.setFrameShape(QFrame.Shape.HLine); line_turbo.setStyleSheet("background-color: #444;")
         fire_form.addRow(line_turbo)
+
+        # [V5.3.7/V5.3.8] 불타기 가격 상한선 가드 (Global) - UI 통일 (직접 입력형)
+        self.chk_bultagi_limit = QCheckBox(" 현재가 N% 이상 시 불타기 매수 금지")
+        self.chk_bultagi_limit.setStyleSheet("font-weight: bold; color: #ff6b6b;")
+        self.input_bultagi_limit = QLineEdit()
+        self.input_bultagi_limit.setFixedWidth(80); self.input_bultagi_limit.setPlaceholderText("22.0")
+        h_limit = QHBoxLayout(); h_limit.addWidget(self.chk_bultagi_limit); h_limit.addStretch(); h_limit.addWidget(self.input_bultagi_limit); h_limit.addWidget(QLabel("%"))
+        fire_form.addRow(h_limit)
 
         fire_vbox.addLayout(fire_form)
         fire_vbox.addStretch()
@@ -1062,6 +1095,16 @@ class BultagiSettingsDialog(QDialog):
         vi_block_layout.addWidget(self.chk_block_buy_vi)
         group_vi_block.setLayout(vi_block_layout)
         etc_vbox.addWidget(group_vi_block)
+
+        # 5. 📡 텔레그램 알림 설정 (Global) [V5.3.5 신설] 🚀
+        group_tel = QGroupBox("📡 텔레그램 알림 설정 (Global)")
+        group_tel.setStyleSheet("QGroupBox { font-weight: bold; color: #00e5ff; border: 1px solid #444; border-radius: 8px; margin-top: 10px; padding-top: 15px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
+        tel_layout = QVBoxLayout()
+        self.chk_tel_on = QCheckBox(" 텔레그램 메시지 발송 활성화")
+        self.chk_tel_on.setStyleSheet("font-weight: bold; color: #00e5ff;")
+        tel_layout.addWidget(self.chk_tel_on)
+        group_tel.setLayout(tel_layout)
+        etc_vbox.addWidget(group_tel)
 
         etc_vbox.addLayout(btn_layout_etc)
         etc_vbox.addStretch()
@@ -1236,6 +1279,9 @@ class BultagiSettingsDialog(QDialog):
             # [신규 v5.1.33] VI 발동 중 매수 금지 설정 로드
             self.chk_block_buy_vi.setChecked(root.get('block_buy_during_vi', False))
 
+            # [신규 v5.3.5] 텔레그램 발송 설정 로드 📡
+            self.chk_tel_on.setChecked(root.get('tel_on', True))
+
             # [신규 v6.9.5] Turbo VI 로드
             self.chk_turbo_vi.setChecked(target.get('bultagi_turbo_vi', False))
             turbo_type = target.get('bultagi_turbo_vi_type', 'current') # 기본 현재가
@@ -1273,13 +1319,17 @@ class BultagiSettingsDialog(QDialog):
                 self.spin_morning_break.setValue(float(target.get('morning_break_rt', 2.0)))
                 self.spin_morning_tp.setValue(float(target.get('morning_tp', 2.0)))
                 self.spin_morning_sl.setValue(float(target.get('morning_sl', -1.5)))
+
+                # [신규 v5.3.7/v5.3.8] 불타기 가격 상한선 로드 (QLineEdit 방식)
+                self.chk_bultagi_limit.setChecked(root.get('bultagi_limit_enabled', True))
+                self.input_bultagi_limit.setText(str(root.get('bultagi_limit_rt', 22.0)))
                 self.chk_morning_ai.setChecked(target.get('morning_ai_filter', True))
                 
                 # [신규] 시초가 전략별 활성화 플래그 로드 (A~D)
                 self.chk_morning_a.setChecked(target.get('morning_bet_use_a', True))
                 self.chk_morning_b.setChecked(target.get('morning_bet_use_b', False))
                 self.chk_morning_c.setChecked(target.get('morning_bet_use_c', False))
-                self.chk_morning_d.setChecked(target.get('morning_bet_use_d', False))
+                # self.chk_morning_d 영구 제거
 
                 # [v2.2.0] Ranking Scout 로드 (프로필 연동)
                 self.chk_rank_scout.setChecked(target.get('rank_scout_enabled', False))
@@ -1300,8 +1350,10 @@ class BultagiSettingsDialog(QDialog):
                 # API 코드(qry_tp): 5:30s, 1:1m, 2:10m, 3:1h, 4:day
                 # UI 인덱스: 0:30s, 1:1m, 2:10m, 3:1h, 4:day
                 idx_int = {30: 0, 60: 1, 600: 2, 3600: 3, 0: 4}.get(int_val, 0)
-                self.spin_rank_interval.setCurrentIndex(idx_int)
-                self.spin_rank_interval.setCurrentIndex(idx_int)
+                # [V5.3.0] AI Morning Sniper 로드
+                self.chk_morning_ai_selection.setChecked(target.get('morning_ai_selection_enabled', False))
+                self.spin_morning_ai_count.setValue(int(target.get('morning_ai_count', 3)))
+                self.chk_morning_ai_news.setChecked(target.get('morning_ai_use_news', True))
 
             except Exception as e2:
                 print(f"⚠️ Perspective/Morning Settings Load Error: {e2}")
@@ -1377,6 +1429,8 @@ class BultagiSettingsDialog(QDialog):
                 'kosdaq_stop_threshold': self.spin_kosdaq_threshold.value(),
                 # [신규 v5.1.33] VI 발동 중 매수 금지 설정 저장 (Root 레벨)
                 'block_buy_during_vi': self.chk_block_buy_vi.isChecked(),
+                # [신규 v5.3.5] 텔레그램 발송 설정 저장 📡
+                'tel_on': self.chk_tel_on.isChecked(),
                 'bultagi_turbo_vi': self.chk_turbo_vi.isChecked(),
                 'bultagi_turbo_vi_type': 'market' if self.combo_turbo_vi_type.currentIndex() == 0 else 'current',
                 'bultagi_turbo_vi_min_price': str(self.input_turbo_min_price.value()),
@@ -1405,14 +1459,20 @@ class BultagiSettingsDialog(QDialog):
                 'morning_bet_use_a': self.chk_morning_a.isChecked(),
                 'morning_bet_use_b': self.chk_morning_b.isChecked(),
                 'morning_bet_use_c': self.chk_morning_c.isChecked(),
-                'morning_bet_use_d': self.chk_morning_d.isChecked(),
                 # [v2.2.0 Ranking Scout 저장]
                 'rank_scout_enabled': self.chk_rank_scout.isChecked(),
                 'rank_scout_new_threshold': [5, 10, 15, 20][self.spin_rank_new.currentIndex()],
                 'rank_scout_jump_threshold': [5, 10, 15, 20][self.spin_rank_jump.currentIndex()],
                 'rank_scout_consecutive_count': [0, 3, 4, 5][self.spin_rank_consecutive.currentIndex()],
                 'rank_scout_interval': [30, 60, 600, 3600, 0][self.spin_rank_interval.currentIndex()],
-                'rank_scout_qry_tp': ['5', '1', '2', '3', '4'][self.spin_rank_interval.currentIndex()]
+                'rank_scout_qry_tp': ['5', '1', '2', '3', '4'][self.spin_rank_interval.currentIndex()],
+                # [V5.3.0] AI Morning Sniper 저장
+                'morning_ai_selection_enabled': self.chk_morning_ai_selection.isChecked(),
+                'morning_ai_count': self.spin_morning_ai_count.value(),
+                'morning_ai_use_news': self.chk_morning_ai_news.isChecked(),
+                # [신규 v5.3.7/v5.3.8] 불타기 가격 상한선 저장 (QLineEdit 방식)
+                'bultagi_limit_enabled': self.chk_bultagi_limit.isChecked(),
+                'bultagi_limit_rt': float(self.input_bultagi_limit.text().replace('%', '').strip() or 22.0)
             }
             
             # Update root
@@ -2607,7 +2667,7 @@ class ProfitGraphWidget(QWidget):
                 if last_pnl > 0:
                     text_color = '#ff4757'  # Red for profit
                 elif last_pnl < 0:
-                    text_color = '#3742fa'  # Blue for loss
+                    text_color = '#00e5ff'  # [V5.3.7] Bright Cyan for loss (기존 #3742fa 대비 시인성 강화)
                 else:
                     text_color = '#f1c40f'  # Yellow for zero
                     
@@ -3178,7 +3238,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.version = "V5.2.3" # [V5.2.3] Ranking Scout 순위 급상승 감지 사각지대 해결 및 지능 고도화 🚑🔎🚀
+        self.version = "V5.3.8" # [V5.3.8] 불타기 상한선 UI 개선 (직접 입력형 전환) 및 레이아웃 최적화 🛠️🎨✨
         self.setWindowTitle(f"KipoStock AI Dashboard [{self.version}] - Advanced Fortress")
         self.is_closing = False # [신규] 프로그램 종료 중임을 나타내는 플래그
         self.is_initialized = False # [Fix v4.3.0] 초기 설정 로드 완료 전 자동 저장 차단 플래그 🚀

@@ -1,7 +1,7 @@
 # morning_bet_engine.py
-# Kipo_Stock_Now Morning Bet Engine (V5.1.31)
+# Kipo_Stock_Now Morning Bet Engine (V5.3.2)
 # -------------------------------------------------------------
-# - 2026-04-13: [V5.1.31] 매도 반응 속도 최적화 패치 (Throttling 1s -> 0.5s)
+# - 2026-04-14: [V5.3.2] 터르 마 시서 명칭/시초가 비동기 복구 큐 시스텐 구축
 # - 2026-04-13: [V5.1.30] 아침 정밀 타격 데이터 교정 및 UI 가속화 패치
 #   1. [Fix] KIS API 가격부호 필드(843, 907) 매핑 오류 수정 (4.5M% 방지)
 #   2. [Standard] MorningBet(X) 태그 표준화 (매도 엔진 연동 무결성)
@@ -56,6 +56,14 @@ class MorningBetEngine:
         # [진단] 실시간 데이터 수신 횟수 카운터
         self._rt_recv_count = 0
         self._rt_last_log_time = 0
+        
+        # [V5.2.4] 진단 리포트 발송 여부 플래그
+        self._diag_830_reported = False
+        self._readiness_850_reported = False
+        self._ai_sniper_fired = False # [V5.3.0]
+        
+        # [V5.3.2] 명칭/시초가 누락 종목 비동기 복구 큐
+        self._recovery_queue = set()
 
     def load_parameters(self):
         """UI에서 설정한 시초가 파라미터 로드 (실시간 갱신 가능)"""
@@ -71,6 +79,11 @@ class MorningBetEngine:
         self.gap_max = float(get_setting('morning_gap_max', 10.0) or 10.0)
         self.morning_time_limit = get_setting('morning_time', '09:10')
         self.max_morning_stocks = 6
+        
+        # [V5.3.0] AI Morning Sniper 파라미터
+        self.ai_selection_enabled = get_setting('morning_ai_selection_enabled', False)
+        self.ai_count = int(get_setting('morning_ai_count', 3))
+        self.ai_use_news = get_setting('morning_ai_use_news', True)
 
         # [진단] 파라미터 로드 시 상태를 상세 로그에 기록
         _dlog(f"[파라미터 로드] enabled={self.enabled} | A={self.use_a}, B={self.use_b}, C={self.use_c}, D={self.use_d} | GAP={self.gap_min}~{self.gap_max}% | 시간제한={self.morning_time_limit}")
@@ -103,6 +116,70 @@ class MorningBetEngine:
             end_min = 9 * 60 + 10 # 기본값 09:10
             
         return start_min <= cur_min <= end_min
+
+    async def diagnose_readiness(self, silent=False):
+        """[V5.2.4] 시초가 매매 준비 상태를 정밀 진단하여 결과를 반환/로깅"""
+        diag_results = []
+        is_all_ok = True
+        
+        # 1. API 연결 및 토큰 상태 점검
+        from login import fn_au10001 as get_token
+        try:
+            token = get_token()
+            if not token:
+                diag_results.append("<span style='color:#ff4757;'>❌ KIS API 토큰 발급 실패 (연결 확인 필요)</span>")
+                is_all_ok = False
+            else:
+                diag_results.append("<span style='color:#2ed573;'>✅ KIS API 연결 상태 정상</span>")
+        except:
+            diag_results.append("<span style='color:#ff4757;'>❌ KIS API 통신 오류 발생</span>")
+            is_all_ok = False
+
+        # 2. 계좌 정보 수신 가능 여부 (잔고 체크)
+        from check_n_buy import ACCOUNT_CACHE
+        if ACCOUNT_CACHE['balance'] < 1000:
+            diag_results.append("<span style='color:#ffa502;'>⚠️ 현재 예수금이 1,000원 미만입니다. (매매 불가 가능성)</span>")
+            # 이건 경고일 뿐 치명적 에러는 아님
+        else:
+            diag_results.append(f"<span style='color:#2ed573;'>✅ 예수금 상태 확인 완료 ({ACCOUNT_CACHE['balance']:,}원)</span>")
+
+        # 3. 설정값 논리 점검
+        if self.gap_min >= self.gap_max:
+            diag_results.append(f"<span style='color:#ff4757;'>❌ 설정 오류: Gap 최소값({self.gap_min}%)이 최대값({self.gap_max}%)보다 크거나 같습니다.</span>")
+            is_all_ok = False
+        
+        # 4. 전략 활성화 상태 요약
+        active_strats = []
+        if self.use_a: active_strats.append("A(Scan)")
+        if self.use_b: active_strats.append("B(시가재돌파)")
+        if self.use_c: active_strats.append("C(1분봉고가)")
+        if self.use_d: active_strats.append("D(거래량폭증)")
+        
+        if not active_strats:
+            diag_results.append("<span style='color:#ffa502;'>⚠️ 활성화된 시초가 전략이 없습니다.</span>")
+        else:
+            diag_results.append(f"<span style='color:#00e5ff;'>ℹ️ 활성 전략: {', '.join(active_strats)}</span>")
+
+        # 5. Ranking Scout 캐시 동기화 여부
+        if self.use_a and hasattr(self.api, 'rt_search'):
+            if not self.api.rt_search.ranking_cache:
+                diag_results.append("<span style='color:#ffa502;'>⚠️ Ranking Scout 캐시가 비어있습니다. (08:59:50에 자동 동기화 예정)</span>")
+
+        # 결과 출력
+        if not silent:
+            header = "📋 <b style='color:#ffffff;'>[Morning-DIAG] 시초가 정밀 진단 결과</b>"
+            _dlog(header)
+            for res in diag_results:
+                _dlog(f"  > {res}")
+            
+            if is_all_ok and self.enabled:
+                _dlog("<b style='color:#2ed573;'>✨ 종합 판정: 출격 준비 완료! 'Perfect'</b>")
+            elif not self.enabled:
+                _dlog("<b style='color:#ffa502;'>⚠️ 종합 판정: 엔진 비활성화 상태 (점검만 완료)</b>")
+            else:
+                _dlog("<b style='color:#ff4757;'>❌ 종합 판정: 설정 또는 연결 확인이 필요합니다!</b>")
+        
+        return is_all_ok
 
     async def strategy_a_routine(self):
         """[A전략] 예상 체결량 상위 스캔 및 9시 정각 선점"""
@@ -144,13 +221,33 @@ class MorningBetEngine:
                     
                     synced_last_min = True
 
-                # 0-1. [V5.1.32] 08:50:00 출격 준비 완료 리포트 (Pre-flight Check)
-                if now.hour == 8 and now.minute == 50 and now.second <= 5 and not readiness_reported:
-                    _dlog("🚀 <b style='color:#00e5ff;'>[Morning-Readiness]</b> 시초가 엔진 출격 준비 완료!")
+                # 0-1. [V5.2.4] 08:30:00 API 사전 점검 리포트
+                if now.hour == 8 and now.minute == 30 and now.second <= 5 and not self._diag_830_reported:
+                    _dlog("🔍 <b style='color:#f1c40f;'>[Morning-Early-Check]</b> 08:30 API 사전 점검을 시작합니다.")
+                    await self.diagnose_readiness()
+                    self._diag_830_reported = True
+
+                # 0-2. [V5.1.32/V5.2.4] 08:50:00 출격 준비 완료 리포트 (Pre-flight Check)
+                if now.hour == 8 and now.minute == 50 and now.second <= 5 and not self._readiness_850_reported:
+                    # [V5.2.4] 자동 활성화 로직 추가 (사용자 편의성)
+                    if not self.enabled:
+                        _dlog("🤖 <b style='color:#00e5ff;'>[Morning-AutoSet]</b> 엔진이 비활성화 상태이므로 자동으로 활성화합니다.")
+                        from get_setting import get_setting
+                        profile_id = get_setting('current_profile_index', '1')
+                        # [v5.2.4] 전역 설정 업데이트 호출 (구조상 chat_command 경유 대신 직접 로드)
+                        self.enabled = True
+                        # 실제 설정 파일에도 반영 (지속성)
+                        from chat_command import ChatCommand
+                        cc = ChatCommand()
+                        cc.update_setting('morning_bet_enabled', True)
+                        
+                    _dlog("🚀 <b style='color:#00e5ff;'>[Morning-Readiness]</b> 08:50 최종 출격 준비 완료 점검!")
+                    await self.diagnose_readiness()
+                    
                     q_mode = get_setting('global_strategy_mode', 'qty')
                     q_val = get_setting('qty_val' if q_mode == 'qty' else 'amt_val', '1')
-                    _dlog(f"📋 <b style='color:#aaaaaa;'>설정 요약:</b> GAP {self.gap_min}~{self.gap_max}% | 매수기준: {q_mode}({q_val}) | 최대 {self.max_morning_stocks}종목")
-                    readiness_reported = True
+                    _dlog(f"📋 <b style='color:#aaaaaa;'>주문 요약:</b> GAP {self.gap_min}~{self.gap_max}% | {q_mode}({q_val}) | 최대 {self.max_morning_stocks}종목")
+                    self._readiness_850_reported = True
 
                 # 1. [v5.1.10] 스캔 타임슬롯 확장: 08:55 ~ 08:59 사이에 스캔 수행
                 if now.hour == 8 and 55 <= now.minute <= 58 and not scanned_today:
@@ -216,6 +313,76 @@ class MorningBetEngine:
                             _dlog(f"🔍 [A-Raw] API 원문 샘플: {str(raw_res)[:200]}...")
                         except: pass
                         await asyncio.sleep(2) # 재시도 주기 단축 (4s -> 2s)
+
+                # 1-1. [V5.3.0] 08:56:00 AI Morning Sniper 가동 (AI 최종 선별 및 선제 타격)
+                if now.hour == 8 and now.minute == 56 and now.second <= 5 and self.ai_selection_enabled and not self._ai_sniper_fired:
+                    if self.candidate_stocks:
+                        _dlog("🎯 <b style='color:#f1c40f;'>[AI-Morning-Sniper]</b> 08:56 AI 최종 선별을 시작합니다!")
+                        from gemini_bot import evaluate_morning_champions
+                        from stock_info import get_extended_stock_data
+                        from news_sniper import fetch_latest_news
+                        import json
+
+                        # 상위 10개 후보에 대해 정밀 데이터 수집
+                        eval_list = []
+                        for s in self.candidate_stocks[:12]:
+                            code = s['code']
+                            name = s.get('name', '')
+                            _dlog(f"🔎 {name}({code}) 정밀 분석 데이터 수집 중...")
+                            
+                            # A. 호가 잔량 및 체결강도
+                            token = get_token()
+                            ext = await asyncio.to_thread(get_extended_stock_data, code, token)
+                            ask_qty = ext.get('total_ask_qty', 0)
+                            bid_qty = ext.get('total_bid_qty', 0)
+                            ob_ratio = ask_qty / bid_qty if bid_qty > 0 else 0
+                            
+                            # B. 뉴스 분석 (옵션)
+                            news_summary = ""
+                            if self.ai_use_news:
+                                news_list = await asyncio.to_thread(fetch_latest_news, name, 2)
+                                if news_list:
+                                    news_summary = " | ".join([n['title'] for n in news_list])
+
+                            eval_list.append({
+                                "code": code,
+                                "name": name,
+                                "gap": s['expect_rt'],
+                                "volume": s['expect_vol'],
+                                "ask_bid_ratio": round(ob_ratio, 2),
+                                "news": news_summary
+                            })
+
+                        # Gemini에게 평가 요청
+                        _dlog("🧠 AI에게 챔피언 선별 요청 중 (Gemini Thinking...)")
+                        ai_res_raw = await asyncio.to_thread(evaluate_morning_champions, json.dumps(eval_list, ensure_ascii=False))
+                        
+                        try:
+                            champions = json.loads(ai_res_raw)
+                            if champions:
+                                _dlog(f"✨ <b style='color:#2ed573;'>[AI Selection]</b> 오늘의 최정예 챔피언 {len(champions)}종목이 선정되었습니다!")
+                                buy_limit = self.ai_count
+                                for idx, cp in enumerate(champions[:buy_limit]):
+                                    cp_code = cp['code']
+                                    cp_name = cp.get('name', cp_code)
+                                    reason = cp.get('reason', 'AI가 선정한 강력 후보!')
+                                    
+                                    _dlog(f"  <b style='color:#ffffff;'>[{idx+1}] {cp_name}</b> ({cp_code})")
+                                    _dlog(f"  └ <i style='color:#aaaaaa;'>{reason}</i>")
+                                    
+                                    # 동시호가 시장가 타격 (배팅 금액은 1주/씨앗매매 고정)
+                                    # tag를 별도로 부여하여 A전략과 구분
+                                    self.execute_bet(cp_code, "AI_Sniper", tag=f"MorningBet(AI)")
+                                
+                                _dlog(f"🚀 AI 추천 {min(len(champions), buy_limit)}종목 동시호가 주문 발송 완료!")
+                            else:
+                                _dlog("🤔 AI가 마땅한 후보를 찾지 못했습니다. (관망)")
+                        except Exception as je:
+                            _dlog(f"❌ AI 응답 파싱 실패: {je}")
+                    else:
+                        _dlog("⚠️ AI Sniper: 후보 종목이 없어 분석을 취소합니다.")
+                    
+                    self._ai_sniper_fired = True
                 
                 # 2. 09:00:00 정각에 후보 종목들 시장가 타격 (30초 윈도우로 확대 [V5.1.32])
                 if now.hour == 9 and now.minute == 0 and now.second <= 30 and not bet_fired:
@@ -232,15 +399,7 @@ class MorningBetEngine:
                         code = stock['code']
                         expect_rt = stock['expect_rt']
                         name = stock.get('name', code)
-                        
                         if self.gap_min <= expect_rt <= self.gap_max:
-                            if len(self.bet_history) >= self.max_morning_stocks:
-                                _dlog(f"⚠️ [A-Reason] 최대 매수 종목 수 도달({self.max_morning_stocks}개) - {name} 차단")
-                                break
-                            if code in self.bet_history:
-                                _dlog(f"⚠️ [A-Reason] {name}({code}) 이미 매수 이력 있음 - 차단")
-                                continue
-                            _dlog(f"🚀 [A-Strike] {name}({code}) 타격! (예상등락={expect_rt:.1f}%)")
                             # [V5.1.30] chk_n_sell 인식을 위해 전용 이름표(MorningBet)로 매수
                             self.execute_bet(code, "A_Scan", tag=f"MorningBet(A)")
                             fired_count += 1
@@ -262,6 +421,7 @@ class MorningBetEngine:
                     scanned_today = False
                     synced_last_min = False
                     bet_fired = False
+                    self._ai_sniper_fired = False # [V5.3.0]
                     self.candidate_stocks = []
                     
             except Exception as e:
@@ -473,7 +633,9 @@ class MorningBetEngine:
                     if self.last_rt_data:
                         sample = list(self.last_rt_data.items())[:3]
                         for code, d in sample:
-                            _dlog(f"  └ 샘플: {code} price={d.get('price',0):,} open={d.get('open',0):,} vol_rate={d.get('vol_rate',0):.2f}")
+                            _dlog(f"  └ 샘플: {code} name={d.get('name','알수없음')} price={d.get('price',0):,} open={d.get('open',0):,}")
+                        if self._recovery_queue:
+                            _dlog(f"  └ 🔧 [복구큐] 대기 종목: {len(self._recovery_queue)}개 ({', '.join(list(self._recovery_queue)[:5])})")
                     else:
                         _dlog("  └ ⚠️ last_rt_data가 비어있음! on_realtime_data가 호출되지 않고 있음 (연결 or 콜백 문제)")
                         
@@ -481,8 +643,75 @@ class MorningBetEngine:
                 _dlog(f"❌ [RT-Monitor 예외] {e}")
             await asyncio.sleep(30)
 
+    async def _resolve_data_routine(self):
+        """[V5.3.2] 명칭/시초가 누락 종목을 비동기 백그라운드에서 자동 복구하는 전담반"""
+        _dlog("[V5.3.2] 데이터 복구 전담반 시작됨 (명칭/시초가 비동기 보충)")
+        while self.is_running:
+            try:
+                await asyncio.sleep(4)  # 4초마다 복구 배치 실행
+                if not self._recovery_queue:
+                    continue
+
+                # 큐에서 최대 5개씩 처리 (API 쿼터 과부하 방지)
+                batch = list(self._recovery_queue)[:5]
+                
+                from login import fn_au10001 as get_token
+                from stock_info import get_morning_data
+                token = await asyncio.to_thread(get_token)
+
+                for code in batch:
+                    try:
+                        cached = self.last_rt_data.get(code, {})
+                        needs_name = (cached.get('name', '알수없음') in ('알수없음', '', code))
+                        needs_open = not cached.get('open', 0)
+
+                        if not (needs_name or needs_open):
+                            # 이미 다 채워졌으면 큐에서 제거
+                            self._recovery_queue.discard(code)
+                            continue
+
+                        # API 조회 (동기 호출을 스레드에서 실행 → 이벤트 루프 블로킹 방지)
+                        s_name, open_p, _ = await asyncio.to_thread(get_morning_data, code, token)
+                        
+                        # 결과 반영
+                        updated = False
+                        if code in self.last_rt_data:
+                            if needs_name and s_name:
+                                self.last_rt_data[code]['name'] = s_name
+                                # ACCOUNT_CACHE에도 캐싱
+                                try:
+                                    from check_n_buy import ACCOUNT_CACHE
+                                    ACCOUNT_CACHE['names'][code] = s_name
+                                except: pass
+                                updated = True
+
+                            if needs_open and open_p:
+                                self.last_rt_data[code]['open'] = open_p
+                                updated = True
+
+                            if updated:
+                                _dlog(f"✅ [V5.3.2] {s_name or code} 데이터 복구 완료! (명칭={s_name}, 시초가={open_p:,}원)")
+
+                            # 완전히 복구된 경우 큐에서 제거
+                            still_needs_name = self.last_rt_data[code].get('name', '') in ('알수없음', '', code)
+                            still_needs_open = not self.last_rt_data[code].get('open', 0)
+                            if not still_needs_name and not still_needs_open:
+                                self._recovery_queue.discard(code)
+                        else:
+                            # last_rt_data에서 사라진 종목은 큐에서도 제거
+                            self._recovery_queue.discard(code)
+
+                    except Exception as e_inner:
+                        _dlog(f"⚠️ [V5.3.2] {code} 복구 실패: {e_inner}")
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                _dlog(f"❌ [V5.3.2 복구 전담반 예외] {e}")
+
     def on_realtime_data(self, data):
         """rt_search에서 실시간 체결(REAL) 데이터를 넘겨줄 때 호출"""
+
         if not self.is_running:
             return
             
@@ -550,6 +779,7 @@ class MorningBetEngine:
                             s_name = s.get('name')
                             if s_name: _dlog(f"[RT-Recovery] {jmcode} 종목명 누락 → 후보 데이터에서 복구 ({s_name})")
                             break
+
             if not s_name: s_name = "알수없음"
             
             norm_data = {
@@ -561,6 +791,10 @@ class MorningBetEngine:
             }
             self.last_rt_data[jmcode] = norm_data
             self._rt_recv_count += 1
+            
+            # [V5.3.2] 명칭 또는 시초가 누락 시 백그라운드 복구 큐에 등록 (비차단 방식)
+            if s_name == '알수없음' or not open_p:
+                self._recovery_queue.add(jmcode)
             
             # [v5.1.10] 후보 종목 여부 확인 (A전략 스캔 리스트 대조)
             is_candidate = jmcode in {s.get('code','') for s in self.candidate_stocks}
@@ -592,15 +826,19 @@ class MorningBetEngine:
         except Exception as e:
             _dlog(f"⚠️ [execute_bet] 지수체크 예외: {e}")
 
-        if "A_Scan" in strategy_name:
+        # [V5.3.1] 전략별 시간 제한 체크 (AI Sniper는 08:30~09:10 사이면 무조건 허용)
+        if "AI_Sniper" in strategy_name:
+            # 동시호가 시장가 발주를 위해 08:30 이후면 시간 체크 통과
+            if now.hour == 8 and now.minute >= 30:
+                in_limit = True
+            else:
+                in_limit = self.is_within_time_limit()
+        else:
             in_limit = self.is_within_time_limit()
-            _dlog(f"[execute_bet] A전략 시간 체크: is_within_time_limit={in_limit} ({now.strftime('%H:%M:%S')})")
-            if not in_limit: 
-                _dlog(f"⚠️ [execute_bet] A전략 시간 초과로 차단!")
-                return
-            if not self.is_within_time_limit():
-                _dlog(f"⚠️ [execute_bet] B/C/D전략 시간 범위 밖: {now.strftime('%H:%M:%S')} (제한:{self.morning_time_limit})")
-                return
+            
+        if not in_limit:
+            _dlog(f"⚠️ [execute_bet] {strategy_name} 시간 범위 밖으로 차단: {now.strftime('%H:%M:%S')} (제한:{self.morning_time_limit})")
+            return
         
         if len(self.bet_history) >= self.max_morning_stocks:
             _dlog(f"⚠️ [execute_bet] 최대 종목 수 도달 ({len(self.bet_history)}/{self.max_morning_stocks}) - 차단!")
@@ -609,17 +847,23 @@ class MorningBetEngine:
             _dlog(f"⚠️ [execute_bet] {jmcode} 이미 매수 이력 있음 - 중복 차단!")
             return
 
-        # [V5.1.17] 거래대금 순위 필터링 및 구체적 사유 로깅 (사용자 요청)
+        # [V5.1.17] 거래대금 순위 필터링 및 구체적 사유 로깅
         try:
-            from check_n_buy import TOP_VOLUME_RANK_CACHE, get_stock_name_safe
+            from check_n_buy import TOP_VOLUME_RANK_CACHE
             rank_limit_enabled = get_setting('morning_bet_rank_filter_enabled', True)
-            if rank_limit_enabled and TOP_VOLUME_RANK_CACHE:
+            
+            # [V5.3.1] AI 스나이퍼와 전략 A(장초반 1분)은 순환 필터 예외 처리 (공격적 진입 보장)
+            is_aggressive = ("AI_Sniper" in strategy_name) or ("A_Scan" in strategy_name and now.minute == 0)
+            
+            if rank_limit_enabled and not is_aggressive and TOP_VOLUME_RANK_CACHE:
                 if jmcode not in TOP_VOLUME_RANK_CACHE:
-                    _dlog(f"❌ <b style='color:#ff6b6b;'>[A-Reason]</b> {jmcode} 거래대금 순위 밖 필터링 (현재 순위 데이터 {len(TOP_VOLUME_RANK_CACHE)}개 내 없음)")
+                    _dlog(f"❌ <b style='color:#ff6b6b;'>[Skip-Reason]</b> {jmcode} 거래대금 순위 밖 필터링 (현재 순위 데이터 {len(TOP_VOLUME_RANK_CACHE)}개 내 없음)")
                     return
                 else:
                     rank_idx = TOP_VOLUME_RANK_CACHE.index(jmcode) + 1
-                    _dlog(f"✅ [A-Rank] {jmcode} 거래대금 순위 확인: {rank_idx}위 (통과)")
+                    _dlog(f"✅ [Rank-Check] {jmcode} 거래대금 순위 확인: {rank_idx}위 (통과)")
+            elif is_aggressive:
+                 _dlog(f"⚡ [Aggressive] {strategy_name} 전략: 순위 필터 우회 진격!")
         except Exception as re:
             _dlog(f"⚠️ [execute_bet] 순위 체크 예외: {re}")
             
@@ -638,8 +882,13 @@ class MorningBetEngine:
         
         self.bet_history.add(jmcode)
         
-        result = add_buy(jmcode, token=token, seq_name=f'MorningBet({strategy_name})', qty=q_val, source=tag, price_type='market')
-        _dlog(f"[execute_bet] add_buy 호출 결과: {result}")
+        # [V5.3.1] 실시간 데이터에 보관된 시초가 정보 추출
+        open_p = 0
+        if jmcode in self.last_rt_data:
+            open_p = self.last_rt_data[jmcode].get('open', 0)
+        
+        result = add_buy(jmcode, token=token, seq_name=f'MorningBet({strategy_name})', qty=q_val, source=tag, price_type='market', open_price=open_p)
+        _dlog(f"[execute_bet] add_buy 호출 결과: {result} (시초가:{open_p:,}원)")
 
     def start(self):
         """엔진 기동 (중복 실행 방지 기능 탑재)"""
@@ -660,8 +909,9 @@ class MorningBetEngine:
             self.tasks.append(asyncio.create_task(self.strategy_a_routine()))
             self.tasks.append(asyncio.create_task(self.strategy_b_routine()))
             self.tasks.append(asyncio.create_task(self.strategy_c_routine()))
-            self.tasks.append(asyncio.create_task(self.strategy_d_routine()))
+            # self.tasks.append(asyncio.create_task(self.strategy_d_routine())) # [V5.3.1] 전략 D(거래량 폭증) 영구 제거
             self.tasks.append(asyncio.create_task(self._rt_monitor_routine()))  # [진단 전용 태스크]
+            self.tasks.append(asyncio.create_task(self._resolve_data_routine()))  # [V5.3.2] 명칭/시초가 비동기 복구 전담반
             _dlog(f"[start] 총 {len(self.tasks)}개 태스크 생성 완료")
 
     def stop(self):
@@ -677,4 +927,5 @@ class MorningBetEngine:
         self.stocks_data.clear()
         self.last_rt_data.clear()
         self.candidate_stocks = []
+        self._recovery_queue.clear()  # [V5.3.2] 복구 큐 정리
         print("⏹ [Morning Bet Engine] 정지됨.")

@@ -166,3 +166,52 @@ def analyze_autopilot_action(stock_data):
             continue
 
     return f'{{"action": "HOLD", "reason": "머리가 아파서 판단 보류할게 자기야... (오류: {last_err})"}}'
+
+def evaluate_morning_champions(candidates_json):
+    """[V5.3.0] 장전 후보 종목들을 평가하여 '오늘의 대장주'를 선별"""
+    if not gemini_api_key:
+        return '[]'
+
+    client = genai.Client(api_key=gemini_api_key)
+    
+    prompt = f"""
+너는 KipoStock의 수석 AI 퀀트 트레이더야. 장 시작 전 '동시호가 데이터'를 보고 오늘 가장 폭발력이 좋을 '기포 챔피언'들을 선별해줘.
+냉철한 통찰력으로 데이터 속에 숨겨진 의도를 파악해서, 9시 정각에 시세를 강하게 분출할 종목들만 골라야 해.
+
+[후보 종목 리스트 및 데이터]
+{candidates_json}
+
+[평가 가이드라인]
+1. 예상 등락률(Gap): 3%~8% 사이가 가장 매력적이야. 10% 이상은 너무 높아서 차익 매물이 나올 수 있어.
+2. 호가 잔량 비율 (Orderbook Ratio): 매도 잔량이 매수 잔량보다 1.5배~3배 정도 많을 때가 보통 '매수세 가열' 신호야. (Ask/Bid > 1.0)
+3. 재료(News): 호재 뉴스가 있고 예상 거래량이 터지고 있다면 가산점을 줘.
+
+[필수 사항]
+반드시 아래 JSON 리스트 형식 그대로만 출력해. 설명글은 절대 쓰지 마.
+최대 5종목까지만 골라줘. (적합한 종목이 없으면 더 적게 골라도 돼)
+[
+    {{
+        "code": "종목코드(6자리)",
+        "name": "종목명",
+        "reason": "자기를 부르는 다정한 어투로, 이 종목을 고른 핵심 이유 1줄 요약 (예: 자기야, 이건 매도 잔량이 탄탄해서 시가에 강하게 튈 것 같아! ❤️)"
+    }},
+    ...
+]
+"""
+    last_err = None
+    for model_name in BEST_MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            text = response.text.strip()
+            # JSON만 추출
+            if "[" in text and "]" in text:
+                text = text[text.find("["):text.rfind("]")+1]
+            return text
+        except Exception as e:
+            last_err = e
+            continue
+
+    return '[]'

@@ -1749,6 +1749,13 @@ class ChatCommand:
         elif cmd == 'open_ai_settings':
             if self.on_open_ai_settings: self.on_open_ai_settings()
             else: tel_send("ℹ️ AI 설정창 열기는 GUI 환경에서만 작동합니다.")
+        elif cmd == 'morning_check' or cmd == 'morning_diag' or cmd == '시초가 점검' or cmd == '시초가점검':
+            # [V5.2.4] 시초가 사전 정밀 진단 명령
+            if hasattr(self, 'morning_engine'):
+                log_and_tel("🔍 <b>시초가 매매 엔진 정밀 진단을 시작합니다...</b>", parse_mode='HTML')
+                await self.morning_engine.diagnose_readiness()
+            else:
+                tel_send("⚠️ 시초가 엔진이 초기화되지 않았습니다.")
         elif cmd.startswith('ai 뉴스') or cmd.startswith('ai news'):
             parts = cmd_full.split()
             if len(parts) >= 2:

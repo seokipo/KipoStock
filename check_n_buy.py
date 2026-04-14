@@ -880,7 +880,7 @@ def chk_n_buy(stk_cd, token=None, seq=None, trade_price=None, seq_name=None, on_
         if stk_cd in PROCESSING_FLAGS:
             PROCESSING_FLAGS.remove(stk_cd)
 
-def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type='market'):
+def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type='market', open_price=None):
     """[수정 v4.5.1] 가속도 또는 불타기 조건 만족 시 시장가/현재가 추가 매수"""
     stk_cd = stk_cd.replace('A', '')
 
@@ -911,11 +911,20 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
         last_entry = RECENT_ORDER_CACHE.get(stk_cd, 0)
         
         # [Fix] 불타기(BULTAGI) 또는 시초가(MORNING), VI터보 진입 시에는 쿨타임 무시
-        if source not in ['BULTAGI', 'VI_TURBO'] and not source.startswith('MORNING') and (current_time - last_entry < 5):
-            return False
-
         RECENT_ORDER_CACHE[stk_cd] = current_time
         token = token if token else get_token()
+
+        # [신규 v5.3.7] 불타기 가격 상한선 체크 (고점 추격 방지 가드)
+        if source == 'BULTAGI' and get_setting('bultagi_limit_enabled', True):
+            from stock_info import get_price_high_data
+            cur_p, _, base_p = get_price_high_data(stk_cd, token)
+            if base_p > 0:
+                cur_rt = (cur_p - base_p) / base_p * 100
+                limit_rt = get_setting('bultagi_limit_rt', 22.0)
+                if cur_rt >= limit_rt:
+                    s_name = get_stock_name_safe(stk_cd, token)
+                    print(f"🛡️ <font color='#ff6b6b'><b>[가격상한 차단]</b> {s_name}({stk_cd}) 현재 대비율({cur_rt:.1f}%)이 상한선({limit_rt:.1f}%)을 초과하여 불타기 생략</font>")
+                    return False
 
         # 잔고 부족 시 스킵
         if ACCOUNT_CACHE['balance'] < 1000:
@@ -980,7 +989,7 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
             # [신규] 시초가/불타기 등 전략 매핑 정보 업데이트 (chk_n_sell에서 TP/SL 인식용)
             if seq_name:
                 strat_tag = source if source.startswith('MORNING') else 'BULTAGI'
-                update_stock_condition(stk_cd, name=seq_name, strat=strat_tag, seq='MORNING' if source.startswith('MORNING') else None)
+                update_stock_condition(stk_cd, name=seq_name, strat=strat_tag, seq='MORNING' if source.startswith('MORNING') else None, open_price=open_price)
             
             # 알림 및 로그
             if source == 'BULTAGI':
@@ -1037,7 +1046,7 @@ def add_buy(stk_cd, token=None, seq_name=None, qty=1, source='ACCEL', price_type
         PROCESSING_FLAGS.discard(stk_cd)
 
 # [신규] 조건식 매핑 업데이트 (HTS 매매 등 외부 요인)
-def update_stock_condition(code, name='직접매매', strat='qty', time_val=None, seq=None, bultagi_done=None):
+def update_stock_condition(code, name='직접매매', strat='qty', time_val=None, seq=None, bultagi_done=None, open_price=None):
     try:
         if getattr(sys, 'frozen', False):
             base_path = os.path.dirname(sys.executable)
@@ -1093,7 +1102,8 @@ def update_stock_condition(code, name='직접매매', strat='qty', time_val=None
             'seq': seq if seq is not None else existing_info.get('seq'),
             'tp': spec_tp, 
             'sl': spec_sl,
-            'time': time_val if time_val else (existing_info.get('time') or datetime.now().strftime("%H:%M:%S"))
+            'time': time_val if time_val else (existing_info.get('time') or datetime.now().strftime("%H:%M:%S")),
+            'open_price': open_price if open_price is not None else existing_info.get('open_price', 0)
         })
         
         # 불타기 완료 명시적 설정
