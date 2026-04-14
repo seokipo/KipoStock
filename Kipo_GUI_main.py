@@ -809,7 +809,7 @@ class BultagiSettingsDialog(QDialog):
         self.spin_morning_ai_count = QSpinBox()
         self.spin_morning_ai_count.setRange(1, 10)
         self.spin_morning_ai_count.setValue(3)
-        self.spin_morning_ai_count.setFixedWidth(80)
+        self.spin_morning_ai_count.setFixedWidth(100) # [V5.3.10] 텍스트 가림 방지를 위해 너비 확장 (80 -> 100)
         self.spin_morning_ai_count.setSuffix(" 종목")
         
         self.chk_morning_ai_news = QCheckBox(" AI 뉴스 스나이퍼 분석 데이터 강제 합산")
@@ -3241,7 +3241,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.version = "V5.3.9" # [V5.3.9] 불타기 상한선 감시루프 연동(Safety Guard Fix) 및 설정 캐시 즉시 반영 구현 🛡️포
+        self.version = "V5.3.10" # [V5.3.10] AI Morning Sniper UI 가독성 개선 및 상한선 가드 완결판 🛡️✨🎨
         self.setWindowTitle(f"KipoStock AI Dashboard [{self.version}] - Advanced Fortress")
         self.is_closing = False # [신규] 프로그램 종료 중임을 나타내는 플래그
         self.is_initialized = False # [Fix v4.3.0] 초기 설정 로드 완료 전 자동 저장 차단 플래그 🚀
