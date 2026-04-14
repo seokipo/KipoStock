@@ -462,6 +462,33 @@ def chk_n_sell(token=None, disabled_stocks=None):
                                 # [V4.3.4] 일시 정지된 종목은 불타기 발동 스킵
                                 if safe_stk_nm in disabled_stocks:
                                     print(f"⏸ <font color='#f39c12'>[정지중]</font> {safe_stk_nm}: 5관문 돌파! 그러나 일시 정지 중이라 주문을 건너뜁니다.")
+
+                                # [V5.3.9] 불타기 가격 상한선 가드 (고점 추격 방지) - 핵심 수정
+                                elif cached_setting('bultagi_limit_enabled', True):
+                                    from stock_info import get_price_high_data
+                                    from login import fn_au10001 as _get_token
+                                    _token = token if token else _get_token()
+                                    _cur_p, _, _base_p = get_price_high_data(stk_cd, _token)
+                                    _limit_rt = float(cached_setting('bultagi_limit_rt', 22.0) or 22.0)
+                                    _cur_rt = ((_cur_p - _base_p) / _base_p * 100) if _base_p > 0 else 0
+                                    if _cur_rt >= _limit_rt:
+                                        phase_txt = "상한초과"
+                                        print(f"🛡️ <font color='#ff6b6b'><b>[상한차단]</b></font> {safe_stk_nm} 현재 대비율({_cur_rt:.1f}%)이 상한선({_limit_rt:.1f}%)을 초과하여 불타기 진입을 생략합니다.")
+                                        print(f"[BULTAGI_STAT] {safe_stk_nm}|상한초과|{rank_val}|✅|✅|✅|✅|✅|🛡 상한차단({_cur_rt:.1f}%)")
+                                    else:
+                                        print(f"🔥 <font color='#ff4444'><b>[발송]</b></font> {safe_stk_nm}: 5관문 모두 돌파! (현재 대비율: {_cur_rt:.1f}%) 주문 집행...")
+                                        try:
+                                            from bultagi_engine import trigger_bultagi_buy
+                                            success = trigger_bultagi_buy(stk_cd, token=token)
+                                            if success:
+                                                print(f"✅ [성공] {safe_stk_nm}: 매수 주문이 성공적으로 발송되었습니다.")
+                                                update_stock_condition(stk_cd, name='불타기진입', strat='불타기', seq=info.get('seq'), bultagi_done=True)
+                                            else:
+                                                print(f"❌ [실패] {safe_stk_nm}: 엔진 호출은 성공했으나 주문 발송에 실패했습니다.")
+                                        except Exception as eng_err:
+                                            print(f"❌ [오류] {safe_stk_nm}: 엔진 호출 중 예외 발생: {eng_err}")
+
+                                # 상한선 가드 OFF 시 즉시 발사
                                 else:
                                     print(f"🔥 <font color='#ff4444'><b>[발송]</b></font> {safe_stk_nm}: 5관문 모두 돌파! 주문 집행...")
                                     try:

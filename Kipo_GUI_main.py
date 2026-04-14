@@ -1492,6 +1492,9 @@ class BultagiSettingsDialog(QDialog):
             try:
                 with open(self.settings_file, 'w', encoding='utf-8') as f:
                     json.dump(root, f, ensure_ascii=False, indent=2)
+                # [V5.3.9] 저장 직후 설정 캐시 즉시 초기화 → 감시엔진이 다음 루프에서 바로 반영
+                from get_setting import clear_settings_cache
+                clear_settings_cache()
             except Exception as fe:
                 print(f"⚠️ 설정 파일 쓰기 오류: {fe}")
 
@@ -3238,7 +3241,7 @@ class KipoWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.version = "V5.3.8" # [V5.3.8] 불타기 상한선 UI 개선 (직접 입력형 전환) 및 레이아웃 최적화 🛠️🎨✨
+        self.version = "V5.3.9" # [V5.3.9] 불타기 상한선 감시루프 연동(Safety Guard Fix) 및 설정 캐시 즉시 반영 구현 🛡️포
         self.setWindowTitle(f"KipoStock AI Dashboard [{self.version}] - Advanced Fortress")
         self.is_closing = False # [신규] 프로그램 종료 중임을 나타내는 플래그
         self.is_initialized = False # [Fix v4.3.0] 초기 설정 로드 완료 전 자동 저장 차단 플래그 🚀
